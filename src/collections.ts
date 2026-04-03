@@ -34,6 +34,15 @@ export interface Collection {
 }
 
 /**
+ * Model configuration for embedding, reranking, and generation
+ */
+export interface ModelsConfig {
+  embed?: string;
+  rerank?: string;
+  generate?: string;
+}
+
+/**
  * The complete configuration file structure
  */
 export interface CollectionConfig {
@@ -41,6 +50,7 @@ export interface CollectionConfig {
   editor_uri?: string;                        // Editor URI template for terminal hyperlinks
   editor_uri_template?: string;               // Alias for editor_uri
   collections: Record<string, Collection>;    // Collection name -> config
+  models?: ModelsConfig;
 }
 
 /**
