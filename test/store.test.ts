@@ -406,7 +406,7 @@ describe("handelize", () => {
   });
 
   test("handles special project naming patterns", () => {
-    expect(handelize("PROJECT_ABC_v2.0.md")).toBe("project-abc-v2-0.md");
+    expect(handelize("PROJECT_ABC_v2.0.md")).toBe("project-abc-v2.0.md");
     expect(handelize("[WIP] Feature Request.md")).toBe("wip-feature-request.md");
     expect(handelize("(DRAFT) Proposal v1.md")).toBe("draft-proposal-v1.md");
   });
@@ -2385,25 +2385,26 @@ describe("Vector Table", () => {
     await cleanupTestDb(store);
   });
 
-  test("ensureVecTable recreates table if dimensions change", async () => {
+  test("ensureVecTable throws on dimension mismatch instead of silently rebuilding", async () => {
     const store = await createTestStore();
 
     // Create with 768 dimensions
     store.ensureVecTable(768);
 
     // Check dimensions
-    let tableInfo = store.db.prepare(`
+    const tableInfo = store.db.prepare(`
       SELECT sql FROM sqlite_master WHERE type='table' AND name='vectors_vec'
     `).get() as { sql: string };
     expect(tableInfo.sql).toContain("float[768]");
 
-    // Recreate with different dimensions
-    store.ensureVecTable(1024);
+    // Attempting to use a different dimension should throw (not silently drop data)
+    expect(() => store.ensureVecTable(1024)).toThrow(/dimension mismatch/i);
 
-    tableInfo = store.db.prepare(`
+    // Original table should still exist untouched
+    const tableInfoAfter = store.db.prepare(`
       SELECT sql FROM sqlite_master WHERE type='table' AND name='vectors_vec'
     `).get() as { sql: string };
-    expect(tableInfo.sql).toContain("float[1024]");
+    expect(tableInfoAfter.sql).toContain("float[768]");
 
     await cleanupTestDb(store);
   });
