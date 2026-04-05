@@ -7,6 +7,29 @@
   };
 
   outputs = { self, nixpkgs, flake-utils }:
+    {
+      homeModules.default = { config, lib, pkgs, ... }:
+        with lib;
+        let
+          cfg = config.programs.qmd;
+        in
+        {
+          options.programs.qmd = {
+            enable = mkEnableOption "QMD - on-device search engine for markdown notes";
+
+            package = mkOption {
+              type = types.package;
+              default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+              defaultText = literalExpression "inputs.qmd.packages.\${pkgs.stdenv.hostPlatform.system}.default";
+              description = "The qmd package to use.";
+            };
+          };
+
+          config = mkIf cfg.enable {
+            home.packages = [ cfg.package ];
+          };
+        };
+    } //
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -141,4 +164,5 @@
         };
       }
     );
+
 }
