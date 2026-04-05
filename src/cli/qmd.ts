@@ -1878,7 +1878,7 @@ function getEditorUriTemplate(): string {
   if (envTemplate) return envTemplate;
 
   try {
-    const config = loadConfig() as {
+    const config = loadConfig() as unknown as {
       editor_uri?: string;
       editor_uri_template?: string;
       editorUri?: string;
@@ -3150,9 +3150,10 @@ if (isMain) {
         process.exit(1);
       }
       const { runBenchmark } = await import("../bench/bench.js");
+      const benchCollection = cli.opts.collection;
       await runBenchmark(fixturePath, {
-        json: !!cli.opts.json,
-        collection: cli.opts.collection,
+        json: !!(cli.opts as { json?: boolean }).json,
+        collection: Array.isArray(benchCollection) ? benchCollection[0] : benchCollection,
       });
       break;
     }
