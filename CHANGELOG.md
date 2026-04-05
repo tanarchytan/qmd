@@ -18,6 +18,10 @@
   Measures precision@k, recall, MRR, and F1 across BM25, vector, hybrid,
   and full pipeline backends. Ships with an example fixture against
   the eval-docs test collection.
+- `models:` section in `index.yml` lets you configure `embed`, `rerank`,
+  and `generate` model URIs per config. Resolution order is
+  config > env var (`QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`,
+  `QMD_GENERATE_MODEL`) > built-in default.
 - CLI search output now emits clickable OSC 8 terminal hyperlinks when
   stdout is a TTY. Links resolve `qmd://` paths to absolute filesystem
   paths and open in editors via URI templates (default:
