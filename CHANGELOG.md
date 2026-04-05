@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-04-05
+
 Code files now chunk at function and class boundaries via tree-sitter,
 clickable editor links land you at the right line from search results,
 and per-collection model configuration means you can point different
