@@ -18,6 +18,11 @@
   Measures precision@k, recall, MRR, and F1 across BM25, vector, hybrid,
   and full pipeline backends. Ships with an example fixture against
   the eval-docs test collection.
+- CLI search output now emits clickable OSC 8 terminal hyperlinks when
+  stdout is a TTY. Links resolve `qmd://` paths to absolute filesystem
+  paths and open in editors via URI templates (default:
+  `vscode://file/{path}:{line}:{col}`). Configure with `QMD_EDITOR_URI`
+  or `editor_uri` in the YAML config.
 
 ### Fixes
 
