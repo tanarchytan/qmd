@@ -522,6 +522,11 @@ export function enableProductionMode(): void {
   _productionMode = true;
 }
 
+/** Reset production mode flag — only for testing. */
+export function _resetProductionModeForTesting(): void {
+  _productionMode = false;
+}
+
 export function getDefaultDbPath(indexName: string = "index"): string {
   // Always allow override via INDEX_PATH (for testing)
   if (process.env.INDEX_PATH) {

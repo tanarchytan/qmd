@@ -7,6 +7,7 @@ import {
   homedir,
   resolve,
   getDefaultDbPath,
+  _resetProductionModeForTesting,
   getPwd,
   getRealPath,
   isVirtualPath,
@@ -48,6 +49,9 @@ describe("Path Utilities", () => {
   test("getDefaultDbPath throws in test mode without INDEX_PATH", () => {
     const originalIndexPath = process.env.INDEX_PATH;
     delete process.env.INDEX_PATH;
+    // Reset production mode in case another test file set it (bun runs all
+    // files in a single process, so module state leaks between files).
+    _resetProductionModeForTesting();
 
     expect(() => getDefaultDbPath()).toThrow("Database path not set");
 
