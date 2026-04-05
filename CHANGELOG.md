@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+Code files now chunk at function and class boundaries via tree-sitter,
+clickable editor links land you at the right line from search results,
+and per-collection model configuration means you can point different
+collections at different embedding models. 25+ community PRs fix
+embedding stability, BM25 accuracy, and cross-platform launcher issues.
+
 ### Changes
 
 - AST-aware chunking for code files via `web-tree-sitter`. Supported
