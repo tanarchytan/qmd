@@ -1599,7 +1599,7 @@ export async function disposeDefaultLlamaCpp(): Promise<void> {
 // =============================================================================
 
 export type RemoteLLMConfig = {
-  rerankProvider: 'siliconflow' | 'gemini' | 'openai' | 'dashscope' | 'zeroentropy';
+  rerankProvider: 'siliconflow' | 'gemini' | 'openai' | 'dashscope' | 'zeroentropy' | 'generic';
   rerankMode?: 'llm' | 'rerank'; // 'llm' = chat model, 'rerank' = dedicated rerank API
   embedProvider?: 'siliconflow' | 'openai'; // remote embedding provider (optional)
   queryExpansionProvider?: 'siliconflow' | 'gemini' | 'openai'; // remote query expansion (optional)
@@ -1643,6 +1643,12 @@ export type RemoteLLMConfig = {
     apiKey: string;
     baseUrl?: string; // default: https://api.zeroentropy.dev/v1
     model?: string; // default: zerank-2
+  };
+  /** Generic rerank endpoint — any provider that accepts the standard rerank request format. */
+  generic?: {
+    url: string;   // full endpoint URL, e.g. https://api.example.com/v1/rerank
+    apiKey: string;
+    model?: string;
   };
 };
 
@@ -1938,6 +1944,9 @@ export class RemoteLLM implements LLM {
     }
     if (this.config.rerankProvider === 'zeroentropy') {
       return this.rerankWithZeroEntropy(query, documents, options);
+    }
+    if (this.config.rerankProvider === 'generic') {
+      return this.rerankWithGeneric(query, documents, options);
     }
     if (this.config.rerankProvider === 'openai') {
       return this.rerankWithOpenAI(query, documents, options);
@@ -2306,6 +2315,46 @@ export class RemoteLLM implements LLM {
           score: item.relevance_score,
           index: item.index,
         };
+      })
+      .filter((item): item is RerankDocumentResult => item !== null);
+
+    return { results, model };
+  }
+
+  private async rerankWithGeneric(
+    query: string,
+    documents: RerankDocument[],
+    options: RerankOptions
+  ): Promise<RerankResult> {
+    const g = this.config.generic;
+    if (!g?.url || !g?.apiKey) {
+      throw new Error("RemoteLLM generic rerank requires QMD_RERANK_URL and QMD_RERANK_API_KEY.");
+    }
+    const model = options.model || g.model || "rerank";
+
+    const resp = await fetchWithRetry(g.url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${g.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        query,
+        documents: documents.map((d) => d.text),
+        top_n: Math.max(1, documents.length),
+      }),
+    }, { provider: "generic", operation: "rerank", timeoutMs: options.timeoutMs ?? this.config.timeoutsMs?.rerank });
+
+    const data = await resp.json() as {
+      results?: Array<{ index: number; relevance_score: number }>;
+    };
+
+    const results: RerankDocumentResult[] = (data.results || [])
+      .map((item) => {
+        const doc = documents[item.index];
+        if (!doc) return null;
+        return { file: doc.file, score: item.relevance_score, index: item.index };
       })
       .filter((item): item is RerankDocumentResult => item !== null);
 

@@ -16,7 +16,7 @@
 
 import type { RemoteLLMConfig } from "./llm.js";
 
-type RerankProvider = "siliconflow" | "gemini" | "openai" | "dashscope" | "zeroentropy";
+type RerankProvider = "siliconflow" | "gemini" | "openai" | "dashscope" | "zeroentropy" | "generic";
 
 export function createRemoteConfigFromEnv(): RemoteLLMConfig | null {
   const sfApiKey  = process.env.QMD_SILICONFLOW_API_KEY;
@@ -24,8 +24,10 @@ export function createRemoteConfigFromEnv(): RemoteLLMConfig | null {
   const oaApiKey  = process.env.QMD_OPENAI_API_KEY;
   const dsApiKey  = process.env.QMD_DASHSCOPE_API_KEY;
   const zeApiKey  = process.env.QMD_ZEROENTROPY_API_KEY;
+  const grUrl     = process.env.QMD_RERANK_URL;
+  const grApiKey  = process.env.QMD_RERANK_API_KEY;
 
-  if (!sfApiKey && !gmApiKey && !oaApiKey && !dsApiKey && !zeApiKey) return null;
+  if (!sfApiKey && !gmApiKey && !oaApiKey && !dsApiKey && !zeApiKey && !grUrl) return null;
 
   const rerankMode = (process.env.QMD_RERANK_MODE as "llm" | "rerank" | undefined) || "llm";
   const sfLlmRerankModel =
@@ -36,7 +38,10 @@ export function createRemoteConfigFromEnv(): RemoteLLMConfig | null {
   const configuredRerankProvider = process.env.QMD_RERANK_PROVIDER as RerankProvider | undefined;
 
   let rerankProvider: RerankProvider | undefined;
-  if (rerankMode === "rerank") {
+  // Generic endpoint always wins when QMD_RERANK_URL is set — explicit beats auto-detection
+  if (grUrl) {
+    rerankProvider = "generic";
+  } else if (rerankMode === "rerank") {
     if (configuredRerankProvider === "dashscope" && dsApiKey)        rerankProvider = "dashscope";
     else if (configuredRerankProvider === "zeroentropy" && zeApiKey) rerankProvider = "zeroentropy";
     else if (sfApiKey)                                               rerankProvider = "siliconflow";
@@ -114,6 +119,14 @@ export function createRemoteConfigFromEnv(): RemoteLLMConfig | null {
       apiKey: zeApiKey || "",
       baseUrl: process.env.QMD_ZEROENTROPY_BASE_URL,
       model: process.env.QMD_ZEROENTROPY_RERANK_MODEL,
+    };
+  }
+
+  if (grUrl) {
+    config.generic = {
+      url: grUrl,
+      apiKey: grApiKey || "",
+      model: process.env.QMD_RERANK_MODEL,
     };
   }
 
