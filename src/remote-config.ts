@@ -1,135 +1,108 @@
 /**
  * remote-config.ts - Build RemoteLLMConfig from environment variables.
  *
- * Single source of truth for translating QMD_* env vars into a
- * RemoteLLMConfig that RemoteLLM can consume. Called by:
- *   - src/store.ts  (reranking path)
- *   - src/app/services/llm-service.ts  (LLMPort service)
+ * Each operation reads 4 vars:
+ *   QMD_{OP}_PROVIDER=  local | api | url | gemini
+ *   QMD_{OP}_API_KEY=   Bearer token
+ *   QMD_{OP}_URL=       base URL (api/gemini) or full endpoint (url)
+ *   QMD_{OP}_MODEL=     model name
  *
- * Supported providers:
- *   embed        : siliconflow | openai
- *   query expand : siliconflow | gemini | openai
- *   rerank       : siliconflow | gemini | openai | dashscope | zeroentropy
- *
- * Returns null when no API keys are configured (use local LLM instead).
+ * Shorthand aliases (set provider + default URL automatically):
+ *   siliconflow → api  + https://api.siliconflow.cn/v1
+ *   openai      → api  + https://api.openai.com/v1
+ *   zeroentropy → url  + operation-specific ZE endpoint
+ *   dashscope   → url  + https://dashscope.aliyuncs.com/compatible-api/v1/reranks
+ *   gemini      → gemini + https://generativelanguage.googleapis.com
  */
 
-import type { RemoteLLMConfig } from "./llm.js";
+import type { RemoteLLMConfig, OperationConfig, OperationProvider } from "./llm.js";
 
-type RerankProvider = "siliconflow" | "gemini" | "openai" | "dashscope" | "zeroentropy" | "generic";
+type OpName = 'EMBED' | 'RERANK' | 'QUERY_EXPANSION';
+
+const ZE_DEFAULT_URLS: Record<OpName, string> = {
+  EMBED: "https://api.zeroentropy.dev/v1/models/embed",
+  RERANK: "https://api.zeroentropy.dev/v1/models/rerank",
+  QUERY_EXPANSION: "https://api.zeroentropy.dev/v1/chat/completions",
+};
+
+function resolveOp(op: OpName): OperationConfig | null {
+  const providerRaw = process.env[`QMD_${op}_PROVIDER`];
+  if (!providerRaw || providerRaw === 'local') return null;
+
+  const apiKey = process.env[`QMD_${op}_API_KEY`];
+  if (!apiKey) return null;
+
+  let url = process.env[`QMD_${op}_URL`];
+  const model = process.env[`QMD_${op}_MODEL`];
+  let resolvedProvider: OperationProvider;
+
+  switch (providerRaw) {
+    case 'siliconflow':
+      resolvedProvider = 'api';
+      url ??= 'https://api.siliconflow.cn/v1';
+      break;
+    case 'openai':
+      resolvedProvider = 'api';
+      url ??= 'https://api.openai.com/v1';
+      break;
+    case 'zeroentropy':
+      resolvedProvider = 'url';
+      url ??= ZE_DEFAULT_URLS[op];
+      break;
+    case 'dashscope':
+      resolvedProvider = 'url';
+      url ??= 'https://dashscope.aliyuncs.com/compatible-api/v1/reranks';
+      break;
+    case 'gemini':
+      resolvedProvider = 'gemini';
+      url ??= 'https://generativelanguage.googleapis.com';
+      break;
+    case 'api':
+      resolvedProvider = 'api';
+      break;
+    case 'url':
+      resolvedProvider = 'url';
+      break;
+    default:
+      resolvedProvider = 'api';
+  }
+
+  const cfg: OperationConfig = { provider: resolvedProvider, apiKey };
+  if (url) cfg.url = url;
+  if (model) cfg.model = model;
+  return cfg;
+}
 
 export function createRemoteConfigFromEnv(): RemoteLLMConfig | null {
-  const sfApiKey  = process.env.QMD_SILICONFLOW_API_KEY;
-  const gmApiKey  = process.env.QMD_GEMINI_API_KEY;
-  const oaApiKey  = process.env.QMD_OPENAI_API_KEY;
-  const dsApiKey  = process.env.QMD_DASHSCOPE_API_KEY;
-  const zeApiKey  = process.env.QMD_ZEROENTROPY_API_KEY;
-  const grUrl     = process.env.QMD_RERANK_URL;
-  const grApiKey  = process.env.QMD_RERANK_API_KEY;
-  const embedOaApiKey = process.env.QMD_EMBED_OPENAI_API_KEY;
+  const embed = resolveOp('EMBED');
+  const rerank = resolveOp('RERANK');
+  const queryExpansion = resolveOp('QUERY_EXPANSION');
 
-  if (!sfApiKey && !gmApiKey && !oaApiKey && !dsApiKey && !zeApiKey && !grUrl && !embedOaApiKey) return null;
+  if (!embed && !rerank && !queryExpansion) return null;
 
-  const rerankMode = (process.env.QMD_RERANK_MODE as "llm" | "rerank" | undefined) || "llm";
-  const sfLlmRerankModel =
-    process.env.QMD_SILICONFLOW_LLM_RERANK_MODEL ||
-    process.env.QMD_LLM_RERANK_MODEL ||
-    "zai-org/GLM-4.5-Air";
+  const config: RemoteLLMConfig = {};
 
-  const configuredRerankProvider = process.env.QMD_RERANK_PROVIDER as RerankProvider | undefined;
-
-  let rerankProvider: RerankProvider | undefined;
-  // Generic endpoint always wins when QMD_RERANK_URL is set — explicit beats auto-detection
-  if (grUrl) {
-    rerankProvider = "generic";
-  } else if (rerankMode === "rerank") {
-    if (configuredRerankProvider === "dashscope" && dsApiKey)        rerankProvider = "dashscope";
-    else if (configuredRerankProvider === "zeroentropy" && zeApiKey) rerankProvider = "zeroentropy";
-    else if (sfApiKey)                                               rerankProvider = "siliconflow";
-    else if (configuredRerankProvider === "gemini" && gmApiKey)      rerankProvider = "gemini";
-    else if (configuredRerankProvider === "openai" && oaApiKey)      rerankProvider = "openai";
-    else if (dsApiKey)                                               rerankProvider = "dashscope";
-    else if (zeApiKey)                                               rerankProvider = "zeroentropy";
-    else rerankProvider = gmApiKey ? "gemini" : (oaApiKey ? "openai" : undefined);
-  } else {
-    if (configuredRerankProvider === "dashscope" && dsApiKey)        rerankProvider = "dashscope";
-    else if (configuredRerankProvider === "zeroentropy" && zeApiKey) rerankProvider = "zeroentropy";
-    else if (configuredRerankProvider === "gemini" || configuredRerankProvider === "openai") rerankProvider = configuredRerankProvider;
-    else if (configuredRerankProvider === "siliconflow")             rerankProvider = sfApiKey ? "siliconflow" : undefined;
-    else rerankProvider = dsApiKey ? "dashscope" : (zeApiKey ? "zeroentropy" : (sfApiKey ? "siliconflow" : (gmApiKey ? "gemini" : (oaApiKey ? "openai" : undefined))));
-  }
-
-  // embedOaApiKey alone (without QMD_OPENAI_API_KEY) can drive embeddings via any OpenAI-compatible endpoint
-  const embedProvider = (process.env.QMD_EMBED_PROVIDER as "siliconflow" | "openai" | undefined)
-    || (sfApiKey ? "siliconflow" : (oaApiKey || embedOaApiKey ? "openai" : undefined));
-
-  const queryExpansionProvider = (process.env.QMD_QUERY_EXPANSION_PROVIDER as "siliconflow" | "gemini" | "openai" | undefined)
-    || (sfApiKey ? "siliconflow" : (oaApiKey ? "openai" : (gmApiKey ? "gemini" : undefined)));
-
-  if (!rerankProvider && !embedProvider && !queryExpansionProvider) return null;
-
-  const config: RemoteLLMConfig = {
-    rerankProvider: rerankProvider || "siliconflow",
-    rerankMode,
-    embedProvider,
-    queryExpansionProvider,
-  };
-
-  if (sfApiKey) {
-    config.siliconflow = {
-      apiKey: sfApiKey,
-      baseUrl: process.env.QMD_SILICONFLOW_BASE_URL,
-      model: process.env.QMD_SILICONFLOW_RERANK_MODEL || process.env.QMD_SILICONFLOW_MODEL,
-      embedModel: process.env.QMD_SILICONFLOW_EMBED_MODEL,
-      queryExpansionModel: process.env.QMD_SILICONFLOW_QUERY_EXPANSION_MODEL,
+  if (embed) {
+    const dimRaw = process.env.QMD_EMBED_DIMENSIONS;
+    const dimNum = dimRaw ? parseInt(dimRaw, 10) : undefined;
+    const validDims = [4096, 2048, 2560, 1280, 640, 320, 160, 80, 40] as const;
+    type ValidDim = typeof validDims[number];
+    config.embed = {
+      ...embed,
+      dimensions: (validDims as readonly number[]).includes(dimNum ?? -1) ? dimNum as ValidDim : undefined,
     };
   }
 
-  if (gmApiKey) {
-    config.gemini = {
-      apiKey: gmApiKey,
-      baseUrl: process.env.QMD_GEMINI_BASE_URL,
-      model: process.env.QMD_GEMINI_RERANK_MODEL || process.env.QMD_GEMINI_MODEL,
-    };
+  if (rerank) {
+    // 'url' provider targets a dedicated rerank API endpoint — default to 'rerank' mode.
+    // 'api' and 'gemini' default to 'llm' mode. QMD_RERANK_MODE always wins if set.
+    const defaultMode = rerank.provider === 'url' ? 'rerank' : 'llm';
+    const rerankMode = (process.env.QMD_RERANK_MODE as 'llm' | 'rerank' | undefined) || defaultMode;
+    config.rerank = { ...rerank, mode: rerankMode };
   }
 
-  if (oaApiKey || (rerankProvider === "openai" && sfApiKey)) {
-    config.openai = {
-      apiKey: oaApiKey || sfApiKey || "",
-      baseUrl: process.env.QMD_OPENAI_BASE_URL || process.env.QMD_SILICONFLOW_BASE_URL,
-      model: process.env.QMD_OPENAI_MODEL || (sfApiKey ? sfLlmRerankModel : undefined),
-      embedModel: process.env.QMD_OPENAI_EMBED_MODEL,
-      embedApiKey:  process.env.QMD_EMBED_OPENAI_API_KEY,
-      embedBaseUrl: process.env.QMD_EMBED_OPENAI_BASE_URL,
-      rerankApiKey: process.env.QMD_RERANK_OPENAI_API_KEY,
-      rerankBaseUrl: process.env.QMD_RERANK_OPENAI_BASE_URL,
-      queryApiKey:  process.env.QMD_QUERY_OPENAI_API_KEY,
-      queryBaseUrl: process.env.QMD_QUERY_OPENAI_BASE_URL,
-    };
-  }
-
-  if (dsApiKey || rerankProvider === "dashscope") {
-    config.dashscope = {
-      apiKey: dsApiKey || "",
-      baseUrl: process.env.QMD_DASHSCOPE_BASE_URL,
-      model: process.env.QMD_DASHSCOPE_RERANK_MODEL,
-    };
-  }
-
-  if (zeApiKey || rerankProvider === "zeroentropy") {
-    config.zeroentropy = {
-      apiKey: zeApiKey || "",
-      baseUrl: process.env.QMD_ZEROENTROPY_BASE_URL,
-      model: process.env.QMD_ZEROENTROPY_RERANK_MODEL,
-    };
-  }
-
-  if (grUrl) {
-    config.generic = {
-      url: grUrl,
-      apiKey: grApiKey || "",
-      model: process.env.QMD_RERANK_MODEL,
-    };
+  if (queryExpansion) {
+    config.queryExpansion = queryExpansion;
   }
 
   return config;

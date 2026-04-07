@@ -11,43 +11,32 @@ export function createLLMService(): LLMPort {
   const remoteConfig = createRemoteConfigFromEnv();
   const remote = remoteConfig ? new RemoteLLM(remoteConfig) : null;
 
-  type ProviderName = "siliconflow" | "gemini" | "openai" | "dashscope" | "zeroentropy";
-  const providerHealth = new Map<ProviderName, { consecutiveFailures: number; cooldownUntilMs: number }>();
+  type OpName = "embed" | "rerank" | "queryExpansion";
+  const opHealth = new Map<OpName, { consecutiveFailures: number; cooldownUntilMs: number }>();
   const FAILURE_THRESHOLD = 3;
   const COOLDOWN_MS = 5 * 60 * 1000;
 
-  const isCoolingDown = (provider: ProviderName): boolean => {
-    const state = providerHealth.get(provider);
+  const isCoolingDown = (op: OpName): boolean => {
+    const state = opHealth.get(op);
     if (!state) return false;
     return Date.now() < state.cooldownUntilMs;
   };
 
-  const recordSuccess = (provider: ProviderName): void => {
-    providerHealth.delete(provider);
-  };
+  const recordSuccess = (op: OpName): void => { opHealth.delete(op); };
 
-  const recordFailure = (provider: ProviderName): void => {
+  const recordFailure = (op: OpName): void => {
     const now = Date.now();
-    const state = providerHealth.get(provider);
+    const state = opHealth.get(op);
     const consecutiveFailures = (state?.consecutiveFailures ?? 0) + 1;
     const isThreshold = consecutiveFailures >= FAILURE_THRESHOLD;
     const cooldownUntilMs = isThreshold ? now + COOLDOWN_MS : (state?.cooldownUntilMs ?? 0);
-    providerHealth.set(provider, { consecutiveFailures: isThreshold ? 0 : consecutiveFailures, cooldownUntilMs });
-  };
-
-  const hasRemoteProviderKey = (provider: ProviderName): boolean => {
-    if (!remoteConfig) return false;
-    if (provider === "siliconflow") return !!remoteConfig.siliconflow?.apiKey;
-    if (provider === "gemini") return !!remoteConfig.gemini?.apiKey;
-    if (provider === "openai") return !!remoteConfig.openai?.apiKey;
-    if (provider === "zeroentropy") return !!remoteConfig.zeroentropy?.apiKey;
-    return !!remoteConfig.dashscope?.apiKey;
+    opHealth.set(op, { consecutiveFailures: isThreshold ? 0 : consecutiveFailures, cooldownUntilMs });
   };
 
   const ensureRemote = (): RemoteLLM => {
     if (!remote) {
       throw new Error(
-        "No remote LLM configured. Set at least one API key (e.g. QMD_SILICONFLOW_API_KEY / QMD_OPENAI_API_KEY / QMD_GEMINI_API_KEY / QMD_DASHSCOPE_API_KEY / QMD_ZEROENTROPY_API_KEY)."
+        "No remote LLM configured. Set QMD_EMBED_PROVIDER, QMD_RERANK_PROVIDER, or QMD_QUERY_EXPANSION_PROVIDER."
       );
     }
     return remote;
@@ -63,79 +52,68 @@ export function createLLMService(): LLMPort {
       void session;
       const includeLexical = options?.includeLexical ?? true;
       const context = options?.context;
-      const provider = (remoteConfig?.queryExpansionProvider || remoteConfig?.rerankProvider) as ProviderName | undefined;
+      void context;
 
       const lexicalFallback = (): Queryable[] => (includeLexical ? [{ type: "lex", text: query }] : []);
 
-      if (!remote || !provider || !hasRemoteProviderKey(provider)) {
+      if (!remote || !remoteConfig?.queryExpansion) {
         return lexicalFallback();
       }
-      if (isCoolingDown(provider)) {
+      if (isCoolingDown("queryExpansion")) {
         return lexicalFallback();
       }
 
       try {
-        const out = await remote.expandQuery(query, { includeLexical, context });
-        recordSuccess(provider);
+        const out = await remote.expandQuery(query, { includeLexical });
+        recordSuccess("queryExpansion");
         return out;
       } catch (err) {
-        recordFailure(provider);
+        recordFailure("queryExpansion");
         return lexicalFallback();
       }
     },
 
     async rerank(query: string, documents: RerankDocument[], session?: ILLMSession): Promise<{ file: string; score: number; extract?: string }[]> {
       void session;
-      const provider = remoteConfig?.rerankProvider as ProviderName | undefined;
       const llm = ensureRemote();
 
-      if (provider) {
-        if (!hasRemoteProviderKey(provider)) {
-          throw new Error(`Remote rerank provider "${provider}" is selected but its API key is missing.`);
-        }
-        if (isCoolingDown(provider)) {
-          throw new Error(`Remote provider "${provider}" is cooling down. Please retry later.`);
-        }
-        try {
-          const result = await llm.rerank(query, documents);
-          recordSuccess(provider);
-          return result.results.map(r => ({ file: r.file, score: r.score, extract: r.extract }));
-        } catch (err) {
-          recordFailure(provider);
-          throw err;
-        }
+      if (!remoteConfig?.rerank) {
+        throw new Error("Remote rerank not configured. Set QMD_RERANK_PROVIDER.");
+      }
+      if (isCoolingDown("rerank")) {
+        throw new Error("Remote rerank is cooling down due to repeated failures. Please retry later.");
       }
 
-      const result = await llm.rerank(query, documents);
-      return result.results.map(r => ({ file: r.file, score: r.score, extract: r.extract }));
+      try {
+        const result = await llm.rerank(query, documents);
+        recordSuccess("rerank");
+        return result.results.map(r => ({ file: r.file, score: r.score, extract: r.extract }));
+      } catch (err) {
+        recordFailure("rerank");
+        throw err;
+      }
     },
 
     async embed(text: string, options?: { model?: string; isQuery?: boolean }, session?: ILLMSession): Promise<{ embedding: number[] }> {
       void session;
-      const provider = remoteConfig?.embedProvider as ProviderName | undefined;
       const llm = ensureRemote();
 
-      if (provider) {
-        if (!hasRemoteProviderKey(provider)) {
-          throw new Error(`Remote embed provider "${provider}" is selected but its API key is missing.`);
-        }
-        if (isCoolingDown(provider)) {
-          throw new Error(`Remote provider "${provider}" is cooling down. Please retry later.`);
-        }
-        try {
-          const result = await llm.embed(text, options);
-          if (!result) throw new Error("Remote embedding returned null");
-          recordSuccess(provider);
-          return result;
-        } catch (err) {
-          recordFailure(provider);
-          throw err;
-        }
+      if (!remoteConfig?.embed) {
+        throw new Error("Remote embed not configured. Set QMD_EMBED_PROVIDER.");
+      }
+      if (isCoolingDown("embed")) {
+        throw new Error("Remote embed is cooling down due to repeated failures. Please retry later.");
       }
 
-      const result = await llm.embed(text, options);
-      if (!result) throw new Error("Remote embedding returned null");
-      return result;
+      try {
+        const result = await llm.embed(text, options);
+        if (!result) throw new Error("Remote embedding returned null");
+        recordSuccess("embed");
+        return result;
+      } catch (err) {
+        recordFailure("embed");
+        throw err;
+      }
     },
   };
 }
