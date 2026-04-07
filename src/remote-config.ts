@@ -26,8 +26,9 @@ export function createRemoteConfigFromEnv(): RemoteLLMConfig | null {
   const zeApiKey  = process.env.QMD_ZEROENTROPY_API_KEY;
   const grUrl     = process.env.QMD_RERANK_URL;
   const grApiKey  = process.env.QMD_RERANK_API_KEY;
+  const embedOaApiKey = process.env.QMD_EMBED_OPENAI_API_KEY;
 
-  if (!sfApiKey && !gmApiKey && !oaApiKey && !dsApiKey && !zeApiKey && !grUrl) return null;
+  if (!sfApiKey && !gmApiKey && !oaApiKey && !dsApiKey && !zeApiKey && !grUrl && !embedOaApiKey) return null;
 
   const rerankMode = (process.env.QMD_RERANK_MODE as "llm" | "rerank" | undefined) || "llm";
   const sfLlmRerankModel =
@@ -58,8 +59,9 @@ export function createRemoteConfigFromEnv(): RemoteLLMConfig | null {
     else rerankProvider = dsApiKey ? "dashscope" : (zeApiKey ? "zeroentropy" : (sfApiKey ? "siliconflow" : (gmApiKey ? "gemini" : (oaApiKey ? "openai" : undefined))));
   }
 
+  // embedOaApiKey alone (without QMD_OPENAI_API_KEY) can drive embeddings via any OpenAI-compatible endpoint
   const embedProvider = (process.env.QMD_EMBED_PROVIDER as "siliconflow" | "openai" | undefined)
-    || (sfApiKey ? "siliconflow" : (oaApiKey ? "openai" : undefined));
+    || (sfApiKey ? "siliconflow" : (oaApiKey || embedOaApiKey ? "openai" : undefined));
 
   const queryExpansionProvider = (process.env.QMD_QUERY_EXPANSION_PROVIDER as "siliconflow" | "gemini" | "openai" | undefined)
     || (sfApiKey ? "siliconflow" : (oaApiKey ? "openai" : (gmApiKey ? "gemini" : undefined)));
