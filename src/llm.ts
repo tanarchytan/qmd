@@ -1595,60 +1595,27 @@ export async function disposeDefaultLlamaCpp(): Promise<void> {
 }
 
 // =============================================================================
-// Remote LLM (Cloud Providers: SiliconFlow, Gemini, OpenAI, DashScope, ZeroEntropy)
+// Remote LLM (Cloud Providers: api / url / gemini, per-operation config)
 // =============================================================================
 
+export type OperationProvider = 'api' | 'url' | 'gemini';
+
+export type OperationConfig = {
+  provider: OperationProvider;
+  apiKey: string;
+  url?: string;
+  model?: string;
+};
+
 export type RemoteLLMConfig = {
-  rerankProvider: 'siliconflow' | 'gemini' | 'openai' | 'dashscope' | 'zeroentropy' | 'generic';
-  rerankMode?: 'llm' | 'rerank'; // 'llm' = chat model, 'rerank' = dedicated rerank API
-  embedProvider?: 'siliconflow' | 'openai'; // remote embedding provider (optional)
-  queryExpansionProvider?: 'siliconflow' | 'gemini' | 'openai'; // remote query expansion (optional)
+  embed?: OperationConfig & { dimensions?: 4096 | 2048 | 2560 | 1280 | 640 | 320 | 160 | 80 | 40 };
+  rerank?: OperationConfig & { mode?: 'llm' | 'rerank' };
+  queryExpansion?: OperationConfig;
   /** Optional per-operation timeouts (ms). */
   timeoutsMs?: {
     embed?: number;
     rerank?: number;
     generate?: number;
-  };
-  siliconflow?: {
-    apiKey: string;
-    baseUrl?: string; // default: https://api.siliconflow.cn/v1
-    model?: string; // default: BAAI/bge-reranker-v2-m3
-    embedModel?: string; // default: BAAI/bge-m3
-    queryExpansionModel?: string; // default: Qwen/Qwen3-8B
-  };
-  gemini?: {
-    apiKey: string;
-    baseUrl?: string; // default: https://generativelanguage.googleapis.com
-    model?: string; // default: gemini-2.5-flash
-  };
-  openai?: {
-    apiKey: string;
-    baseUrl?: string; // default: https://api.openai.com/v1
-    model?: string; // default: gpt-4o-mini (for rerank/query expansion)
-    embedModel?: string; // default: text-embedding-3-small
-    // Per-operation overrides — fall back to the base fields above when unset
-    embedApiKey?: string;
-    embedBaseUrl?: string;
-    rerankApiKey?: string;
-    rerankBaseUrl?: string;
-    queryApiKey?: string;
-    queryBaseUrl?: string;
-  };
-  dashscope?: {
-    apiKey: string;
-    baseUrl?: string; // default: https://dashscope.aliyuncs.com/compatible-api/v1
-    model?: string; // default: qwen3-rerank
-  };
-  zeroentropy?: {
-    apiKey: string;
-    baseUrl?: string; // default: https://api.zeroentropy.dev/v1
-    model?: string; // default: zerank-2
-  };
-  /** Generic rerank endpoint — any provider that accepts the standard rerank request format. */
-  generic?: {
-    url: string;   // full endpoint URL, e.g. https://api.example.com/v1/rerank
-    apiKey: string;
-    model?: string;
   };
 };
 
@@ -1853,42 +1820,10 @@ export class RemoteLLM implements LLM {
     this.config = config;
   }
 
-  // Per-operation OpenAI config helpers — fall back to base openai block
-  private openaiEmbed() {
-    const oa = this.config.openai!;
-    return {
-      apiKey: oa.embedApiKey || oa.apiKey,
-      baseUrl: oa.embedBaseUrl || oa.baseUrl || "https://api.openai.com/v1",
-      embedModel: oa.embedModel,
-    };
-  }
-
-  private openaiRerank() {
-    const oa = this.config.openai!;
-    return {
-      apiKey: oa.rerankApiKey || oa.apiKey,
-      baseUrl: oa.rerankBaseUrl || oa.baseUrl || "https://api.openai.com/v1",
-      model: oa.model,
-    };
-  }
-
-  private openaiQuery() {
-    const oa = this.config.openai!;
-    return {
-      apiKey: oa.queryApiKey || oa.apiKey,
-      baseUrl: oa.queryBaseUrl || oa.baseUrl || "https://api.openai.com/v1",
-      model: oa.model,
-    };
-  }
-
   async embed(text: string, options?: EmbedOptions): Promise<EmbeddingResult | null> {
-    if (this.config.embedProvider === 'siliconflow') {
-      return this.embedWithSiliconflow(text, options);
-    }
-    if (this.config.embedProvider === 'openai') {
-      return this.embedWithOpenAI(text, options);
-    }
-    throw new Error("RemoteLLM.embed() requires embedProvider='siliconflow' or 'openai'.");
+    if (!this.config.embed) throw new Error("RemoteLLM.embed() requires embed config. Set QMD_EMBED_PROVIDER.");
+    const results = await this._embedTexts([text], options);
+    return results[0] ?? null;
   }
 
   async generate(_prompt: string, _options?: GenerateOptions): Promise<GenerateResult | null> {
@@ -1903,22 +1838,73 @@ export class RemoteLLM implements LLM {
     query: string,
     options?: { context?: string; includeLexical?: boolean }
   ): Promise<Queryable[]> {
-    if (this.config.queryExpansionProvider === 'siliconflow') {
-      return this.expandQueryWithSiliconflow(query, options);
-    }
-    if (this.config.queryExpansionProvider === 'gemini') {
-      return this.expandQueryWithGemini(query, options);
-    }
-    if (this.config.queryExpansionProvider === 'openai') {
-      return this.expandQueryWithOpenAI(query, options);
-    }
+    const cfg = this.config.queryExpansion;
+    if (!cfg) return this.fallbackExpansion(query, options?.includeLexical ?? true);
+
     const includeLexical = options?.includeLexical ?? true;
-    const fallback: Queryable[] = [
-      { type: 'vec', text: query },
-      { type: 'hyde', text: `Information about ${query}` },
-    ];
-    if (includeLexical) fallback.unshift({ type: 'lex', text: query });
-    return fallback;
+    const provider = cfg.provider;
+    const apiKey = cfg.apiKey;
+    const model = cfg.model;
+    const timeoutMs = this.config.timeoutsMs?.generate;
+
+    const prompt = [
+      "Expand this search query into exactly 3 lines (no more, no less):",
+      "lex: keyword terms (space-separated, not a sentence)",
+      "vec: semantic search query",
+      "hyde: hypothetical document snippet",
+      "",
+      `Query: ${query}`,
+    ].join("\n");
+
+    try {
+      if (provider === 'gemini') {
+        const baseUrl = (cfg.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
+        const geminiModel = model || 'gemini-2.5-flash';
+        const resp = await fetchWithRetry(
+          `${baseUrl}/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent`,
+          {
+            method: "POST",
+            headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { temperature: 0.7, maxOutputTokens: 300 },
+            }),
+          },
+          { provider: "gemini", operation: "generate", timeoutMs },
+        );
+        const data = await resp.json() as {
+          candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+        };
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        return this.parseExpansionResult(text, query, includeLexical);
+      } else {
+        // 'api' or 'url'
+        const url = provider === 'api'
+          ? `${(cfg.url || '').replace(/\/$/, '')}/chat/completions`
+          : cfg.url!;
+        if (!url || url === '/chat/completions') throw new Error("QMD_QUERY_EXPANSION_URL is required.");
+        const body: Record<string, unknown> = {
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 300,
+          temperature: 0.7,
+        };
+        if (model) body.model = model;
+        if (model && model.toLowerCase().includes('qwen3')) body.enable_thinking = false;
+        const resp = await fetchWithRetry(url, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }, { provider, operation: "generate", timeoutMs });
+        const data = await resp.json() as {
+          choices?: Array<{ message?: { content?: string } }>;
+        };
+        const text = data.choices?.[0]?.message?.content || "";
+        return this.parseExpansionResult(text, query, includeLexical);
+      }
+    } catch (err) {
+      process.stderr.write(`[queryExpansion] error: ${err}\n`);
+      return this.fallbackExpansion(query, includeLexical);
+    }
   }
 
   async rerank(
@@ -1926,32 +1912,87 @@ export class RemoteLLM implements LLM {
     documents: RerankDocument[],
     options: RerankOptions = {}
   ): Promise<RerankResult> {
-    if (this.config.rerankProvider === 'siliconflow') {
-      if (this.config.rerankMode === 'llm') {
-        const sf = this.config.siliconflow;
-        if (!sf?.apiKey) throw new Error("SiliconFlow API key required for LLM rerank");
-        const openaiOverride = {
-          apiKey: sf.apiKey,
-          baseUrl: (sf.baseUrl || "https://api.siliconflow.cn/v1").replace(/\/$/, ""),
-          model: sf.queryExpansionModel || "zai-org/GLM-4.5-Air",
-        };
-        return this.rerankWithOpenAI(query, documents, options, openaiOverride, "siliconflow");
-      }
-      return this.rerankWithSiliconflow(query, documents, options);
+    const cfg = this.config.rerank;
+    if (!cfg) throw new Error("RemoteLLM.rerank() requires rerank config. Set QMD_RERANK_PROVIDER.");
+
+    const provider = cfg.provider;
+    const apiKey = cfg.apiKey;
+    const model = options.model || cfg.model;
+    const timeoutMs = options.timeoutMs ?? this.config.timeoutsMs?.rerank;
+    const mode = cfg.mode ?? (provider === 'url' ? 'rerank' : 'llm');
+
+    if (provider === 'gemini') {
+      return this._rerankWithGemini(query, documents, cfg, model, timeoutMs);
     }
-    if (this.config.rerankProvider === 'dashscope') {
-      return this.rerankWithDashscope(query, documents, options);
+
+    if (mode === 'rerank') {
+      const url = provider === 'api'
+        ? `${(cfg.url || '').replace(/\/$/, '')}/rerank`
+        : cfg.url!;
+      if (!url || url === '/rerank') throw new Error("QMD_RERANK_URL is required for rerank mode.");
+
+      const resp = await fetchWithRetry(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(model ? { model } : {}),
+          query,
+          documents: documents.map(d => d.text),
+          top_n: Math.max(1, documents.length),
+        }),
+      }, { provider, operation: "rerank", timeoutMs });
+
+      const data = await resp.json() as {
+        results?: Array<{ index: number; relevance_score: number }>;
+      };
+      const results: RerankDocumentResult[] = (data.results || [])
+        .map(item => {
+          const doc = documents[item.index];
+          if (!doc) return null;
+          return { file: doc.file, score: item.relevance_score, index: item.index };
+        })
+        .filter((item): item is RerankDocumentResult => item !== null);
+      return { results, model: model || "rerank" };
     }
-    if (this.config.rerankProvider === 'zeroentropy') {
-      return this.rerankWithZeroEntropy(query, documents, options);
+
+    // LLM chat-based rerank
+    const url = provider === 'api'
+      ? `${(cfg.url || '').replace(/\/$/, '')}/chat/completions`
+      : cfg.url!;
+    if (!url || url === '/chat/completions') throw new Error("QMD_RERANK_URL is required for llm rerank mode.");
+
+    const docsText = documents.map((doc, i) => `[${i}] ${doc.text}`).join("\n---\n");
+    const prompt = buildRerankPrompt(query, docsText);
+    const body: Record<string, unknown> = {
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0,
+      max_tokens: 2000,
+    };
+    if (model) body.model = model;
+
+    const resp = await fetchWithRetry(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }, { provider, operation: "rerank", timeoutMs });
+
+    const data = await resp.json() as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const rawText = data.choices?.[0]?.message?.content || "";
+    const parsed = this.parsePlainTextExtracts(rawText, documents.length);
+    if (parsed.length === 0 && rawText.trim() !== "NONE") {
+      process.stderr.write(`[rerank llm] unexpected response format: ${rawText.slice(0, 200)}\n`);
     }
-    if (this.config.rerankProvider === 'generic') {
-      return this.rerankWithGeneric(query, documents, options);
+    const results: RerankDocumentResult[] = [];
+    for (let rank = 0; rank < parsed.length; rank++) {
+      const item = parsed[rank]!;
+      const doc = documents[item.index];
+      if (!doc) continue;
+      results.push({ file: doc.file, score: 1.0 - rank * 0.05, index: item.index, extract: item.extract || undefined });
     }
-    if (this.config.rerankProvider === 'openai') {
-      return this.rerankWithOpenAI(query, documents, options);
-    }
-    return this.rerankWithGemini(query, documents, options);
+    return { results, model: model || "llm" };
+
   }
 
   async dispose(): Promise<void> {
@@ -1959,198 +2000,133 @@ export class RemoteLLM implements LLM {
   }
 
   // =========================================================================
-  // Remote Embedding
+  // Private helpers
   // =========================================================================
 
-  private async embedWithSiliconflow(text: string, options?: EmbedOptions): Promise<EmbeddingResult | null> {
-    const sf = this.config.siliconflow;
-    if (!sf?.apiKey) {
-      throw new Error("RemoteLLM siliconflow.apiKey is required for remote embedding.");
-    }
-    const baseUrl = (sf.baseUrl || "https://api.siliconflow.cn/v1").replace(/\/$/, "");
-    const model = sf.embedModel || "Qwen/Qwen3-Embedding-8B";
-
-    try {
-      const resp = await fetchWithRetry(`${baseUrl}/embeddings`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${sf.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          input: text,
-          encoding_format: "float",
-        }),
-      }, { provider: "siliconflow", operation: "embed", timeoutMs: options?.timeoutMs ?? this.config.timeoutsMs?.embed });
-
-      const data = await resp.json() as {
-        data?: Array<{ embedding: number[] }>;
-        model?: string;
-      };
-
-      const embedding = data.data?.[0]?.embedding;
-      if (!embedding) return null;
-
-      return { embedding, model: data.model || model };
-    } catch (err) {
-      console.error("SiliconFlow embed error:", err);
-      return null;
-    }
+  async embedBatch(texts: string[]): Promise<(EmbeddingResult | null)[]> {
+    if (texts.length === 0) return [];
+    if (!this.config.embed) throw new Error("RemoteLLM.embedBatch() requires embed config. Set QMD_EMBED_PROVIDER.");
+    return this._embedTexts(texts);
   }
 
-  async embedBatch(texts: string[]): Promise<(EmbeddingResult | null)[]> {
-    if (this.config.embedProvider === 'openai') {
-      return this.embedBatchWithOpenAI(texts);
-    }
-    if (this.config.embedProvider !== 'siliconflow') {
-      throw new Error("RemoteLLM.embedBatch() requires embedProvider='siliconflow' or 'openai'.");
-    }
-    if (texts.length === 0) return [];
-
-    const sf = this.config.siliconflow;
-    if (!sf?.apiKey) {
-      throw new Error("RemoteLLM siliconflow.apiKey is required for remote embedding.");
-    }
-    const baseUrl = (sf.baseUrl || "https://api.siliconflow.cn/v1").replace(/\/$/, "");
-    const model = sf.embedModel || "Qwen/Qwen3-Embedding-8B";
-
+  private async _embedTexts(texts: string[], options?: EmbedOptions): Promise<(EmbeddingResult | null)[]> {
+    const cfg = this.config.embed!;
+    const provider = cfg.provider;
+    const apiKey = cfg.apiKey;
+    const model = options?.model || cfg.model;
+    const timeoutMs = options?.timeoutMs ?? this.config.timeoutsMs?.embed;
     const BATCH_SIZE = 32;
     const allResults: (EmbeddingResult | null)[] = new Array(texts.length).fill(null);
 
     for (let i = 0; i < texts.length; i += BATCH_SIZE) {
       const batch = texts.slice(i, i + BATCH_SIZE);
+      const input = batch.length === 1 ? batch[0] : batch;
+
       try {
-        const resp = await fetchWithRetry(`${baseUrl}/embeddings`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${sf.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            input: batch,
-            encoding_format: "float",
-          }),
-        }, { provider: "siliconflow", operation: "embed", timeoutMs: this.config.timeoutsMs?.embed });
+        if (provider === 'api') {
+          const baseUrl = (cfg.url || '').replace(/\/$/, '');
+          if (!baseUrl) throw new Error("QMD_EMBED_URL is required for api provider.");
+          const resp = await fetchWithRetry(`${baseUrl}/embeddings`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ ...(model ? { model } : {}), input, encoding_format: "float" }),
+          }, { provider: "api", operation: "embed", timeoutMs });
 
-        const data = await resp.json() as {
-          data?: Array<{ embedding: number[]; index: number }>;
-          model?: string;
-        };
-
-        for (const item of data.data || []) {
-          const globalIdx = i + (item.index ?? 0);
-          if (globalIdx < texts.length) {
-            allResults[globalIdx] = {
-              embedding: item.embedding,
-              model: data.model || model,
-            };
+          const data = await resp.json() as {
+            data?: Array<{ embedding: number[]; index?: number }>;
+            model?: string;
+          };
+          const usedModel = data.model || model || "unknown";
+          for (const item of data.data || []) {
+            const idx = (item.index ?? 0) + i;
+            if (idx < allResults.length && item.embedding) {
+              allResults[idx] = { embedding: item.embedding, model: usedModel };
+            }
           }
+        } else if (provider === 'url') {
+          const url = cfg.url;
+          if (!url) throw new Error("QMD_EMBED_URL is required for url provider.");
+          const body: Record<string, unknown> = { input, input_type: "document" };
+          if (model) body.model = model;
+          if (cfg.dimensions) body.dimensions = cfg.dimensions;
+          const resp = await fetchWithRetry(url, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }, { provider: "url", operation: "embed", timeoutMs });
+
+          const data = await resp.json() as {
+            data?: Array<{ embedding: number[]; index?: number }>;
+            results?: Array<{ embedding: number[] | string }>;
+            model?: string;
+          };
+          const usedModel = data.model || model || "unknown";
+          if (data.data && data.data.length > 0) {
+            for (const item of data.data) {
+              const idx = (item.index ?? 0) + i;
+              if (idx < allResults.length && item.embedding) {
+                allResults[idx] = { embedding: item.embedding, model: usedModel };
+              }
+            }
+          } else if (data.results && data.results.length > 0) {
+            for (let j = 0; j < data.results.length; j++) {
+              const r = data.results[j]!;
+              if (typeof r.embedding !== 'string' && r.embedding) {
+                allResults[i + j] = { embedding: r.embedding, model: usedModel };
+              }
+            }
+          }
+        } else {
+          throw new Error(`Unsupported embed provider: ${provider}. Use 'api' or 'url'.`);
         }
       } catch (err) {
-        console.error(`SiliconFlow batch embed error at offset ${i}:`, err);
+        process.stderr.write(`[embed] batch offset ${i} error: ${err}\n`);
       }
     }
-
     return allResults;
   }
 
-  // =========================================================================
-  // Remote Query Expansion
-  // =========================================================================
-
-  private async expandQueryWithSiliconflow(
+  private async _rerankWithGemini(
     query: string,
-    options?: { context?: string; includeLexical?: boolean }
-  ): Promise<Queryable[]> {
-    const sf = this.config.siliconflow;
-    if (!sf?.apiKey) {
-      throw new Error("RemoteLLM siliconflow.apiKey is required for query expansion.");
-    }
-    const baseUrl = (sf.baseUrl || "https://api.siliconflow.cn/v1").replace(/\/$/, "");
-    const model = sf.queryExpansionModel || "zai-org/GLM-4.5-Air";
-    const includeLexical = options?.includeLexical ?? true;
+    documents: RerankDocument[],
+    cfg: OperationConfig,
+    model: string | undefined,
+    timeoutMs: number | undefined,
+  ): Promise<RerankResult> {
+    const baseUrl = (cfg.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
+    const geminiModel = model || 'gemini-2.5-flash';
+    const docsText = documents.map((doc, i) => `[${i}] ${doc.text}`).join("\n---\n");
+    const prompt = buildRerankPrompt(query, docsText);
 
-    const prompt = [
-      "Expand this search query into exactly 3 lines (no more, no less):",
-      "lex: keyword terms (space-separated, not a sentence)",
-      "vec: semantic search query",
-      "hyde: hypothetical document snippet",
-      "",
-      `Query: ${query}`,
-    ].join("\n");
-
-    try {
-      const resp = await fetchWithRetry(`${baseUrl}/chat/completions`, {
+    const resp = await fetchWithRetry(
+      `${baseUrl}/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent`,
+      {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${sf.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 300,
-          temperature: 0.7,
-          ...(model.toLowerCase().includes('qwen3') ? { enable_thinking: false } : {}),
-        }),
-      }, { provider: "siliconflow", operation: "generate", timeoutMs: this.config.timeoutsMs?.generate });
-
-      const data = await resp.json() as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      const text = data.choices?.[0]?.message?.content || "";
-      return this.parseExpansionResult(text, query, includeLexical);
-    } catch (err) {
-      console.error("SiliconFlow query expansion error:", err);
-      return this.fallbackExpansion(query, includeLexical);
-    }
-  }
-
-  private async expandQueryWithGemini(
-    query: string,
-    options?: { context?: string; includeLexical?: boolean }
-  ): Promise<Queryable[]> {
-    const gm = this.config.gemini;
-    if (!gm?.apiKey) {
-      throw new Error("RemoteLLM gemini.apiKey is required for query expansion.");
-    }
-    const baseUrl = (gm.baseUrl || "https://generativelanguage.googleapis.com").replace(/\/$/, "");
-    const model = gm.model || "gemini-2.5-flash";
-    const includeLexical = options?.includeLexical ?? true;
-
-    const prompt = [
-      "Expand this search query into exactly 3 lines (no more, no less):",
-      "lex: keyword terms (space-separated, not a sentence)",
-      "vec: semantic search query",
-      "hyde: hypothetical document snippet",
-      "",
-      `Query: ${query}`,
-    ].join("\n");
-
-    try {
-      const resp = await fetchWithRetry(`${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-        method: "POST",
-        headers: {
-          "x-goog-api-key": gm.apiKey,
-          "Content-Type": "application/json",
-        },
+        headers: { "x-goog-api-key": cfg.apiKey, "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.7, maxOutputTokens: 300 },
+          generationConfig: { temperature: 0, thinkingConfig: { thinkingBudget: 0 } },
         }),
-      }, { provider: "gemini", operation: "generate", timeoutMs: this.config.timeoutsMs?.generate });
+      },
+      { provider: "gemini", operation: "rerank", timeoutMs },
+    );
 
-      const data = await resp.json() as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      };
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      return this.parseExpansionResult(text, query, includeLexical);
-    } catch (err) {
-      console.error("Gemini query expansion error:", err);
-      return this.fallbackExpansion(query, includeLexical);
+    const data = await resp.json() as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const parsed = this.parsePlainTextExtracts(rawText, documents.length);
+    if (parsed.length === 0 && rawText.trim() !== "NONE") {
+      process.stderr.write(`Gemini rerank: unexpected response format: ${rawText.slice(0, 200)}\n`);
     }
+    const results: RerankDocumentResult[] = [];
+    for (let rank = 0; rank < parsed.length; rank++) {
+      const item = parsed[rank]!;
+      const doc = documents[item.index];
+      if (!doc) continue;
+      results.push({ file: doc.file, score: 1.0 - rank * 0.05, index: item.index, extract: item.extract || undefined });
+    }
+    return { results, model: geminiModel };
   }
 
   private parseExpansionResult(text: string, query: string, includeLexical: boolean): Queryable[] {
@@ -2179,251 +2155,10 @@ export class RemoteLLM implements LLM {
     return fallback;
   }
 
-  // =========================================================================
-  // Remote Reranking
-  // =========================================================================
-
-  private async rerankWithSiliconflow(
-    query: string,
-    documents: RerankDocument[],
-    options: RerankOptions
-  ): Promise<RerankResult> {
-    const sf = this.config.siliconflow;
-    if (!sf?.apiKey) {
-      throw new Error("RemoteLLM siliconflow.apiKey is required when rerankProvider is 'siliconflow'.");
-    }
-
-    const baseUrl = (sf.baseUrl || "https://api.siliconflow.cn/v1").replace(/\/$/, "");
-    const model = options.model || sf.model || "BAAI/bge-reranker-v2-m3";
-
-    const resp = await fetchWithRetry(`${baseUrl}/rerank`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${sf.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        query,
-        documents: documents.map((d) => d.text),
-        top_n: Math.max(1, documents.length),
-      }),
-    }, { provider: "siliconflow", operation: "rerank", timeoutMs: options.timeoutMs ?? this.config.timeoutsMs?.rerank });
-
-    const data = await resp.json() as {
-      results?: Array<{ index: number; relevance_score: number }>;
-    };
-
-    const results: RerankDocumentResult[] = (data.results || [])
-      .map((item) => {
-        const doc = documents[item.index];
-        if (!doc) return null;
-        return {
-          file: doc.file,
-          score: item.relevance_score,
-          index: item.index,
-        };
-      })
-      .filter((item): item is RerankDocumentResult => item !== null);
-
-    return { results, model };
-  }
-
-  private async rerankWithDashscope(
-    query: string,
-    documents: RerankDocument[],
-    options: RerankOptions
-  ): Promise<RerankResult> {
-    const ds = this.config.dashscope;
-    if (!ds?.apiKey) {
-      throw new Error("RemoteLLM dashscope.apiKey is required when rerankProvider is 'dashscope'.");
-    }
-
-    const baseUrl = (ds.baseUrl || "https://dashscope.aliyuncs.com/compatible-api/v1").replace(/\/$/, "");
-    const model = options.model || ds.model || "qwen3-rerank";
-
-    const resp = await fetchWithRetry(`${baseUrl}/reranks`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${ds.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        query,
-        documents: documents.map((d) => d.text),
-        top_n: Math.max(1, documents.length),
-      }),
-    }, { provider: "dashscope", operation: "rerank", timeoutMs: options.timeoutMs ?? this.config.timeoutsMs?.rerank });
-
-    const data = await resp.json() as {
-      results?: Array<{ index: number; relevance_score: number }>;
-    };
-
-    const results: RerankDocumentResult[] = (data.results || [])
-      .map((item) => {
-        const doc = documents[item.index];
-        if (!doc) return null;
-        return {
-          file: doc.file,
-          score: item.relevance_score,
-          index: item.index,
-        };
-      })
-      .filter((item): item is RerankDocumentResult => item !== null);
-
-    return { results, model };
-  }
-
-  private async rerankWithZeroEntropy(
-    query: string,
-    documents: RerankDocument[],
-    options: RerankOptions
-  ): Promise<RerankResult> {
-    const ze = this.config.zeroentropy!;
-    if (!ze?.apiKey) {
-      throw new Error("RemoteLLM zeroentropy.apiKey is required when rerankProvider is 'zeroentropy'.");
-    }
-
-    const baseUrl = (ze.baseUrl || "https://api.zeroentropy.dev/v1").replace(/\/$/, "");
-    const model = options.model || ze.model || "zerank-2";
-
-    const resp = await fetchWithRetry(`${baseUrl}/models/rerank`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${ze.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        query,
-        documents: documents.map((d) => d.text),
-        top_n: Math.max(1, documents.length),
-      }),
-    }, { provider: "zeroentropy", operation: "rerank", timeoutMs: options.timeoutMs ?? this.config.timeoutsMs?.rerank });
-
-    const data = await resp.json() as {
-      results?: Array<{ index: number; relevance_score: number }>;
-    };
-
-    const results: RerankDocumentResult[] = (data.results || [])
-      .map((item) => {
-        const doc = documents[item.index];
-        if (!doc) return null;
-        return {
-          file: doc.file,
-          score: item.relevance_score,
-          index: item.index,
-        };
-      })
-      .filter((item): item is RerankDocumentResult => item !== null);
-
-    return { results, model };
-  }
-
-  private async rerankWithGeneric(
-    query: string,
-    documents: RerankDocument[],
-    options: RerankOptions
-  ): Promise<RerankResult> {
-    const g = this.config.generic;
-    if (!g?.url || !g?.apiKey) {
-      throw new Error("RemoteLLM generic rerank requires QMD_RERANK_URL and QMD_RERANK_API_KEY.");
-    }
-    const model = options.model || g.model || "rerank";
-
-    const resp = await fetchWithRetry(g.url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${g.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        query,
-        documents: documents.map((d) => d.text),
-        top_n: Math.max(1, documents.length),
-      }),
-    }, { provider: "generic", operation: "rerank", timeoutMs: options.timeoutMs ?? this.config.timeoutsMs?.rerank });
-
-    const data = await resp.json() as {
-      results?: Array<{ index: number; relevance_score: number }>;
-    };
-
-    const results: RerankDocumentResult[] = (data.results || [])
-      .map((item) => {
-        const doc = documents[item.index];
-        if (!doc) return null;
-        return { file: doc.file, score: item.relevance_score, index: item.index };
-      })
-      .filter((item): item is RerankDocumentResult => item !== null);
-
-    return { results, model };
-  }
-
-  private async rerankWithGemini(
-    query: string,
-    documents: RerankDocument[],
-    options: RerankOptions
-  ): Promise<RerankResult> {
-    const gm = this.config.gemini;
-    if (!gm?.apiKey) {
-      throw new Error("RemoteLLM gemini.apiKey is required when rerankProvider is 'gemini'.");
-    }
-
-    const baseUrl = (gm.baseUrl || "https://generativelanguage.googleapis.com").replace(/\/$/, "");
-    const model = options.model || gm.model || "gemini-2.5-flash";
-
-    const docsText = documents.map((doc, i) => `[${i}] ${doc.text}`).join("\n---\n");
-    const prompt = buildRerankPrompt(query, docsText);
-
-    const resp = await fetchWithRetry(`${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": gm.apiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0,
-          thinkingConfig: { thinkingBudget: 0 },
-        },
-      }),
-    }, { provider: "gemini", operation: "rerank", timeoutMs: options.timeoutMs ?? this.config.timeoutsMs?.rerank });
-
-    const data = await resp.json() as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    };
-
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    const parsed = this.parsePlainTextExtracts(rawText, documents.length);
-
-    if (parsed.length === 0 && rawText.trim() !== "NONE") {
-      process.stderr.write(`Gemini rerank: unexpected response format: ${rawText.slice(0, 200)}\n`);
-    }
-
-    const results: RerankDocumentResult[] = [];
-    for (let rank = 0; rank < parsed.length; rank++) {
-      const item = parsed[rank]!;
-      const doc = documents[item.index];
-      if (!doc) continue;
-      results.push({
-        file: doc.file,
-        score: 1.0 - rank * 0.05,
-        index: item.index,
-        extract: item.extract || undefined,
-      });
-    }
-
-    return { results, model };
-  }
-
   private parsePlainTextExtracts(text: string, maxIndex: number): Array<{ index: number; extract: string }> {
     const results: Array<{ index: number; extract: string }> = [];
     const trimmed = text.trim();
     if (!trimmed || trimmed === "NONE") return results;
-
     const segments = trimmed.split(/(?=^\[\d+\])/m);
     for (const segment of segments) {
       const match = segment.match(/^\[(\d+)\]\s*([\s\S]*)/);
@@ -2437,196 +2172,4 @@ export class RemoteLLM implements LLM {
     return results;
   }
 
-  private async rerankWithOpenAI(
-    query: string,
-    documents: RerankDocument[],
-    options: RerankOptions,
-    openaiOverride?: { apiKey: string; baseUrl?: string; model?: string },
-    providerName: string = "openai"
-  ): Promise<RerankResult> {
-    // openaiOverride is used by the SiliconFlow LLM-rerank path to inject SF credentials — honour it
-    const oa = openaiOverride
-      ? { apiKey: openaiOverride.apiKey, baseUrl: openaiOverride.baseUrl || "https://api.openai.com/v1", model: openaiOverride.model || "gpt-4o-mini" }
-      : this.openaiRerank();
-    if (!oa.apiKey) {
-      throw new Error("RemoteLLM openai.apiKey is required when rerankProvider is 'openai'.");
-    }
-    const baseUrl = oa.baseUrl.replace(/\/$/, "");
-    const model = options.model || oa.model || "gpt-4o-mini";
-
-    const docsText = documents.map((doc, i) => `[${i}] ${doc.text}`).join("\n---\n");
-    const prompt = [
-      "你是记忆检索助手。根据查询从候选文档中筛选并提取相关信息。",
-      "",
-      `查询：${query}`,
-      "",
-      "候选文档：",
-      docsText,
-      "",
-      "规则：",
-      "1. 只提取与查询直接相关的文档内容，忽略不相关的",
-      "2. 每篇用 [编号] 开头，后面跟提取的核心内容",
-      "3. 用纯文本输出，不要JSON，不要markdown格式符",
-      "4. 没有相关文档则输出 NONE",
-      "5. 多篇文档内容相同或高度重复时，只提取第一篇，跳过后续重复",
-      "6. 优先选择原始数据源（如日记、笔记、配置记录），跳过「对话/搜索会话记录」类文档",
-      "",
-      "示例格式：",
-      "[0] 提取的核心内容",
-      "[3] 另一篇的核心内容",
-    ].join("\n");
-
-    const resp = await fetchWithRetry(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${oa.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0,
-        max_tokens: 2000,
-      }),
-    }, { provider: providerName, operation: "rerank", timeoutMs: options.timeoutMs ?? this.config.timeoutsMs?.rerank });
-
-    const data = await resp.json() as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const rawText = data.choices?.[0]?.message?.content || "";
-
-    const parsed = this.parsePlainTextExtracts(rawText, documents.length);
-
-    if (parsed.length === 0 && rawText.trim() !== "NONE") {
-      process.stderr.write(`OpenAI rerank: unexpected response format: ${rawText.slice(0, 200)}\n`);
-    }
-
-    const results: RerankDocumentResult[] = [];
-    for (let rank = 0; rank < parsed.length; rank++) {
-      const item = parsed[rank]!;
-      const doc = documents[item.index];
-      if (!doc) continue;
-      results.push({
-        file: doc.file,
-        score: 1.0 - rank * 0.05,
-        index: item.index,
-        extract: item.extract || undefined,
-      });
-    }
-
-    return { results, model };
-  }
-
-  private async embedWithOpenAI(text: string, options?: EmbedOptions): Promise<EmbeddingResult | null> {
-    const oa = this.openaiEmbed();
-    if (!oa.apiKey) {
-      throw new Error("RemoteLLM openai.apiKey is required for remote embedding.");
-    }
-    const baseUrl = oa.baseUrl.replace(/\/$/, "");
-    const model = options?.model || oa.embedModel || "text-embedding-3-small";
-
-    const resp = await fetchWithRetry(`${baseUrl}/embeddings`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${oa.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ model, input: text }),
-    }, { provider: "openai", operation: "embed", timeoutMs: options?.timeoutMs ?? this.config.timeoutsMs?.embed });
-
-    const data = await resp.json() as {
-      data?: Array<{ embedding?: number[] }>;
-    };
-    const embedding = data.data?.[0]?.embedding;
-    if (!embedding) return null;
-    return { embedding, model };
-  }
-
-  private async embedBatchWithOpenAI(texts: string[]): Promise<(EmbeddingResult | null)[]> {
-    if (texts.length === 0) return [];
-    const oa = this.openaiEmbed();
-    if (!oa.apiKey) {
-      throw new Error("RemoteLLM openai.apiKey is required for remote embedding.");
-    }
-    const baseUrl = oa.baseUrl.replace(/\/$/, "");
-    const model = oa.embedModel || "text-embedding-3-small";
-
-    const BATCH_SIZE = 32;
-    const allResults: (EmbeddingResult | null)[] = new Array(texts.length).fill(null);
-
-    for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-      const batch = texts.slice(i, i + BATCH_SIZE);
-      try {
-        const resp = await fetchWithRetry(`${baseUrl}/embeddings`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${oa.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ model, input: batch }),
-        }, { provider: "openai", operation: "embed", timeoutMs: this.config.timeoutsMs?.embed });
-
-        const data = await resp.json() as {
-          data?: Array<{ embedding?: number[]; index?: number }>;
-        };
-        for (const item of data.data || []) {
-          const idx = item.index ?? 0;
-          if (item.embedding && idx + i < allResults.length) {
-            allResults[i + idx] = { embedding: item.embedding, model };
-          }
-        }
-      } catch (err) {
-        process.stderr.write(`OpenAI embedBatch error: ${err}\n`);
-      }
-    }
-    return allResults;
-  }
-
-  private async expandQueryWithOpenAI(
-    query: string,
-    options?: { context?: string; includeLexical?: boolean }
-  ): Promise<Queryable[]> {
-    const oa = this.openaiQuery();
-    if (!oa.apiKey) {
-      throw new Error("RemoteLLM openai.apiKey is required for query expansion.");
-    }
-    const baseUrl = oa.baseUrl.replace(/\/$/, "");
-    const model = oa.model || "gpt-4o-mini";
-    const includeLexical = options?.includeLexical ?? true;
-
-    const prompt = [
-      "Expand this search query into exactly 3 lines (no more, no less):",
-      "lex: keyword terms (space-separated, not a sentence)",
-      "vec: semantic search query",
-      "hyde: hypothetical document snippet",
-      "",
-      `Query: ${query}`,
-    ].join("\n");
-
-    try {
-      const resp = await fetchWithRetry(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${oa.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 300,
-          temperature: 0.7,
-          ...(model.toLowerCase().includes('qwen3') ? { enable_thinking: false } : {}),
-        }),
-      }, { provider: "openai", operation: "generate", timeoutMs: this.config.timeoutsMs?.generate });
-
-      const data = await resp.json() as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      const text = data.choices?.[0]?.message?.content || "";
-      return this.parseExpansionResult(text, query, includeLexical);
-    } catch (err) {
-      console.error(`OpenAI query expansion error: ${err}`);
-      return this.fallbackExpansion(query, includeLexical);
-    }
-  }
 }
