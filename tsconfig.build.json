@@ -7,5 +7,13 @@
     "noImplicitAny": false
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts", "src/test-preload.ts", "src/bench-*.ts"]
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/test-preload.ts",
+    "src/bench-*.ts",
+    "src/qmd.ts",
+    "src/mcp.ts",
+    "src/formatter.ts",
+    "migrate-schema.ts"
+  ]
 }
