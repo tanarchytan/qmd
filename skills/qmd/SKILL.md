@@ -2,10 +2,10 @@
 name: qmd
 description: Search markdown knowledge bases, notes, and documentation using QMD. Use when users ask to search notes, find documents, or look up information.
 license: MIT
-compatibility: Requires qmd CLI or MCP server. Install via `npm install -g @tobilu/qmd`.
+compatibility: Requires qmd CLI or MCP server. Install via `npm install -g @tanarchy/qmd`.
 metadata:
-  author: tobi
-  version: "2.0.0"
+  author: tanarchy
+  version: "2.1.0"
 allowed-tools: Bash(qmd:*), mcp__qmd__*
 ---
 
@@ -15,7 +15,7 @@ Local search engine for markdown content.
 
 ## Status
 
-!`qmd status 2>/dev/null || echo "Not installed: npm install -g @tobilu/qmd"`
+!`qmd status 2>/dev/null || echo "Not installed: npm install -g @tanarchy/qmd"`
 
 ## MCP: `query`
 
@@ -113,6 +113,18 @@ Omit to search all collections.
 | `get` | Retrieve doc by path or `#docid` |
 | `multi_get` | Retrieve multiple by glob/list |
 | `status` | Collections and health |
+| `briefing` | Agent wake-up: collections, contexts, search tips |
+| `manage` | Admin: `embed`, `update`, `cleanup`, `sync`, `decay` |
+| `memory_store` | Store a memory (auto-dedup, auto-classify) |
+| `memory_recall` | Search memories (hybrid: FTS + vector + decay) |
+| `memory_forget` | Delete a memory |
+| `memory_update` | Update text/importance/category |
+| `memory_extract` | Extract memories from conversation text |
+| `memory_stats` | Memory count by tier/category/scope |
+| `knowledge_store` | Store a temporal fact (auto-invalidates conflicts) |
+| `knowledge_query` | Query facts (optionally at a point in time) |
+| `knowledge_invalidate` | Mark a fact as no longer valid |
+| `knowledge_entities` | List all known entities |
 
 ## CLI
 
@@ -138,7 +150,7 @@ curl -X POST http://localhost:8181/query \
 ## Setup
 
 ```bash
-npm install -g @tobilu/qmd
+npm install -g @tanarchy/qmd
 qmd collection add ~/notes --name notes
 qmd embed
 ```

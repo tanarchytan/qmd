@@ -122,8 +122,8 @@ export function knowledgeQuery(
     params.push(options.predicate.toLowerCase().trim());
   }
   if (options.object) {
-    conditions.push("object LIKE ?");
-    params.push(`%${options.object}%`);
+    conditions.push("object LIKE ? ESCAPE '\\'");
+    params.push(`%${options.object.replace(/[%_\\]/g, '\\$&')}%`);
   }
   if (options.as_of !== undefined) {
     conditions.push("(valid_from IS NULL OR valid_from <= ?)");

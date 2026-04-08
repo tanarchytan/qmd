@@ -12,7 +12,6 @@
 import type { Database } from "../db.js";
 import { classifyMemory, extractPreferences, hasMemorySignal, type PatternCategory } from "./patterns.js";
 import { memoryStore, type MemoryStoreOptions } from "./index.js";
-import { getRemoteConfig, getRemoteLLM } from "../remote-config.js";
 
 export type ExtractedMemory = {
   text: string;
@@ -105,39 +104,11 @@ Example output:
 Conversation text:
 `;
 
-async function extractWithLLM(text: string): Promise<ExtractedMemory[]> {
-  const remoteConfig = getRemoteConfig();
-  if (!remoteConfig?.queryExpansion) return [];
-
-  try {
-    const remote = getRemoteLLM()!;
-    const results = await remote.expandQuery(EXTRACTION_PROMPT + text, { includeLexical: false });
-
-    // expandQuery returns Queryable[] — we parse the vec/hyde results as extracted memories
-    const memories: ExtractedMemory[] = [];
-    for (const r of results) {
-      const responseText = r.text;
-      // Parse [category] text format from each line
-      for (const line of responseText.split('\n')) {
-        const match = line.match(/^\[(\w+)\]\s+(.+)/);
-        if (!match) continue;
-        const cat = match[1]!.toLowerCase() as PatternCategory;
-        const memText = match[2]!.trim();
-        if (!["preference", "fact", "decision", "entity", "reflection"].includes(cat)) continue;
-        if (memText.length < 10) continue;
-        memories.push({
-          text: memText,
-          category: cat,
-          importance: estimateImportance(memText, cat),
-        });
-      }
-    }
-    return memories;
-  } catch (err) {
-    process.stderr.write(`LLM extraction failed, falling back to heuristic: ${err instanceof Error ? err.message : err}\n`);
-    return [];
-  }
-}
+// NOTE: LLM extraction via expandQuery was broken (expandQuery returns lex/vec/hyde
+// format, not free-form extraction). Heuristic extraction is the primary path.
+// MemPalace benchmarks show raw verbatim + heuristic patterns outperforms
+// LLM extraction (96.6% vs Mem0's 30-45%). LLM extraction deferred to when
+// we add a direct chat completions call path.
 
 // =============================================================================
 // Public API
@@ -153,11 +124,8 @@ export async function extractAndStore(
   text: string,
   scope?: string,
 ): Promise<ExtractionResult> {
-  // Try LLM first, fall back to heuristic
-  let extracted = await extractWithLLM(text);
-  if (extracted.length === 0) {
-    extracted = extractHeuristic(text);
-  }
+  // Heuristic extraction (zero-LLM, proven effective by MemPalace benchmarks)
+  const extracted = extractHeuristic(text);
 
   // Also extract preference patterns for synthetic FTS entries
   const preferences = extractPreferences(text);

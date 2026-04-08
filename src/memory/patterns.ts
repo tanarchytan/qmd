@@ -71,16 +71,16 @@ const CATEGORY_PATTERNS: Record<string, RegExp[]> = {
 // =============================================================================
 
 const PREFERENCE_EXTRACTION_PATTERNS: RegExp[] = [
-  /\bi (?:usually |always )?prefer (.{5,80})/i,
-  /\bi (?:always |usually )(?:use|do|go with) (.{5,80})/i,
-  /\bi don'?t (?:like|want|use) (.{5,80})/i,
-  /\bi (?:love|hate|enjoy|avoid) (.{5,80})/i,
-  /\bmy (?:favorite|preferred|go-to) (?:is |are )?(.{5,80})/i,
-  /\bi (?:tend to|lean toward) (.{5,80})/i,
-  /\bi've been having (?:trouble|issues?|problems?) with (.{5,60})/i,
-  /\bi(?:'m| am) (?:worried|concerned) about (.{5,60})/i,
-  /\bi want to (.{5,60})/i,
-  /\bi'm thinking (?:about|of) (.{5,60})/i,
+  /\bi (?:usually |always )?prefer ([^\n]{5,80})/i,
+  /\bi (?:always |usually )(?:use|do|go with) ([^\n]{5,80})/i,
+  /\bi don'?t (?:like|want|use) ([^\n]{5,80})/i,
+  /\bi (?:love|hate|enjoy|avoid) ([^\n]{5,80})/i,
+  /\bmy (?:favorite|preferred|go-to) (?:is |are )?([^\n]{5,80})/i,
+  /\bi (?:tend to|lean toward) ([^\n]{5,80})/i,
+  /\bi've been having (?:trouble|issues?|problems?) with ([^\n]{5,60})/i,
+  /\bi(?:'m| am) (?:worried|concerned) about ([^\n]{5,60})/i,
+  /\bi want to ([^\n]{5,60})/i,
+  /\bi'm thinking (?:about|of) ([^\n]{5,60})/i,
 ];
 
 // =============================================================================

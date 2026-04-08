@@ -3,7 +3,7 @@
 ## Install
 
 ```bash
-npm install -g @tobilu/qmd
+npm install -g @tanarchy/qmd
 qmd collection add ~/path/to/markdown --name myknowledge
 qmd embed
 ```
