@@ -10,6 +10,8 @@ import type { Database } from "../db.js";
 import { getRemoteConfig, getRemoteLLM } from "../remote-config.js";
 import { getDefaultLlamaCpp, type EmbeddingResult } from "../llm.js";
 import { isLocalEnabled } from "../remote-config.js";
+import { getDecayScore } from "./decay.js";
+export { runDecayPass, type DecayResult } from "./decay.js";
 
 // =============================================================================
 // Types
@@ -344,7 +346,17 @@ export async function memoryRecall(
     }
   }
 
-  // 4. Sort by score, limit, update access counts
+  // 4. Apply decay weighting — recent, frequently-accessed memories score higher
+  for (const result of results.values()) {
+    const mem = db.prepare(`SELECT created_at, access_count, importance, tier FROM memories WHERE id = ?`).get(result.id) as
+      { created_at: number; access_count: number; importance: number; tier: string } | null;
+    if (mem) {
+      const decay = getDecayScore(mem.created_at, mem.access_count, mem.importance, mem.tier);
+      result.score *= decay;
+    }
+  }
+
+  // 5. Sort by score, limit, update access counts
   const sorted = [...results.values()].sort((a, b) => b.score - a.score).slice(0, limit);
 
   // Touch access counts for recalled memories

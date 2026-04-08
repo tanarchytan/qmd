@@ -34,7 +34,7 @@ import {
 } from "../index.js";
 import { getConfigPath } from "../collections.js";
 import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections as storeListCollections, generateEmbeddings, reindexCollection } from "../store.js";
-import { memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats, MEMORY_CATEGORIES } from "../memory/index.js";
+import { memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, MEMORY_CATEGORIES } from "../memory/index.js";
 
 // =============================================================================
 // Types for structured content
@@ -736,7 +736,7 @@ Intent-aware lex (C++ performance, not sports):
       ].join("\n"),
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
-        operation: z.enum(["embed", "update", "cleanup", "sync"]).describe("Operation to run"),
+        operation: z.enum(["embed", "update", "cleanup", "sync", "decay"]).describe("Operation to run"),
         collection: z.string().optional().describe("Collection name (for update). Omit to update all."),
         force: z.boolean().optional().describe("Force re-embed all documents (for embed/sync)"),
       },
@@ -788,6 +788,18 @@ Intent-aware lex (C++ performance, not sports):
             text: `Cleanup complete: ${cacheCount} cache entries cleared, ${orphanCount} orphaned vectors removed, database vacuumed.`,
           }],
         };
+      }
+
+      if (operation === "decay") {
+        const result = runDecayPass(db);
+        const lines = [
+          `Decay pass: ${result.processed} memories, ${result.promoted} promoted, ${result.demoted} demoted, ${result.stale} stale`,
+        ];
+        for (const c of result.changes.slice(0, 10)) {
+          lines.push(`  ${c.id.slice(0, 8)}: ${c.oldTier} → ${c.newTier} (score: ${c.composite.toFixed(3)})`);
+        }
+        if (result.changes.length > 10) lines.push(`  ... and ${result.changes.length - 10} more`);
+        return { content: [{ type: "text", text: lines.join('\n') }] };
       }
 
       return { content: [{ type: "text", text: `Unknown operation: ${operation}` }] };
