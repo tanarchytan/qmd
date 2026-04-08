@@ -3192,12 +3192,12 @@ export async function searchVec(db: Database, query: string, model: string, limi
 // =============================================================================
 
 async function getEmbedding(text: string, model: string, isQuery: boolean, session?: ILLMSession, llmOverride?: LlamaCpp): Promise<number[] | null> {
-  // Remote embedding takes priority when configured
+  // Remote embedding takes priority when configured — don't pass local model name
   const remoteConfig = getRemoteConfig();
   if (remoteConfig?.embed) {
     try {
       const remote = getRemoteLLM()!;
-      const result = await remote.embed(text, { model, isQuery });
+      const result = await remote.embed(text, { isQuery });
       return result?.embedding || null;
     } catch (err) {
       process.stderr.write(`Remote embed failed, falling back to local: ${err instanceof Error ? err.message : err}\n`);
