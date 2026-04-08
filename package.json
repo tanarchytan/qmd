@@ -1,6 +1,6 @@
 {
   "name": "@tanarchy/qmd",
-  "version": "2.1.0-dev.15",
+  "version": "2.1.0-dev.16",
   "description": "Search + memory + knowledge graph for AI agents. BM25, vector, RRF fusion, LLM reranking, Weibull decay, temporal knowledge. Local or cloud.",
   "type": "module",
   "main": "dist/index.js",
