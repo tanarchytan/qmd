@@ -11,7 +11,10 @@ import { getRemoteConfig, getRemoteLLM } from "../remote-config.js";
 import { getDefaultLlamaCpp, type EmbeddingResult } from "../llm.js";
 import { isLocalEnabled } from "../remote-config.js";
 import { getDecayScore } from "./decay.js";
+import { classifyMemory } from "./patterns.js";
 export { runDecayPass, type DecayResult } from "./decay.js";
+export { extractAndStore, type ExtractionResult } from "./extractor.js";
+export { classifyMemory, extractPreferences, hasMemorySignal } from "./patterns.js";
 
 // =============================================================================
 // Types
@@ -213,7 +216,7 @@ export async function memoryStore(
   if (!text) throw new Error("Memory text cannot be empty");
 
   const hash = contentHash(text);
-  const category = options.category || "other";
+  const category = options.category || classifyMemory(text);
   const scope = options.scope || "global";
   const importance = Math.max(0, Math.min(1, options.importance ?? 0.5));
   const now = Date.now();

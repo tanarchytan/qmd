@@ -34,7 +34,7 @@ import {
 } from "../index.js";
 import { getConfigPath } from "../collections.js";
 import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections as storeListCollections, generateEmbeddings, reindexCollection } from "../store.js";
-import { memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, MEMORY_CATEGORIES } from "../memory/index.js";
+import { memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, extractAndStore, MEMORY_CATEGORIES } from "../memory/index.js";
 
 // =============================================================================
 // Types for structured content
@@ -715,6 +715,44 @@ Intent-aware lex (C++ performance, not sports):
         content: [{ type: "text", text: lines.join('\n') }],
         structuredContent: stats,
       };
+    }
+  );
+
+  server.registerTool(
+    "memory_extract",
+    {
+      title: "Extract Memories",
+      description: [
+        "Extract and store memories from conversation text.",
+        "Uses LLM if configured (query expansion provider), otherwise uses heuristic pattern matching.",
+        "Automatically classifies into: preference, fact, decision, entity, reflection.",
+        "Also extracts preference patterns for enhanced recall.",
+        "Deduplicates against existing memories.",
+      ].join("\n"),
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        text: z.string().describe("Conversation text to extract memories from"),
+        scope: z.string().optional().describe("Scope for extracted memories (default: global)"),
+      },
+    },
+    async ({ text, scope }) => {
+      const db = store.internal.db;
+      const result = await extractAndStore(db, text, scope);
+      const lines = [
+        `Extracted ${result.extracted.length} memories: ${result.stored} stored, ${result.duplicates} duplicates`,
+      ];
+      if (result.extracted.length > 0) {
+        for (const mem of result.extracted.slice(0, 10)) {
+          lines.push(`  [${mem.category}] ${mem.text.slice(0, 100)}${mem.text.length > 100 ? '...' : ''}`);
+        }
+      }
+      if (result.preferences.length > 0) {
+        lines.push(`\nPreference patterns: ${result.preferences.length}`);
+        for (const p of result.preferences.slice(0, 5)) {
+          lines.push(`  ${p}`);
+        }
+      }
+      return { content: [{ type: "text", text: lines.join('\n') }] };
     }
   );
 
