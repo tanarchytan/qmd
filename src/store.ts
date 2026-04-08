@@ -48,16 +48,13 @@ export const DEFAULT_MULTI_GET_MAX_BYTES = 10 * 1024; // 10KB
 export const DEFAULT_EMBED_MAX_DOCS_PER_BATCH = 64;
 export const DEFAULT_EMBED_MAX_BATCH_BYTES = 64 * 1024 * 1024; // 64MB
 
-// Chunking: 900 tokens per chunk with 15% overlap
-// Increased from 800 to accommodate smart chunking finding natural break points
-export const CHUNK_SIZE_TOKENS = 900;
-export const CHUNK_OVERLAP_TOKENS = Math.floor(CHUNK_SIZE_TOKENS * 0.15);  // 135 tokens (15% overlap)
-// Fallback char-based approximation for sync chunking (~4 chars per token)
-export const CHUNK_SIZE_CHARS = CHUNK_SIZE_TOKENS * 4;  // 3600 chars
-export const CHUNK_OVERLAP_CHARS = CHUNK_OVERLAP_TOKENS * 4;  // 540 chars
-// Search window for finding optimal break points (in tokens, ~200 tokens)
-export const CHUNK_WINDOW_TOKENS = 200;
-export const CHUNK_WINDOW_CHARS = CHUNK_WINDOW_TOKENS * 4;  // 800 chars
+// Chunking: 900 tokens per chunk with 15% overlap (env-configurable)
+export const CHUNK_SIZE_TOKENS = parseInt(process.env.QMD_CHUNK_SIZE_TOKENS ?? "900", 10);
+export const CHUNK_OVERLAP_TOKENS = Math.floor(CHUNK_SIZE_TOKENS * 0.15);
+export const CHUNK_SIZE_CHARS = CHUNK_SIZE_TOKENS * 4;
+export const CHUNK_OVERLAP_CHARS = CHUNK_OVERLAP_TOKENS * 4;
+export const CHUNK_WINDOW_TOKENS = parseInt(process.env.QMD_CHUNK_WINDOW_TOKENS ?? "200", 10);
+export const CHUNK_WINDOW_CHARS = CHUNK_WINDOW_TOKENS * 4;
 
 /**
  * Get the LlamaCpp instance for a store — prefers the store's own instance,
@@ -307,13 +304,17 @@ export function chunkDocumentWithBreakPoints(
   return chunks;
 }
 
-// Hybrid query: strong BM25 signal detection thresholds
-// Skip expensive LLM expansion when top result is strong AND clearly separated from runner-up
-export const STRONG_SIGNAL_MIN_SCORE = 0.85;
-export const STRONG_SIGNAL_MIN_GAP = 0.15;
-// Max candidates to pass to reranker — balances quality vs latency.
-// 40 keeps rank 31-40 visible to the reranker (matters for recall on broad queries).
-export const RERANK_CANDIDATE_LIMIT = 40;
+// Hybrid query: strong BM25 signal detection thresholds (env-configurable)
+export const STRONG_SIGNAL_MIN_SCORE = parseFloat(process.env.QMD_STRONG_SIGNAL_MIN_SCORE ?? "0.85");
+export const STRONG_SIGNAL_MIN_GAP = parseFloat(process.env.QMD_STRONG_SIGNAL_MIN_GAP ?? "0.15");
+export const RERANK_CANDIDATE_LIMIT = parseInt(process.env.QMD_RERANK_CANDIDATE_LIMIT ?? "40", 10);
+// RRF and scoring tunables (env-configurable)
+export const RRF_K = parseInt(process.env.QMD_RRF_K ?? "60", 10);
+export const WEIGHT_FTS = parseFloat(process.env.QMD_WEIGHT_FTS ?? "2.0");
+export const WEIGHT_VEC = parseFloat(process.env.QMD_WEIGHT_VEC ?? "1.0");
+export const BLEND_RRF_TOP3 = parseFloat(process.env.QMD_BLEND_RRF_TOP3 ?? "0.75");
+export const BLEND_RRF_TOP10 = parseFloat(process.env.QMD_BLEND_RRF_TOP10 ?? "0.60");
+export const BLEND_RRF_REST = parseFloat(process.env.QMD_BLEND_RRF_REST ?? "0.40");
 
 /**
  * A typed query expansion result. Decoupled from llm.ts internal Queryable —
@@ -3410,7 +3411,7 @@ export async function rerank(query: string, documents: { file: string; text: str
 export function reciprocalRankFusion(
   resultLists: RankedResult[][],
   weights: number[] = [],
-  k: number = 60
+  k: number = RRF_K
 ): RankedResult[] {
   const scores = new Map<string, { result: RankedResult; rrfScore: number; topRank: number }>();
 
@@ -3459,7 +3460,7 @@ export function buildRrfTrace(
   resultLists: RankedResult[][],
   weights: number[] = [],
   listMeta: RankedListMeta[] = [],
-  k: number = 60
+  k: number = RRF_K
 ): Map<string, RRFScoreTrace> {
   const traces = new Map<string, RRFScoreTrace>();
 
@@ -4191,7 +4192,7 @@ export async function hybridQuery(
   }
 
   // Step 4: RRF fusion — first 2 lists (original FTS + first vec) get 2x weight
-  const weights = rankedLists.map((_, i) => i < 2 ? 2.0 : 1.0);
+  const weights = rankedLists.map((_, i) => i < 2 ? WEIGHT_FTS : WEIGHT_VEC);
   const fused = reciprocalRankFusion(rankedLists, weights);
   const rrfTraceByFile = explain ? buildRrfTrace(rankedLists, weights, rankedListMeta) : null;
   const candidates = fused.slice(0, candidateLimit);
@@ -4299,9 +4300,9 @@ export async function hybridQuery(
   const blended = reranked.map(r => {
     const rrfRank = rrfRankMap.get(r.file) || candidateLimit;
     let rrfWeight: number;
-    if (rrfRank <= 3) rrfWeight = 0.75;
-    else if (rrfRank <= 10) rrfWeight = 0.60;
-    else rrfWeight = 0.40;
+    if (rrfRank <= 3) rrfWeight = BLEND_RRF_TOP3;
+    else if (rrfRank <= 10) rrfWeight = BLEND_RRF_TOP10;
+    else rrfWeight = BLEND_RRF_REST;
     const rrfScore = 1 / rrfRank;
     const blendedScore = rrfWeight * rrfScore + (1 - rrfWeight) * r.score;
 
@@ -4586,7 +4587,7 @@ export async function structuredSearch(
   if (rankedLists.length === 0) return [];
 
   // Step 3: RRF fusion — first list gets 2x weight (assume caller ordered by importance)
-  const weights = rankedLists.map((_, i) => i === 0 ? 2.0 : 1.0);
+  const weights = rankedLists.map((_, i) => i === 0 ? WEIGHT_FTS : WEIGHT_VEC);
   const fused = reciprocalRankFusion(rankedLists, weights);
   const rrfTraceByFile = explain ? buildRrfTrace(rankedLists, weights, rankedListMeta) : null;
   const candidates = fused.slice(0, candidateLimit);
@@ -4698,9 +4699,9 @@ export async function structuredSearch(
   const blended = reranked.map(r => {
     const rrfRank = rrfRankMap.get(r.file) || candidateLimit;
     let rrfWeight: number;
-    if (rrfRank <= 3) rrfWeight = 0.75;
-    else if (rrfRank <= 10) rrfWeight = 0.60;
-    else rrfWeight = 0.40;
+    if (rrfRank <= 3) rrfWeight = BLEND_RRF_TOP3;
+    else if (rrfRank <= 10) rrfWeight = BLEND_RRF_TOP10;
+    else rrfWeight = BLEND_RRF_REST;
     const rrfScore = 1 / rrfRank;
     const blendedScore = rrfWeight * rrfScore + (1 - rrfWeight) * r.score;
 
