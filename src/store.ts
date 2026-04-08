@@ -316,6 +316,54 @@ export const BLEND_RRF_TOP3 = parseFloat(process.env.QMD_BLEND_RRF_TOP3 ?? "0.75
 export const BLEND_RRF_TOP10 = parseFloat(process.env.QMD_BLEND_RRF_TOP10 ?? "0.60");
 export const BLEND_RRF_REST = parseFloat(process.env.QMD_BLEND_RRF_REST ?? "0.40");
 
+// =============================================================================
+// Zero-LLM search boosts (applied after RRF, before reranking)
+// From MemPalace benchmarks: +3.4% recall with no LLM calls
+// =============================================================================
+
+/** Boost when query keywords appear verbatim in result text (+1.2% recall) */
+function keywordOverlapBoost(query: string, text: string): number {
+  const queryWords = new Set(query.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  if (queryWords.size === 0) return 1.0;
+  const textLower = text.toLowerCase();
+  let hits = 0;
+  for (const word of queryWords) {
+    if (textLower.includes(word)) hits++;
+  }
+  return 1 + 0.3 * (hits / queryWords.size);
+}
+
+/** Boost when query contains "exact phrases" found in result text (+0.6% recall) */
+function quotedPhraseBoost(query: string, text: string): number {
+  const phrases = [...query.matchAll(/["']([^"']{3,})["']/g)].map(m => m[1]!.toLowerCase());
+  if (phrases.length === 0) return 1.0;
+  const textLower = text.toLowerCase();
+  for (const phrase of phrases) {
+    if (textLower.includes(phrase)) return 1.6;
+  }
+  return 1.0;
+}
+
+/** Boost when query contains proper nouns found in result text (+0.6% recall) */
+function personNameBoost(query: string, text: string): number {
+  const names = query.match(/\b[A-Z][a-z]{2,}\b/g) || [];
+  if (names.length === 0) return 1.0;
+  const textLower = text.toLowerCase();
+  for (const name of names) {
+    if (textLower.includes(name.toLowerCase())) return 1.4;
+  }
+  return 1.0;
+}
+
+/** Apply all zero-LLM boosts to a result */
+function applySearchBoosts(query: string, text: string, score: number): number {
+  let boost = 1.0;
+  boost *= keywordOverlapBoost(query, text);
+  boost *= quotedPhraseBoost(query, text);
+  boost *= personNameBoost(query, text);
+  return score * boost;
+}
+
 /**
  * A typed query expansion result. Decoupled from llm.ts internal Queryable —
  * same shape, but store.ts owns its own public API type.
@@ -740,6 +788,11 @@ function initializeDatabase(db: Database): void {
   }
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
+  db.exec("PRAGMA cache_size = -65536");       // 64MB page cache (default 2MB)
+  db.exec("PRAGMA mmap_size = 268435456");     // 256MB memory-mapped I/O
+  db.exec("PRAGMA synchronous = NORMAL");      // Safe with WAL, 2-5x faster writes
+  db.exec("PRAGMA temp_store = MEMORY");       // Temp tables in RAM
+  db.exec("PRAGMA wal_autocheckpoint = 2000"); // Fewer checkpoints during bulk ops
 
   // Drop legacy tables that are now managed in YAML
   db.exec(`DROP TABLE IF EXISTS path_contexts`);
@@ -4194,6 +4247,13 @@ export async function hybridQuery(
   // Step 4: RRF fusion — first 2 lists (original FTS + first vec) get 2x weight
   const weights = rankedLists.map((_, i) => i < 2 ? WEIGHT_FTS : WEIGHT_VEC);
   const fused = reciprocalRankFusion(rankedLists, weights);
+
+  // Step 4b: Apply zero-LLM search boosts (keyword overlap, phrases, names)
+  for (const result of fused) {
+    result.score = applySearchBoosts(query, result.body, result.score);
+  }
+  fused.sort((a, b) => b.score - a.score);
+
   const rrfTraceByFile = explain ? buildRrfTrace(rankedLists, weights, rankedListMeta) : null;
   const candidates = fused.slice(0, candidateLimit);
 
@@ -4589,6 +4649,14 @@ export async function structuredSearch(
   // Step 3: RRF fusion — first list gets 2x weight (assume caller ordered by importance)
   const weights = rankedLists.map((_, i) => i === 0 ? WEIGHT_FTS : WEIGHT_VEC);
   const fused = reciprocalRankFusion(rankedLists, weights);
+
+  // Step 3b: Apply zero-LLM search boosts
+  const boostQuery = searches[0]?.query || "";
+  for (const result of fused) {
+    result.score = applySearchBoosts(boostQuery, result.body, result.score);
+  }
+  fused.sort((a, b) => b.score - a.score);
+
   const rrfTraceByFile = explain ? buildRrfTrace(rankedLists, weights, rankedListMeta) : null;
   const candidates = fused.slice(0, candidateLimit);
 
