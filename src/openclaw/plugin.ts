@@ -32,7 +32,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { loadQmdEnv } from "../env.js";
-import { openDatabase, loadSqliteVec } from "../db.js";
+import { initDb, openDatabase, loadSqliteVec } from "../db.js";
 import {
   memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats,
   extractAndStore, runDecayPass, knowledgeStore, knowledgeQuery,
@@ -65,7 +65,8 @@ const DEFAULT_CONFIG: QmdPluginConfig = {
 // Database
 // =============================================================================
 
-function getDb(config: QmdPluginConfig) {
+async function getDb(config: QmdPluginConfig) {
+  await initDb(); // Explicit init for Jiti/OpenClaw context (no top-level await)
   const dbPath = config.dbPath || (
     process.env.XDG_CACHE_HOME
       ? `${process.env.XDG_CACHE_HOME}/qmd/index.sqlite`
@@ -89,7 +90,17 @@ const qmdPlugin = definePluginEntry({
   register(api: OpenClawPluginApi) {
     const rawConfig = api.pluginConfig as Partial<QmdPluginConfig> | undefined;
     const cfg: QmdPluginConfig = { ...DEFAULT_CONFIG, ...rawConfig };
-    const db = getDb(cfg);
+
+    // DB init is async — defer to first use via lazy promise
+    let _db: any = null;
+    let _dbPromise: Promise<any> | null = null;
+    function db(): Promise<any> {
+      if (_db) return Promise.resolve(_db);
+      if (!_dbPromise) {
+        _dbPromise = getDb(cfg).then(d => { _db = d; return d; });
+      }
+      return _dbPromise;
+    }
 
     let lastUserMessage = "";
     let currentSessionKey: string | undefined;
@@ -115,7 +126,7 @@ const qmdPlugin = definePluginEntry({
         if (!lastUserMessage || lastUserMessage.length < 10) return;
 
         try {
-          const memories = await memoryRecall(db, {
+          const memories = await memoryRecall(await db(), {
             query: lastUserMessage,
             scope: cfg.scope,
             limit: cfg.topK,
@@ -157,7 +168,7 @@ const qmdPlugin = definePluginEntry({
 
           if (text.length < 30) return;
 
-          await extractAndStore(db, text, cfg.scope);
+          await extractAndStore(await db(), text, cfg.scope);
         } catch (err) {
           api.logger.warn(`tanarchy-qmd capture failed: ${err}`);
         }
@@ -200,7 +211,7 @@ const qmdPlugin = definePluginEntry({
             for (const file of files.slice(-7)) { // Last 7 days
               const content = readFileSync(`${corpusDir}/${file}`, "utf-8");
               if (content.length > 50) {
-                await extractAndStore(db, content, cfg.scope);
+                await extractAndStore(await db(), content, cfg.scope);
               }
             }
           } catch {
@@ -208,7 +219,7 @@ const qmdPlugin = definePluginEntry({
           }
 
           // 2. Run decay pass (tier promotion/demotion)
-          const result = runDecayPass(db);
+          const result = runDecayPass(await db());
           api.logger.info(
             `tanarchy-qmd: consolidation complete — ${result.processed} memories, ` +
             `${result.promoted} promoted, ${result.demoted} demoted`,
@@ -232,7 +243,7 @@ const qmdPlugin = definePluginEntry({
         description: "Store a memory with auto-dedup and auto-classification",
         parameters: { type: "object", properties: { text: { type: "string" }, category: { type: "string" }, importance: { type: "number" } }, required: ["text"] },
         execute: async (_id: string, params: any) => {
-          const result = await memoryStore(db, { ...params, scope: cfg.scope });
+          const result = await memoryStore(await db(), { ...params, scope: cfg.scope });
           const msg = result.status === "created" ? `Stored: ${result.id}` : `Duplicate: ${result.duplicate_id}`;
           return { content: [{ type: "text" as const, text: msg }] };
         },
@@ -242,7 +253,7 @@ const qmdPlugin = definePluginEntry({
         description: "Search memories by natural language",
         parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "number" } }, required: ["query"] },
         execute: async (_id: string, params: any) => {
-          const results = await memoryRecall(db, { ...params, scope: cfg.scope });
+          const results = await memoryRecall(await db(), { ...params, scope: cfg.scope });
           const text = results.length === 0
             ? "No memories found."
             : results.map((r, i) => `${i + 1}. [${r.category}] ${r.text} (score: ${r.score.toFixed(2)})`).join("\n");
@@ -254,7 +265,7 @@ const qmdPlugin = definePluginEntry({
         description: "Delete a memory by ID",
         parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
         execute: async (_id: string, params: any) => {
-          const result = memoryForget(db, params.id);
+          const result = memoryForget(await db(), params.id);
           return { content: [{ type: "text" as const, text: result.deleted ? `Deleted: ${params.id}` : `Not found: ${params.id}` }] };
         },
       },
@@ -263,7 +274,7 @@ const qmdPlugin = definePluginEntry({
         description: "Extract memories from conversation text",
         parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
         execute: async (_id: string, params: any) => {
-          const result = await extractAndStore(db, params.text, cfg.scope);
+          const result = await extractAndStore(await db(), params.text, cfg.scope);
           return { content: [{ type: "text" as const, text: `Extracted ${result.extracted.length}: ${result.stored} stored, ${result.duplicates} duplicates` }] };
         },
       },
@@ -272,7 +283,7 @@ const qmdPlugin = definePluginEntry({
         description: "Store a temporal fact (auto-invalidates conflicts)",
         parameters: { type: "object", properties: { subject: { type: "string" }, predicate: { type: "string" }, object: { type: "string" } }, required: ["subject", "predicate", "object"] },
         execute: async (_id: string, params: any) => {
-          const result = knowledgeStore(db, params);
+          const result = knowledgeStore(await db(), params);
           const msg = result.invalidated.length > 0
             ? `Stored (${result.id}), invalidated ${result.invalidated.length} prior`
             : `Stored (${result.id})`;
@@ -284,7 +295,7 @@ const qmdPlugin = definePluginEntry({
         description: "Query the knowledge graph",
         parameters: { type: "object", properties: { subject: { type: "string" }, predicate: { type: "string" } } },
         execute: async (_id: string, params: any) => {
-          const results = knowledgeQuery(db, params);
+          const results = knowledgeQuery(await db(), params);
           const text = results.length === 0
             ? "No facts found."
             : results.map(r => `${r.subject} → ${r.predicate} → ${r.object}`).join("\n");
@@ -296,7 +307,7 @@ const qmdPlugin = definePluginEntry({
         description: "Memory statistics by tier, category, scope",
         parameters: { type: "object", properties: {} },
         execute: async () => {
-          const stats = memoryStats(db);
+          const stats = memoryStats(await db());
           return { content: [{ type: "text" as const, text: `Total: ${stats.total}\nTiers: ${JSON.stringify(stats.byTier)}\nCategories: ${JSON.stringify(stats.byCategory)}` }] };
         },
       },
@@ -316,7 +327,7 @@ const qmdPlugin = definePluginEntry({
         api.logger.info("tanarchy-qmd: memory service started");
       },
       stop: () => {
-        try { db.close(); } catch {}
+        try { if (_db) _db.close(); } catch {}
         api.logger.info("tanarchy-qmd: memory service stopped");
       },
     });
