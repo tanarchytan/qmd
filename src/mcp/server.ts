@@ -34,7 +34,7 @@ import {
 } from "../index.js";
 import { getConfigPath } from "../collections.js";
 import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections as storeListCollections, generateEmbeddings, reindexCollection } from "../store.js";
-import { memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, extractAndStore, MEMORY_CATEGORIES } from "../memory/index.js";
+import { memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, extractAndStore, knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, MEMORY_CATEGORIES } from "../memory/index.js";
 
 // =============================================================================
 // Types for structured content
@@ -753,6 +753,110 @@ Intent-aware lex (C++ performance, not sports):
         }
       }
       return { content: [{ type: "text", text: lines.join('\n') }] };
+    }
+  );
+
+  // =========================================================================
+  // Knowledge graph tools — temporal entity-relationship triples
+  // =========================================================================
+
+  server.registerTool(
+    "knowledge_store",
+    {
+      title: "Store Knowledge",
+      description: [
+        "Store a fact as a subject-predicate-object triple with optional time validity.",
+        "Auto-invalidates conflicting prior facts on the same subject+predicate.",
+        "Entity names are normalized to slugs (e.g. 'David Gillot' → 'david_gillot').",
+      ].join("\n"),
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        subject: z.string().describe("Entity name (e.g. 'David', 'QMD project')"),
+        predicate: z.string().describe("Relationship (e.g. 'prefers', 'works_at', 'uses')"),
+        object: z.string().describe("Value (e.g. 'ZeroEntropy', 'Tanarchy', 'TypeScript')"),
+        valid_from: z.number().optional().describe("Timestamp (ms) when this became true (default: now)"),
+        confidence: z.number().min(0).max(1).optional().describe("Confidence 0-1 (default: 1.0)"),
+      },
+    },
+    async ({ subject, predicate, object, valid_from, confidence }) => {
+      const db = store.internal.db;
+      const result = knowledgeStore(db, { subject, predicate, object, valid_from, confidence });
+      const msg = result.invalidated.length > 0
+        ? `Fact stored (id: ${result.id}). Invalidated ${result.invalidated.length} prior fact(s).`
+        : `Fact stored (id: ${result.id}).`;
+      return { content: [{ type: "text", text: msg }] };
+    }
+  );
+
+  server.registerTool(
+    "knowledge_query",
+    {
+      title: "Query Knowledge",
+      description: [
+        "Query the knowledge graph for facts about entities.",
+        "Filter by subject, predicate, object, or point-in-time.",
+        "as_of: return only facts valid at that timestamp.",
+      ].join("\n"),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {
+        subject: z.string().optional().describe("Entity to query (e.g. 'David')"),
+        predicate: z.string().optional().describe("Relationship filter (e.g. 'prefers')"),
+        object: z.string().optional().describe("Value filter (partial match)"),
+        as_of: z.number().optional().describe("Timestamp (ms) — show facts valid at this time"),
+        limit: z.number().optional().describe("Max results (default: 50)"),
+      },
+    },
+    async ({ subject, predicate, object, as_of, limit }) => {
+      const db = store.internal.db;
+      const results = knowledgeQuery(db, { subject, predicate, object, as_of, limit });
+      if (results.length === 0) {
+        return { content: [{ type: "text", text: "No facts found." }] };
+      }
+      const lines = results.map(r => {
+        const validity = r.valid_until ? ` [expired ${new Date(r.valid_until).toISOString().slice(0, 10)}]` : "";
+        return `${r.subject} → ${r.predicate} → ${r.object}${validity} (confidence: ${r.confidence})`;
+      });
+      return {
+        content: [{ type: "text", text: lines.join('\n') }],
+        structuredContent: { results },
+      };
+    }
+  );
+
+  server.registerTool(
+    "knowledge_invalidate",
+    {
+      title: "Invalidate Knowledge",
+      description: "Mark a fact as no longer valid (sets valid_until to now). The fact remains in history.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        id: z.string().describe("Fact ID to invalidate"),
+      },
+    },
+    async ({ id }) => {
+      const db = store.internal.db;
+      const result = knowledgeInvalidate(db, id);
+      return {
+        content: [{ type: "text", text: result.invalidated ? `Fact ${id} invalidated.` : `Fact ${id} not found or already invalidated.` }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "knowledge_entities",
+    {
+      title: "List Entities",
+      description: "List all known entities in the knowledge graph.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {},
+    },
+    async () => {
+      const db = store.internal.db;
+      const entities = knowledgeEntities(db);
+      if (entities.length === 0) {
+        return { content: [{ type: "text", text: "No entities in knowledge graph." }] };
+      }
+      return { content: [{ type: "text", text: `Entities (${entities.length}):\n${entities.join('\n')}` }] };
     }
   );
 

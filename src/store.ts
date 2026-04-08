@@ -994,6 +994,29 @@ function initializeDatabase(db: Database): void {
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_history_mid ON memory_history(memory_id)`);
+
+  // ==========================================================================
+  // Knowledge graph — temporal entity-relationship triples
+  // From MemPalace: facts with time validity windows
+  // ==========================================================================
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS knowledge (
+      id TEXT PRIMARY KEY,
+      subject TEXT NOT NULL,
+      predicate TEXT NOT NULL,
+      object TEXT NOT NULL,
+      valid_from INTEGER,
+      valid_until INTEGER,
+      confidence REAL NOT NULL DEFAULT 1.0,
+      source_memory_id TEXT,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_knowledge_subject ON knowledge(subject)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_knowledge_predicate ON knowledge(predicate)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_knowledge_object ON knowledge(object)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_knowledge_valid ON knowledge(valid_from, valid_until)`);
 }
 
 // =============================================================================

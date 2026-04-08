@@ -15,6 +15,7 @@ import { classifyMemory } from "./patterns.js";
 export { runDecayPass, type DecayResult } from "./decay.js";
 export { extractAndStore, type ExtractionResult } from "./extractor.js";
 export { classifyMemory, extractPreferences, hasMemorySignal } from "./patterns.js";
+export { knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeAbout, toSlug } from "./knowledge.js";
 
 // =============================================================================
 // Types
