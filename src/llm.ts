@@ -17,6 +17,11 @@ import {
 import { homedir } from "os";
 import { join } from "path";
 import { existsSync, mkdirSync, statSync, unlinkSync, readdirSync, readFileSync, writeFileSync } from "fs";
+// Inline to avoid circular dep with remote-config.ts
+function isLocalEnabled(): boolean {
+  const val = process.env.QMD_LOCAL?.toLowerCase();
+  return val !== 'no' && val !== 'false' && val !== '0';
+}
 
 // =============================================================================
 // Embedding Formatting Functions
@@ -564,9 +569,11 @@ export class LlamaCpp implements LLM {
       const gpuOverride = (process.env.QMD_LLAMA_GPU ?? "").toLowerCase();
       const forceCpu = ["false", "off", "none", "disable", "disabled", "0"].includes(gpuOverride);
 
+      // Use prebuilt binaries only (no cmake). Set QMD_LLAMA_BUILD=auto to allow building from source.
+      const buildMode = process.env.QMD_LLAMA_BUILD === 'auto' ? 'autoAttempt' as const : 'never' as const;
       const loadLlama = async (gpu: "auto" | false) =>
         await getLlama({
-          build: "autoAttempt",
+          build: buildMode,
           logLevel: LlamaLogLevel.error,
           gpu,
         });
@@ -1567,9 +1574,13 @@ export function canUnloadLLM(): boolean {
 let defaultLlamaCpp: LlamaCpp | null = null;
 
 /**
- * Get the default LlamaCpp instance (creates one if needed)
+ * Get the default LlamaCpp instance (creates one if needed).
+ * Throws when QMD_LOCAL=no — callers should check remote first.
  */
 export function getDefaultLlamaCpp(): LlamaCpp {
+  if (!isLocalEnabled()) {
+    throw new Error("Local LLM disabled (QMD_LOCAL=no). Configure remote providers or set QMD_LOCAL=yes.");
+  }
   if (!defaultLlamaCpp) {
     defaultLlamaCpp = new LlamaCpp();
   }
@@ -1608,7 +1619,7 @@ export type OperationConfig = {
 };
 
 export type RemoteLLMConfig = {
-  embed?: OperationConfig & { dimensions?: 4096 | 2048 | 2560 | 1280 | 640 | 320 | 160 | 80 | 40 };
+  embed?: OperationConfig & { dimensions?: number };
   rerank?: OperationConfig & { mode?: 'llm' | 'rerank' };
   queryExpansion?: OperationConfig;
   /** Optional per-operation timeouts (ms). */
@@ -1748,7 +1759,12 @@ async function fetchWithRetry(
 
       const status = resp.status;
       const snippet = await readBodySnippet(resp);
-      const msg = `[${provider}] ${operation} failed (HTTP ${status}) ${url}${snippet ? ` — ${snippet}` : ""}`;
+      const hint = status === 401 ? ' — check your QMD_*_API_KEY'
+        : status === 403 ? ' — API key may lack permissions'
+        : status === 404 ? ' — check your QMD_*_URL (endpoint not found)'
+        : status === 422 ? ' — check your QMD_*_MODEL (invalid model name)'
+        : '';
+      const msg = `[${provider}] ${operation} failed (HTTP ${status}${hint}) ${url}${snippet ? ` — ${snippet}` : ""}`;
 
       const retryable = isRetryableStatus(status);
       if (!retryable || attempt === maxAttempts) {
@@ -1882,7 +1898,7 @@ export class RemoteLLM implements LLM {
         const url = provider === 'api'
           ? `${(cfg.url || '').replace(/\/$/, '')}/chat/completions`
           : cfg.url!;
-        if (!url || url === '/chat/completions') throw new Error("QMD_QUERY_EXPANSION_URL is required.");
+        if (!url || url === '/chat/completions') throw new Error("QMD_QUERY_EXPANSION_URL is required. Set the base URL (api) or full endpoint (url) for query expansion.");
         const body: Record<string, unknown> = {
           messages: [{ role: "user", content: prompt }],
           max_tokens: 300,
@@ -1902,7 +1918,10 @@ export class RemoteLLM implements LLM {
         return this.parseExpansionResult(text, query, includeLexical);
       }
     } catch (err) {
-      process.stderr.write(`[queryExpansion] error: ${err}\n`);
+      const attemptedUrl = cfg.provider === 'gemini'
+        ? `${(cfg.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '')}/v1beta/models/...`
+        : (cfg.provider === 'api' ? `${(cfg.url || '').replace(/\/$/, '')}/chat/completions` : cfg.url || '(no url)');
+      process.stderr.write(`[queryExpansion] ${attemptedUrl} error: ${err}\n`);
       return this.fallbackExpansion(query, includeLexical);
     }
   }
@@ -1929,7 +1948,7 @@ export class RemoteLLM implements LLM {
       const url = provider === 'api'
         ? `${(cfg.url || '').replace(/\/$/, '')}/rerank`
         : cfg.url!;
-      if (!url || url === '/rerank') throw new Error("QMD_RERANK_URL is required for rerank mode.");
+      if (!url || url === '/rerank') throw new Error("QMD_RERANK_URL is required. Set the base URL (api) or full endpoint (url) for reranking.");
 
       const resp = await fetchWithRetry(url, {
         method: "POST",
@@ -1959,7 +1978,7 @@ export class RemoteLLM implements LLM {
     const url = provider === 'api'
       ? `${(cfg.url || '').replace(/\/$/, '')}/chat/completions`
       : cfg.url!;
-    if (!url || url === '/chat/completions') throw new Error("QMD_RERANK_URL is required for llm rerank mode.");
+    if (!url || url === '/chat/completions') throw new Error("QMD_RERANK_URL is required. Set the base URL (api) or full endpoint (url) for LLM-based reranking.");
 
     const docsText = documents.map((doc, i) => `[${i}] ${doc.text}`).join("\n---\n");
     const prompt = buildRerankPrompt(query, docsText);
@@ -2025,7 +2044,7 @@ export class RemoteLLM implements LLM {
       try {
         if (provider === 'api') {
           const baseUrl = (cfg.url || '').replace(/\/$/, '');
-          if (!baseUrl) throw new Error("QMD_EMBED_URL is required for api provider.");
+          if (!baseUrl) throw new Error("QMD_EMBED_URL is required when QMD_EMBED_PROVIDER=api. Set the base URL of your embedding endpoint (e.g. https://api.openai.com/v1).");
           const resp = await fetchWithRetry(`${baseUrl}/embeddings`, {
             method: "POST",
             headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -2045,7 +2064,7 @@ export class RemoteLLM implements LLM {
           }
         } else if (provider === 'url') {
           const url = cfg.url;
-          if (!url) throw new Error("QMD_EMBED_URL is required for url provider.");
+          if (!url) throw new Error("QMD_EMBED_URL is required when QMD_EMBED_PROVIDER=url. Set the full endpoint URL for embedding.");
           const body: Record<string, unknown> = { input, input_type: "document" };
           if (model) body.model = model;
           if (cfg.dimensions) body.dimensions = cfg.dimensions;

@@ -15,7 +15,7 @@
  *   gemini      → gemini + https://generativelanguage.googleapis.com
  */
 
-import type { RemoteLLMConfig, OperationConfig, OperationProvider } from "./llm.js";
+import { RemoteLLM, type RemoteLLMConfig, type OperationConfig, type OperationProvider } from "./llm.js";
 
 type OpName = 'EMBED' | 'RERANK' | 'QUERY_EXPANSION';
 
@@ -64,6 +64,7 @@ function resolveOp(op: OpName): OperationConfig | null {
       resolvedProvider = 'url';
       break;
     default:
+      process.stderr.write(`Warning: unknown provider "${providerRaw}" for QMD_${op}_PROVIDER, treating as "api".\n`);
       resolvedProvider = 'api';
   }
 
@@ -85,12 +86,11 @@ export function createRemoteConfigFromEnv(): RemoteLLMConfig | null {
   if (embed) {
     const dimRaw = process.env.QMD_EMBED_DIMENSIONS;
     const dimNum = dimRaw ? parseInt(dimRaw, 10) : undefined;
-    const validDims = [4096, 2048, 2560, 1280, 640, 320, 160, 80, 40] as const;
-    type ValidDim = typeof validDims[number];
-    config.embed = {
-      ...embed,
-      dimensions: (validDims as readonly number[]).includes(dimNum ?? -1) ? dimNum as ValidDim : undefined,
-    };
+    const dimensions = dimNum && dimNum > 0 ? dimNum : undefined;
+    if (dimRaw && !dimensions) {
+      process.stderr.write(`Warning: QMD_EMBED_DIMENSIONS=${dimRaw} is not a valid positive integer. Ignoring.\n`);
+    }
+    config.embed = { ...embed, dimensions };
   }
 
   if (rerank) {
@@ -106,4 +106,33 @@ export function createRemoteConfigFromEnv(): RemoteLLMConfig | null {
   }
 
   return config;
+}
+
+// =============================================================================
+// QMD_LOCAL flag — disable local node-llama-cpp entirely
+// =============================================================================
+
+export function isLocalEnabled(): boolean {
+  const val = process.env.QMD_LOCAL?.toLowerCase();
+  return val !== 'no' && val !== 'false' && val !== '0';
+}
+
+// =============================================================================
+// Cached RemoteLLM singleton — env doesn't change at runtime
+// =============================================================================
+
+let _remoteConfig: RemoteLLMConfig | null | undefined;
+let _remoteLLM: RemoteLLM | null | undefined;
+
+export function getRemoteConfig(): RemoteLLMConfig | null {
+  if (_remoteConfig !== undefined) return _remoteConfig;
+  _remoteConfig = createRemoteConfigFromEnv();
+  return _remoteConfig;
+}
+
+export function getRemoteLLM(): RemoteLLM | null {
+  if (_remoteLLM !== undefined) return _remoteLLM;
+  const config = getRemoteConfig();
+  _remoteLLM = config ? new RemoteLLM(config) : null;
+  return _remoteLLM;
 }
