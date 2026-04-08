@@ -533,7 +533,9 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
 
     // Lifecycle
     close: async () => {
-      await internal.llm?.dispose();
+      if (internal.llm && typeof internal.llm.dispose === 'function') {
+        await internal.llm.dispose();
+      }
       internal.close();
       if (hasYamlConfig || options.config) {
         setConfigSource(undefined); // Reset config source
