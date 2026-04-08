@@ -33,6 +33,7 @@ import {
   type IndexStatus,
 } from "../index.js";
 import { getConfigPath } from "../collections.js";
+import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections as storeListCollections, generateEmbeddings, reindexCollection } from "../store.js";
 
 // =============================================================================
 // Types for structured content
@@ -530,6 +531,82 @@ Intent-aware lex (C++ performance, not sports):
         content: [{ type: "text", text: summary.join('\n') }],
         structuredContent: status,
       };
+    }
+  );
+
+  // =========================================================================
+  // Tool: manage — administrative operations (embed, update, cleanup, sync)
+  // =========================================================================
+  server.registerTool(
+    "manage",
+    {
+      title: "Manage QMD Index",
+      description: [
+        "Administrative operations for QMD index maintenance.",
+        "",
+        "Operations:",
+        "- **embed**: Generate vector embeddings for pending documents (uses remote provider if configured)",
+        "- **update**: Re-index collections to pick up file changes (optionally specify a collection name)",
+        "- **cleanup**: Clear LLM cache, remove orphaned vectors, and vacuum the database",
+        "- **sync**: Update all collections + embed pending documents in one step",
+      ].join("\n"),
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        operation: z.enum(["embed", "update", "cleanup", "sync"]).describe("Operation to run"),
+        collection: z.string().optional().describe("Collection name (for update). Omit to update all."),
+        force: z.boolean().optional().describe("Force re-embed all documents (for embed/sync)"),
+      },
+    },
+    async ({ operation, collection, force }) => {
+      const internal = store.internal;
+      const db = internal.db;
+
+      if (operation === "embed" || operation === "sync") {
+        if (operation === "sync") {
+          // Re-index all collections first
+          const collections = storeListCollections(db);
+          for (const col of collections) {
+            await reindexCollection(internal, col.pwd, col.glob_pattern || "**/*.md", col.name);
+          }
+        }
+        const result = await generateEmbeddings(internal, { force: !!force });
+        return {
+          content: [{
+            type: "text",
+            text: `Embedding complete: ${result.chunksEmbedded} chunks embedded, ${result.errors} errors, ${result.docsProcessed} docs processed (${result.durationMs}ms)`,
+          }],
+        };
+      }
+
+      if (operation === "update") {
+        const collections = storeListCollections(db);
+        const targets = collection
+          ? collections.filter(c => c.name === collection)
+          : collections;
+        if (targets.length === 0) {
+          return { content: [{ type: "text", text: collection ? `Collection "${collection}" not found.` : "No collections configured." }] };
+        }
+        const results: string[] = [];
+        for (const col of targets) {
+          const r = await reindexCollection(internal, col.pwd, col.glob_pattern || "**/*.md", col.name);
+          results.push(`${col.name}: ${r.indexed} indexed, ${r.updated} updated, ${r.removed} removed`);
+        }
+        return { content: [{ type: "text", text: `Update complete:\n${results.join('\n')}` }] };
+      }
+
+      if (operation === "cleanup") {
+        const cacheCount = deleteLLMCache(db);
+        const orphanCount = cleanupOrphanedVectors(db);
+        vacuumDatabase(db);
+        return {
+          content: [{
+            type: "text",
+            text: `Cleanup complete: ${cacheCount} cache entries cleared, ${orphanCount} orphaned vectors removed, database vacuumed.`,
+          }],
+        };
+      }
+
+      return { content: [{ type: "text", text: `Unknown operation: ${operation}` }] };
     }
   );
 

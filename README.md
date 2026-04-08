@@ -995,6 +995,60 @@ When no remote providers are configured, qmd uses local GGUF models automaticall
 
 See `.env.example` for the full list of options and more examples.
 
+### MCP management tools
+
+The MCP server exposes a `manage` tool for agents to self-serve maintenance:
+
+```
+manage({ operation: "sync" })          # update all collections + embed pending
+manage({ operation: "embed" })         # embed pending documents
+manage({ operation: "embed", force: true })  # force re-embed all
+manage({ operation: "update" })        # re-index all collections
+manage({ operation: "update", collection: "notes" })  # re-index one collection
+manage({ operation: "cleanup" })       # clear cache + remove orphans + vacuum
+```
+
+### CLI maintenance commands
+
+```sh
+qmd sync              # update all collections + embed pending (one command)
+qmd vacuum            # reclaim database space without clearing cache
+qmd cleanup           # clear cache + orphans + vacuum
+```
+
+### Scoring tunables
+
+All scoring parameters are configurable via environment variables. Set them in `~/.config/qmd/.env`:
+
+```sh
+# RRF fusion
+QMD_RRF_K=60               # smoothing constant (higher = flatter ranking)
+QMD_WEIGHT_FTS=2.0          # BM25 weight in fusion (default: 2x vector weight)
+QMD_WEIGHT_VEC=1.0          # vector search weight
+
+# Score blending (after reranking)
+QMD_BLEND_RRF_TOP3=0.75     # trust RRF position for top 3 results
+QMD_BLEND_RRF_TOP10=0.60    # trust for rank 4-10
+QMD_BLEND_RRF_REST=0.40     # trust for rank 11+
+
+# Reranker
+QMD_RERANK_CANDIDATE_LIMIT=40   # max docs sent to reranker
+
+# Expansion control
+QMD_STRONG_SIGNAL_MIN_SCORE=0.85  # BM25 score to skip expansion
+QMD_STRONG_SIGNAL_MIN_GAP=0.15    # gap to confirm strong signal
+
+# Chunking
+QMD_CHUNK_SIZE_TOKENS=900   # tokens per chunk
+QMD_CHUNK_WINDOW_TOKENS=200 # search window for break points
+```
+
+**When to tune:**
+- **Poor recall** (missing relevant docs): increase `QMD_RERANK_CANDIDATE_LIMIT`, decrease `QMD_STRONG_SIGNAL_MIN_SCORE`
+- **Noisy results** (irrelevant docs ranked high): increase `QMD_BLEND_RRF_TOP3`, increase `QMD_WEIGHT_FTS`
+- **Slow queries**: decrease `QMD_RERANK_CANDIDATE_LIMIT`
+- **Long documents split badly**: increase `QMD_CHUNK_SIZE_TOKENS`
+
 ## License
 
 MIT
