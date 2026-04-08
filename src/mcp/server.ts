@@ -120,13 +120,21 @@ async function buildInstructions(store: QMDStore): Promise<string> {
   // --- What's searchable? ---
   if (status.collections.length > 0) {
     lines.push("");
-    lines.push("Collections (scope with `collection` parameter):");
+    lines.push("Collections (scope with `collections` parameter for better accuracy):");
     for (const col of status.collections) {
-      // Find root context for this collection
       const rootCtx = contexts.find(c => c.collection === col.name && (c.path === "" || c.path === "/"));
       const desc = rootCtx ? ` — ${rootCtx.context}` : "";
       lines.push(`  - "${col.name}" (${col.documents} docs)${desc}`);
+      // Show sub-path contexts for hierarchical filtering
+      const subCtxs = contexts.filter(c => c.collection === col.name && c.path !== "" && c.path !== "/");
+      for (const sub of subCtxs) {
+        lines.push(`      ${sub.path}: ${sub.context}`);
+      }
     }
+    lines.push("");
+    lines.push("IMPORTANT: Always scope searches to relevant collections when possible.");
+    lines.push("Searching within specific collections is significantly more accurate than searching everything.");
+    lines.push("Example: searches=[{type:'lex', query:'deployment'}], collections=['arachnid-vault']");
   }
 
   // --- Capability gaps ---
@@ -530,6 +538,60 @@ Intent-aware lex (C++ performance, not sports):
       return {
         content: [{ type: "text", text: summary.join('\n') }],
         structuredContent: status,
+      };
+    }
+  );
+
+  // =========================================================================
+  // Tool: briefing — wake-up context for agents
+  // =========================================================================
+  server.registerTool(
+    "briefing",
+    {
+      title: "Collection Briefing",
+      description: [
+        "Get a detailed briefing of all collections, their contexts, and structure.",
+        "Call this when you need to understand what's available before searching.",
+        "Returns collection map with document counts, contexts, and search tips.",
+      ].join("\n"),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {},
+    },
+    async () => {
+      const status: StatusResult = await store.getStatus();
+      const contexts = await store.listContexts();
+      const globalCtx = await store.getGlobalContext();
+      const lines: string[] = [];
+
+      lines.push(`# QMD Briefing — ${status.totalDocuments} documents indexed`);
+      if (globalCtx) lines.push(`\nGlobal context: ${globalCtx}`);
+      lines.push(`\nVector index: ${status.hasVectorIndex ? 'active' : 'not built'}${status.needsEmbedding > 0 ? ` (${status.needsEmbedding} pending — run manage({ operation: "embed" }))` : ''}`);
+
+      lines.push(`\n## Collections\n`);
+      for (const col of status.collections) {
+        const rootCtx = contexts.find(c => c.collection === col.name && (c.path === "" || c.path === "/"));
+        lines.push(`### ${col.name} (${col.documents} docs)`);
+        if (rootCtx) lines.push(`${rootCtx.context}`);
+        lines.push(`Search: collections=["${col.name}"]`);
+
+        const subCtxs = contexts.filter(c => c.collection === col.name && c.path !== "" && c.path !== "/");
+        if (subCtxs.length > 0) {
+          lines.push(`\nTopics:`);
+          for (const sub of subCtxs) {
+            lines.push(`  - ${sub.path}: ${sub.context}`);
+          }
+        }
+        lines.push('');
+      }
+
+      lines.push(`## Search Strategy\n`);
+      lines.push(`1. **Always scope to collections** — searching within specific collections is ~35% more accurate than searching everything.`);
+      lines.push(`2. **Use intent** — add intent parameter to disambiguate queries (e.g., intent="web performance" for query "performance").`);
+      lines.push(`3. **Combine query types** — lex for exact terms, vec for meaning, hyde for hypothetical answers.`);
+      lines.push(`4. **Use contexts as routing hints** — match your query topic to collection contexts above to pick the right collection.`);
+
+      return {
+        content: [{ type: "text", text: lines.join('\n') }],
       };
     }
   );

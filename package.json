@@ -1,6 +1,6 @@
 {
   "name": "@tanarchy/qmd",
-  "version": "2.1.0-fork.5",
+  "version": "2.1.0-dev.1",
   "description": "Query Markup Documents - On-device hybrid search for markdown files with BM25, vector search, and LLM reranking",
   "type": "module",
   "main": "dist/index.js",

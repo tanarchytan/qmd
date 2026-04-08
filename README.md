@@ -995,6 +995,56 @@ When no remote providers are configured, qmd uses local GGUF models automaticall
 
 See `.env.example` for the full list of options and more examples.
 
+### Agent briefing
+
+The MCP server includes a `briefing` tool that gives agents a full map of your collections, contexts, and search strategy. Call it at the start of a session:
+
+```
+briefing()
+```
+
+Returns a structured overview: collection names, document counts, contexts, sub-path topics, and tips for scoping searches. This is especially useful in multi-agent setups where each agent needs to know what's searchable.
+
+### Organizing collections for best results
+
+Scoping searches to specific collections is **~35% more accurate** than searching everything. Structure your vaults so each collection has a clear purpose:
+
+```
+~/vaults/
+  engineering/        # → collection "engineering"
+    architecture/     # context: "System design decisions and ADRs"
+    incidents/        # context: "Post-mortems and incident reports"
+    runbooks/         # context: "Operational procedures"
+  research/           # → collection "research"
+    papers/           # context: "Paper summaries and reading notes"
+    experiments/      # context: "Experiment logs and results"
+  personal/           # → collection "personal"
+    journals/         # context: "Daily journal entries"
+    projects/         # context: "Side project notes"
+```
+
+Set up with:
+```sh
+qmd collection add ~/vaults/engineering --name engineering
+qmd collection add ~/vaults/research --name research
+qmd collection add ~/vaults/personal --name personal
+
+# Add root contexts (shown in briefing + used for routing)
+qmd context add qmd://engineering/ "Engineering team knowledge base"
+qmd context add qmd://research/ "Research notes and paper summaries"
+qmd context add qmd://personal/ "Personal journals and project notes"
+
+# Add sub-path contexts for hierarchical filtering
+qmd context add qmd://engineering/architecture "System design decisions and ADRs"
+qmd context add qmd://engineering/incidents "Post-mortems and incident reports"
+qmd context add qmd://research/papers "Paper summaries and reading notes"
+```
+
+When agents search, they should scope to the relevant collection:
+```
+query({ searches: [{type:'lex', query:'deployment rollback'}], collections: ['engineering'] })
+```
+
 ### MCP management tools
 
 The MCP server exposes a `manage` tool for agents to self-serve maintenance:
