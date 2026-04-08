@@ -102,6 +102,7 @@ import {
   loadConfig,
 } from "../collections.js";
 import { getEmbeddedQmdSkillContent, getEmbeddedQmdSkillFiles } from "../embedded-skills.js";
+import { isLocalEnabled, getRemoteConfig } from "../remote-config.js";
 
 // Enable production mode - allows using default database path
 // Tests must set INDEX_PATH or use createStore() with explicit path
@@ -450,8 +451,8 @@ async function showStatus(): Promise<void> {
     console.log(`\n${c.dim}No collections. Run 'qmd collection add .' to index markdown files.${c.reset}`);
   }
 
-  // Models
-  {
+  // Models / Providers
+  if (isLocalEnabled()) {
     // hf:org/repo/file.gguf → https://huggingface.co/org/repo
     const hfLink = (uri: string) => {
       const match = uri.match(/^hf:([^/]+\/[^/]+)\//);
@@ -463,34 +464,49 @@ async function showStatus(): Promise<void> {
     console.log(`  Generation:  ${hfLink(DEFAULT_GENERATE_MODEL_URI)}`);
   }
 
-  // Device / GPU info
-  try {
-    const llm = getDefaultLlamaCpp();
-    const device = await llm.getDeviceInfo();
-    console.log(`\n${c.bold}Device${c.reset}`);
-    if (device.gpu) {
-      console.log(`  GPU:      ${c.green}${device.gpu}${c.reset} (offloading: ${device.gpuOffloading ? 'yes' : 'no'})`);
-      if (device.gpuDevices.length > 0) {
-        // Deduplicate and count GPUs
-        const counts = new Map<string, number>();
-        for (const name of device.gpuDevices) {
-          counts.set(name, (counts.get(name) || 0) + 1);
-        }
-        const deviceStr = Array.from(counts.entries())
-          .map(([name, count]) => count > 1 ? `${count}× ${name}` : name)
-          .join(', ');
-        console.log(`  Devices:  ${deviceStr}`);
-      }
-      if (device.vram) {
-        console.log(`  VRAM:     ${formatBytes(device.vram.free)} free / ${formatBytes(device.vram.total)} total`);
-      }
-    } else {
-      console.log(`  GPU:      ${c.yellow}none${c.reset} (running on CPU — models will be slow)`);
-      console.log(`  ${c.dim}Tip: Install CUDA, Vulkan, or Metal support for GPU acceleration.${c.reset}`);
+  // Show remote providers when configured (always, not just when local is off)
+  {
+    const rc = getRemoteConfig();
+    if (rc) {
+      console.log(`\n${c.bold}Remote Providers${c.reset}`);
+      if (rc.embed) console.log(`  Embed:    ${rc.embed.provider} → ${rc.embed.url || '(alias default)'}${rc.embed.model ? `  model: ${rc.embed.model}` : ''}`);
+      if (rc.rerank) console.log(`  Rerank:   ${rc.rerank.provider} → ${rc.rerank.url || '(alias default)'}${rc.rerank.model ? `  model: ${rc.rerank.model}` : ''}  mode: ${rc.rerank.mode || 'auto'}`);
+      if (rc.queryExpansion) console.log(`  Query:    ${rc.queryExpansion.provider} → ${rc.queryExpansion.url || '(alias default)'}${rc.queryExpansion.model ? `  model: ${rc.queryExpansion.model}` : ''}`);
     }
-    console.log(`  CPU:      ${device.cpuCores} math cores`);
-  } catch {
-    // Don't fail status if LLM init fails
+  }
+
+  // Device / GPU info — skip when local is disabled
+  if (isLocalEnabled()) {
+    try {
+      const llm = getDefaultLlamaCpp();
+      const device = await llm.getDeviceInfo();
+      console.log(`\n${c.bold}Device${c.reset}`);
+      if (device.gpu) {
+        console.log(`  GPU:      ${c.green}${device.gpu}${c.reset} (offloading: ${device.gpuOffloading ? 'yes' : 'no'})`);
+        if (device.gpuDevices.length > 0) {
+          const counts = new Map<string, number>();
+          for (const name of device.gpuDevices) {
+            counts.set(name, (counts.get(name) || 0) + 1);
+          }
+          const deviceStr = Array.from(counts.entries())
+            .map(([name, count]) => count > 1 ? `${count}× ${name}` : name)
+            .join(', ');
+          console.log(`  Devices:  ${deviceStr}`);
+        }
+        if (device.vram) {
+          console.log(`  VRAM:     ${formatBytes(device.vram.free)} free / ${formatBytes(device.vram.total)} total`);
+        }
+      } else {
+        console.log(`  GPU:      ${c.yellow}none${c.reset} (running on CPU — models will be slow)`);
+        console.log(`  ${c.dim}Tip: Install CUDA, Vulkan, or Metal support for GPU acceleration.${c.reset}`);
+      }
+      console.log(`  CPU:      ${device.cpuCores} math cores`);
+    } catch {
+      // Don't fail status if LLM init fails
+    }
+  } else {
+    console.log(`\n${c.bold}Device${c.reset}`);
+    console.log(`  Local LLM: ${c.dim}disabled${c.reset} (QMD_LOCAL=no)`);
   }
 
   // Tips section
