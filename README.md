@@ -2,9 +2,7 @@
 
 An on-device search engine for everything you need to remember. Index your markdown notes, meeting transcripts, documentation, and knowledge bases. Search with keywords or natural language. Ideal for your agentic flows.
 
-QMD combines BM25 full-text search, vector semantic search, and LLM re-ranking — running locally via node-llama-cpp with GGUF models **or** via cloud APIs (SiliconFlow, Gemini, OpenAI, DashScope, ZeroEntropy).
-
-> **Fork note:** This is a fork of [tobi/qmd](https://github.com/tobi/qmd) that merges in cloud LLM support from [uf-hy/qmdr](https://github.com/uf-hy/qmdr). See [What changed in this fork](#what-changed-in-this-fork) below.
+QMD combines BM25 full-text search, vector semantic search, and LLM re-ranking — running locally via node-llama-cpp with GGUF models **or** via cloud APIs. Set `QMD_LOCAL=no` for remote-only mode (no cmake / no GPU required).
 
 ![QMD Architecture](assets/qmd-architecture.png)
 
@@ -14,13 +12,10 @@ You can read more about QMD's progress in the [CHANGELOG](CHANGELOG.md).
 
 ```sh
 # Install globally
-npm install -g @tobilu/qmd
-
-# Or install from this fork
-npm install -g github:tanarchytan/qmd
+npm install -g @tanarchy/qmd
 
 # Or run directly
-npx @tobilu/qmd ...
+npx @tanarchy/qmd ...
 
 # Create collections for your notes, docs, and meeting transcripts
 qmd collection add ~/notes --name notes
@@ -97,7 +92,7 @@ Although the tool works perfectly fine when you just tell your agent to use it o
 **Claude Code** — Install the plugin (recommended):
 
 ```bash
-claude plugin marketplace add tobi/qmd
+claude plugin marketplace add tanarchytan/qmd
 claude plugin install qmd@qmd
 ```
 
@@ -144,13 +139,13 @@ Use QMD as a library in your own Node.js or Bun applications.
 #### Installation
 
 ```sh
-npm install @tobilu/qmd
+npm install @tanarchy/qmd
 ```
 
 #### Quick Start
 
 ```typescript
-import { createStore } from '@tobilu/qmd'
+import { createStore } from '@tanarchy/qmd'
 
 const store = await createStore({
   dbPath: './my-index.sqlite',
@@ -172,7 +167,7 @@ await store.close()
 `createStore()` accepts three modes:
 
 ```typescript
-import { createStore } from '@tobilu/qmd'
+import { createStore } from '@tanarchy/qmd'
 
 // 1. Inline config — no files needed besides the DB
 const store = await createStore({
@@ -351,7 +346,7 @@ import type {
   CollectionConfig,    // Inline config shape
   IndexStatus,         // From getStatus()
   IndexHealthInfo,     // From getIndexHealth()
-} from '@tobilu/qmd'
+} from '@tanarchy/qmd'
 ```
 
 Utility exports:
@@ -362,7 +357,7 @@ import {
   addLineNumbers,              // Add line numbers to text
   DEFAULT_MULTI_GET_MAX_BYTES, // Default max file size for multiGet (10KB)
   Maintenance,                 // Database maintenance operations
-} from '@tobilu/qmd'
+} from '@tanarchy/qmd'
 ```
 
 #### Lifecycle
@@ -521,15 +516,15 @@ Supported model families:
 ## Installation
 
 ```sh
-npm install -g @tobilu/qmd
+npm install -g @tanarchy/qmd
 # or
-bun install -g @tobilu/qmd
+bun install -g @tanarchy/qmd
 ```
 
 ### Development
 
 ```sh
-git clone https://github.com/tobi/qmd
+git clone https://github.com/tanarchytan/qmd
 cd qmd
 npm install
 npm link
@@ -942,70 +937,63 @@ Uses node-llama-cpp's `createRankingContext()` and `rankAndSort()` API for cross
 
 Used for generating query variations via `LlamaChatSession`.
 
-## What changed in this fork
+## Features
 
-This fork merges [tobi/qmd](https://github.com/tobi/qmd) (Node.js, local GGUF models) with [uf-hy/qmdr](https://github.com/uf-hy/qmdr) (cloud LLM APIs) into a single repo. It adds ZeroEntropy as a fifth rerank provider on top of qmdr's four.
-
-### From tobi/qmd (kept as-is)
-
-- Full local LLM pipeline: node-llama-cpp, GGUF models, GPU acceleration
-- LlamaCpp class with lazy loading, inactivity timeout, parallel contexts
-- AST-aware chunking via tree-sitter (TypeScript, JavaScript, Python, Go, Rust)
-- BM25 + vector + RRF hybrid search with position-aware score blending
-- MCP server (stdio + HTTP transport)
-- Session management layer with abort signals and ref counting
-- All CLI commands: `index`, `search`, `vsearch`, `query`, `rerank`, `embed`, `doctor`, `get`, `multi-get`, etc.
-
-### From uf-hy/qmdr (merged in)
-
-- `RemoteLLM` class: cloud embed / query expansion / rerank for SiliconFlow, Gemini, OpenAI, DashScope
-- `LLMPort` interface with circuit breaker (provider cooldown after 3 consecutive failures)
-- Modular command architecture under `src/app/commands/`
-- `src/store/` barrel re-exports for SDK consumers
-
-### Added on top (this fork's own changes)
-
-- **ZeroEntropy** rerank provider (`zerank-2` model, `https://api.zeroentropy.dev/v1`)
-- `src/env.ts` — shared `~/.config/qmd/.env` loader, called at startup by both CLI and MCP server
-- `src/remote-config.ts` — single canonical `createRemoteConfigFromEnv()`, replaces duplicated logic that existed separately in store.ts and llm-service.ts
-- `store.ts` `rerank()` refactored: tries cloud first (no singleton, reads env fresh each call), falls back to local LlamaCpp transparently
-- Removed Bun-only entry points and scripts; **Node.js only** (required by node-llama-cpp)
-- `tsconfig.json`: added `DOM`, `DOM.Iterable` libs for Web API types; added `@types/picomatch`
-- `.env.example` documenting all `QMD_*` environment variables
+- **Local LLM pipeline** — node-llama-cpp, GGUF models, GPU acceleration (prebuilt binaries, no cmake)
+- **Cloud API support** — any OpenAI-compatible endpoint, ZeroEntropy, SiliconFlow, Gemini, DashScope
+- **Per-operation config** — embed, rerank, and query expansion each independently configured via env vars
+- **Remote-first dispatch** — when remote is configured, it takes priority over local in all code paths (MCP, CLI, SDK), with automatic fallback to local on failure
+- **`QMD_LOCAL=no`** — disable local node-llama-cpp entirely for remote-only setups (no cmake, no GPU required)
+- **AST-aware chunking** — tree-sitter for TypeScript, JavaScript, Python, Go, Rust
+- **Hybrid search** — BM25 + vector + RRF with position-aware score blending + LLM reranking
+- **MCP server** — stdio + HTTP transport
+- **Circuit breaker** — provider cooldown after consecutive failures
 
 ### Cloud LLM configuration
 
-Copy `.env.example` to `~/.config/qmd/.env` and fill in your API keys. The config is loaded automatically at startup — no need to `source` it.
+Copy `.env.example` to `~/.config/qmd/.env` and fill in your values. Loaded automatically at startup.
+
+Each operation reads 4 env vars: `QMD_{OP}_PROVIDER`, `QMD_{OP}_API_KEY`, `QMD_{OP}_URL`, `QMD_{OP}_MODEL`.
+
+**Provider modes:**
+- `api` — OpenAI-compatible base URL (paths `/embeddings`, `/rerank`, `/chat/completions` auto-appended)
+- `url` — direct endpoint URL (used as-is, nothing appended)
+- `gemini` — Google Gemini (different auth format)
+- Aliases: `siliconflow`, `openai`, `zeroentropy`, `dashscope` set the mode + default URL automatically
 
 ```sh
-# Minimal: SiliconFlow only (one key covers embed + query expansion + rerank)
-QMD_SILICONFLOW_API_KEY=sk-your-key
-
-# Recommended: SiliconFlow + Gemini (Gemini reranks better for LLM-style rerank)
-QMD_SILICONFLOW_API_KEY=sk-your-sf-key
-QMD_GEMINI_API_KEY=your-gemini-key
-QMD_RERANK_PROVIDER=gemini
-
-# ZeroEntropy dedicated rerank API
-QMD_ZEROENTROPY_API_KEY=your-ze-key
+# ZeroEntropy embed + rerank (one API key, remote-only)
+QMD_LOCAL=no
+QMD_EMBED_PROVIDER=zeroentropy
+QMD_EMBED_API_KEY=ze-your-key
+QMD_EMBED_MODEL=zembed-1
 QMD_RERANK_PROVIDER=zeroentropy
+QMD_RERANK_API_KEY=ze-your-key
+QMD_RERANK_MODEL=zerank-2
+
+# SiliconFlow all three operations
+QMD_LOCAL=no
+QMD_EMBED_PROVIDER=siliconflow
+QMD_EMBED_API_KEY=sk-your-key
+QMD_EMBED_MODEL=Qwen/Qwen3-Embedding-8B
+QMD_RERANK_PROVIDER=siliconflow
+QMD_RERANK_API_KEY=sk-your-key
+QMD_RERANK_MODEL=BAAI/bge-reranker-v2-m3
 QMD_RERANK_MODE=rerank
+QMD_QUERY_EXPANSION_PROVIDER=siliconflow
+QMD_QUERY_EXPANSION_API_KEY=sk-your-key
+QMD_QUERY_EXPANSION_MODEL=zai-org/GLM-4.5-Air
+
+# Any OpenAI-compatible API (Nebius, Together, etc.)
+QMD_EMBED_PROVIDER=api
+QMD_EMBED_API_KEY=your-key
+QMD_EMBED_URL=https://api.studio.nebius.ai/v1
+QMD_EMBED_MODEL=Qwen3-Embedding-8B
 ```
 
-When no API keys are set, qmd falls back to local GGUF models automatically. Per-operation routing (`QMD_EMBED_PROVIDER`, `QMD_RERANK_PROVIDER`, `QMD_QUERY_EXPANSION_PROVIDER`) lets you mix providers — e.g. local embeddings + cloud rerank.
+When no remote providers are configured, qmd uses local GGUF models automatically. You can mix local and remote — e.g. local embeddings + cloud rerank.
 
-See `.env.example` for the full list of options.
-
-### SiliconFlow endpoint note
-
-SiliconFlow has two endpoints:
-- China region: `https://api.siliconflow.cn/v1` (default)
-- Global: `https://api.siliconflow.com/v1`
-
-If you're outside China, add to your `.env`:
-```sh
-QMD_SILICONFLOW_BASE_URL=https://api.siliconflow.com/v1
-```
+See `.env.example` for the full list of options and more examples.
 
 ## License
 

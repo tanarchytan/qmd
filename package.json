@@ -1,5 +1,5 @@
 {
-  "name": "@tobilu/qmd",
+  "name": "@tanarchy/qmd",
   "version": "2.1.0",
   "description": "Query Markup Documents - On-device hybrid search for markdown files with BM25, vector search, and LLM reranking",
   "type": "module",
@@ -39,11 +39,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tobi/qmd.git"
+    "url": "git+https://github.com/tanarchytan/qmd.git"
   },
-  "homepage": "https://github.com/tobi/qmd#readme",
+  "homepage": "https://github.com/tanarchytan/qmd#readme",
   "bugs": {
-    "url": "https://github.com/tobi/qmd/issues"
+    "url": "https://github.com/tanarchytan/qmd/issues"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",

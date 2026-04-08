@@ -2,7 +2,7 @@
  * QMD SDK - Library mode for programmatic access to QMD search and indexing.
  *
  * Usage:
- *   import { createStore } from '@tobilu/qmd'
+ *   import { createStore } from '@tanarchy/qmd'
  *
  *   const store = await createStore({
  *     dbPath: './my-index.sqlite',
@@ -67,6 +67,7 @@ import {
 import {
   LlamaCpp,
 } from "./llm.js";
+import { isLocalEnabled } from "./remote-config.js";
 import {
   setConfigSource,
   loadConfig,
@@ -367,14 +368,17 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
 
   // Create a per-store LlamaCpp instance — lazy-loads models on first use,
   // auto-unloads after 5 min inactivity to free VRAM.
-  const llm = new LlamaCpp({
-    embedModel: config?.models?.embed,
-    generateModel: config?.models?.generate,
-    rerankModel: config?.models?.rerank,
-    inactivityTimeoutMs: 5 * 60 * 1000,
-    disposeModelsOnInactivity: true,
-  });
-  internal.llm = llm;
+  // Skipped when QMD_LOCAL=no (remote-only mode).
+  if (isLocalEnabled()) {
+    const llm = new LlamaCpp({
+      embedModel: config?.models?.embed,
+      generateModel: config?.models?.generate,
+      rerankModel: config?.models?.rerank,
+      inactivityTimeoutMs: 5 * 60 * 1000,
+      disposeModelsOnInactivity: true,
+    });
+    internal.llm = llm;
+  }
 
   const store: QMDStore = {
     internal,
@@ -529,7 +533,7 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
 
     // Lifecycle
     close: async () => {
-      await llm.dispose();
+      await internal.llm?.dispose();
       internal.close();
       if (hasYamlConfig || options.config) {
         setConfigSource(undefined); // Reset config source

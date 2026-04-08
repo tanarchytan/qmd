@@ -24,11 +24,10 @@ import {
   formatQueryForEmbedding,
   formatDocForEmbedding,
   withLLMSessionForLlm,
-  RemoteLLM,
   type RerankDocument,
   type ILLMSession,
 } from "./llm.js";
-import { createRemoteConfigFromEnv } from "./remote-config.js";
+import { getRemoteConfig, getRemoteLLM } from "./remote-config.js";
 import type {
   NamedCollection,
   Collection,
@@ -1419,7 +1418,98 @@ export async function generateEmbeddings(
   const totalDocs = docsToEmbed.length;
   const startTime = Date.now();
 
-  // Use store's LlamaCpp or global singleton, wrapped in a session
+  // Remote embedding takes priority when configured
+  const remoteConfig = getRemoteConfig();
+  if (remoteConfig?.embed) {
+    const remote = getRemoteLLM()!;
+    const BATCH_SIZE = 32;
+    let chunksEmbedded = 0;
+    let errors = 0;
+    let bytesProcessed = 0;
+    let totalChunks = 0;
+    let vectorTableInitialized = false;
+    const batches = buildEmbeddingBatches(docsToEmbed, maxDocsPerBatch, maxBatchBytes);
+
+    for (const batchMeta of batches) {
+      const batchDocs = getEmbeddingDocsForBatch(db, batchMeta);
+      const batchChunks: ChunkItem[] = [];
+      const batchBytes = batchMeta.reduce((sum, doc) => sum + Math.max(0, doc.bytes), 0);
+
+      for (const doc of batchDocs) {
+        if (!doc.body.trim()) continue;
+        const title = extractTitle(doc.body, doc.path);
+        const chunks = await chunkDocumentByTokens(
+          doc.body, undefined, undefined, undefined, doc.path,
+          options?.chunkStrategy,
+        );
+        for (let seq = 0; seq < chunks.length; seq++) {
+          batchChunks.push({
+            hash: doc.hash, title, text: chunks[seq]!.text, seq,
+            pos: chunks[seq]!.pos, tokens: chunks[seq]!.tokens,
+            bytes: encoder.encode(chunks[seq]!.text).length,
+          });
+        }
+      }
+
+      totalChunks += batchChunks.length;
+      if (batchChunks.length === 0) {
+        bytesProcessed += batchBytes;
+        options?.onProgress?.({ chunksEmbedded, totalChunks, bytesProcessed, totalBytes, errors });
+        continue;
+      }
+
+      if (!vectorTableInitialized) {
+        try {
+          const firstResult = await remote.embed(batchChunks[0]!.text);
+          if (!firstResult) throw new Error("Remote embedding returned null for first chunk");
+          store.ensureVecTable(firstResult.embedding.length);
+          vectorTableInitialized = true;
+        } catch (err) {
+          throw new Error(`Failed to initialize vector table via remote embed: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+
+      const totalBatchChunkBytes = batchChunks.reduce((sum, chunk) => sum + chunk.bytes, 0);
+      let batchChunkBytesProcessed = 0;
+
+      for (let batchStart = 0; batchStart < batchChunks.length; batchStart += BATCH_SIZE) {
+        const batchEnd = Math.min(batchStart + BATCH_SIZE, batchChunks.length);
+        const chunkBatch = batchChunks.slice(batchStart, batchEnd);
+        const texts = chunkBatch.map(chunk => chunk.text);
+
+        try {
+          const embeddings = await remote.embedBatch(texts);
+          for (let i = 0; i < chunkBatch.length; i++) {
+            const chunk = chunkBatch[i]!;
+            const embedding = embeddings[i];
+            if (embedding) {
+              insertEmbedding(db, chunk.hash, chunk.seq, chunk.pos, new Float32Array(embedding.embedding), model, now);
+              chunksEmbedded++;
+            } else {
+              errors++;
+            }
+            batchChunkBytesProcessed += chunk.bytes;
+          }
+        } catch (err) {
+          process.stderr.write(`Remote embedBatch error at offset ${batchStart}: ${err instanceof Error ? err.message : err}\n`);
+          errors += chunkBatch.length;
+          batchChunkBytesProcessed += chunkBatch.reduce((sum, c) => sum + c.bytes, 0);
+        }
+
+        const proportionalBytes = totalBatchChunkBytes === 0
+          ? batchBytes
+          : Math.min(batchBytes, Math.round((batchChunkBytesProcessed / totalBatchChunkBytes) * batchBytes));
+        options?.onProgress?.({ chunksEmbedded, totalChunks, bytesProcessed: bytesProcessed + proportionalBytes, totalBytes, errors });
+      }
+
+      bytesProcessed += batchBytes;
+      options?.onProgress?.({ chunksEmbedded, totalChunks, bytesProcessed, totalBytes, errors });
+    }
+
+    return { docsProcessed: totalDocs, chunksEmbedded, errors, durationMs: Date.now() - startTime };
+  }
+
+  // Local path: use store's LlamaCpp or global singleton, wrapped in a session
   const llm = getLlm(store);
   const embedModelUri = llm.embedModelName;
 
@@ -3092,7 +3182,19 @@ export async function searchVec(db: Database, query: string, model: string, limi
 // =============================================================================
 
 async function getEmbedding(text: string, model: string, isQuery: boolean, session?: ILLMSession, llmOverride?: LlamaCpp): Promise<number[] | null> {
-  // Format text using the appropriate prompt template
+  // Remote embedding takes priority when configured
+  const remoteConfig = getRemoteConfig();
+  if (remoteConfig?.embed) {
+    try {
+      const remote = getRemoteLLM()!;
+      const result = await remote.embed(text, { model, isQuery });
+      return result?.embedding || null;
+    } catch (err) {
+      process.stderr.write(`Remote embed failed, falling back to local: ${err instanceof Error ? err.message : err}\n`);
+      // fall through to local path
+    }
+  }
+  // Local path — format text using the appropriate prompt template
   const formattedText = isQuery ? formatQueryForEmbedding(text, model) : formatDocForEmbedding(text, undefined, model);
   const result = session
     ? await session.embed(formattedText, { model, isQuery })
@@ -3157,17 +3259,6 @@ export function insertEmbedding(
 }
 
 // =============================================================================
-// Remote LLM helper — builds a RemoteLLM from the current env on each call.
-// Config is read fresh every time so changes to process.env (e.g. from
-// loadQmdEnv() at startup) are always reflected.
-// =============================================================================
-
-function getRemoteEmbedder(): RemoteLLM | null {
-  const config = createRemoteConfigFromEnv();
-  return config ? new RemoteLLM(config) : null;
-}
-
-// =============================================================================
 // Query expansion
 // =============================================================================
 
@@ -3186,6 +3277,25 @@ export async function expandQuery(query: string, model: string = DEFAULT_QUERY_M
       }
     } catch {
       // Old cache format (pre-typed, newline-separated text) — re-expand
+    }
+  }
+
+  // Try remote query expansion first if configured
+  const remoteConfig = getRemoteConfig();
+  if (remoteConfig?.queryExpansion) {
+    try {
+      const remote = getRemoteLLM()!;
+      const results = await remote.expandQuery(query, { includeLexical: true, context: intent });
+      const expanded: ExpandedQuery[] = results
+        .filter(r => r.text !== query)
+        .map(r => ({ type: r.type, query: r.text }));
+      if (expanded.length > 0) {
+        setCachedResult(db, cacheKey, JSON.stringify(expanded));
+      }
+      return expanded;
+    } catch (err) {
+      process.stderr.write(`Remote query expansion failed, falling back to local: ${err instanceof Error ? err.message : err}\n`);
+      // fall through to local path
     }
   }
 
@@ -3215,15 +3325,19 @@ export async function rerank(query: string, documents: { file: string; text: str
   const rerankQuery = intent ? `${intent}\n\n${query}` : query;
   const effectiveModel = model ?? DEFAULT_RERANK_MODEL;
 
-  // Try remote reranking first if configured and no local override is forced
-  if (!llmOverride) {
-    const remote = getRemoteEmbedder();
-    if (remote) {
+  // Remote reranking takes priority when configured
+  const remoteConfig = getRemoteConfig();
+  if (remoteConfig?.rerank) {
+    try {
+      const remote = getRemoteLLM()!;
       const rerankDocs = documents.map(d => ({ file: d.file, text: d.text }));
       const result = await remote.rerank(rerankQuery, rerankDocs, {});
       return result.results
         .map(r => ({ file: r.file, score: r.score }))
         .sort((a, b) => b.score - a.score);
+    } catch (err) {
+      process.stderr.write(`Remote rerank failed, falling back to local: ${err instanceof Error ? err.message : err}\n`);
+      // fall through to local path
     }
   }
 
@@ -4027,12 +4141,20 @@ export async function hybridQuery(
       }
     }
 
-    // Batch embed all vector queries in a single call
-    const llm = getLlm(store);
-    const textsToEmbed = vecQueries.map(q => formatQueryForEmbedding(q.text, llm.embedModelName));
-    hooks?.onEmbedStart?.(textsToEmbed.length);
+    // Batch embed all vector queries — remote first, then local
+    hooks?.onEmbedStart?.(vecQueries.length);
     const embedStart = Date.now();
-    const embeddings = await llm.embedBatch(textsToEmbed);
+    const remoteConfigHQ = getRemoteConfig();
+    let embeddings: ({ embedding: number[] } | null)[];
+    if (remoteConfigHQ?.embed) {
+      const remote = getRemoteLLM()!;
+      const textsToEmbed = vecQueries.map(q => q.text);
+      embeddings = await remote.embedBatch(textsToEmbed);
+    } else {
+      const llm = getLlm(store);
+      const textsToEmbed = vecQueries.map(q => formatQueryForEmbedding(q.text, llm.embedModelName));
+      embeddings = await llm.embedBatch(textsToEmbed);
+    }
     hooks?.onEmbedDone?.(Date.now() - embedStart);
 
     // Run sqlite-vec lookups with pre-computed embeddings
@@ -4411,11 +4533,19 @@ export async function structuredSearch(
         s.type === 'vec' || s.type === 'hyde'
     );
     if (vecSearches.length > 0) {
-      const llm = getLlm(store);
-      const textsToEmbed = vecSearches.map(s => formatQueryForEmbedding(s.query, llm.embedModelName));
-      hooks?.onEmbedStart?.(textsToEmbed.length);
+      hooks?.onEmbedStart?.(vecSearches.length);
       const embedStart = Date.now();
-      const embeddings = await llm.embedBatch(textsToEmbed);
+      const remoteConfigSS = getRemoteConfig();
+      let embeddings: ({ embedding: number[] } | null)[];
+      if (remoteConfigSS?.embed) {
+        const remote = getRemoteLLM()!;
+        const textsToEmbed = vecSearches.map(s => s.query);
+        embeddings = await remote.embedBatch(textsToEmbed);
+      } else {
+        const llm = getLlm(store);
+        const textsToEmbed = vecSearches.map(s => formatQueryForEmbedding(s.query, llm.embedModelName));
+        embeddings = await llm.embedBatch(textsToEmbed);
+      }
       hooks?.onEmbedDone?.(Date.now() - embedStart);
 
       for (let i = 0; i < vecSearches.length; i++) {
