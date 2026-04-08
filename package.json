@@ -21,7 +21,7 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "prepare": "[ -d .git ] && ./scripts/install-hooks.sh || true",
+    "prepare": "node -e \"try{require('child_process').execSync('bash ./scripts/install-hooks.sh',{stdio:'ignore'})}catch{}\"",
     "build": "tsc -p tsconfig.build.json && printf '#!/usr/bin/env node\n' | cat - dist/cli/qmd.js > dist/cli/qmd.tmp && mv dist/cli/qmd.tmp dist/cli/qmd.js && chmod +x dist/cli/qmd.js",
     "test": "vitest run --reporter=verbose test/",
     "typecheck": "tsc --noEmit",
