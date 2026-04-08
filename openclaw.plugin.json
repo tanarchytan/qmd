@@ -1,0 +1,32 @@
+{
+  "id": "tanarchy-qmd",
+  "name": "Tanarchy QMD",
+  "description": "QMD memory + knowledge graph plugin for OpenClaw",
+  "version": "2.1.0-dev.13",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "autoRecall": {
+        "type": "boolean",
+        "default": true
+      },
+      "autoCapture": {
+        "type": "boolean",
+        "default": true
+      },
+      "topK": {
+        "type": "number",
+        "default": 5
+      },
+      "scope": {
+        "type": "string",
+        "default": "global"
+      },
+      "dbPath": {
+        "type": "string",
+        "description": "Override path to the QMD SQLite database"
+      }
+    }
+  }
+}

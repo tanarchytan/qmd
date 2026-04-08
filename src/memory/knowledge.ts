@@ -147,8 +147,9 @@ export function knowledgeInvalidate(
   db: Database,
   id: string
 ): { invalidated: boolean } {
-  const existing = db.prepare(`SELECT id FROM knowledge WHERE id = ? AND valid_until IS NULL`).get(id);
+  const existing = db.prepare(`SELECT id, valid_until FROM knowledge WHERE id = ?`).get(id) as { id: string; valid_until: number | null } | null;
   if (!existing) return { invalidated: false };
+  if (existing.valid_until !== null) return { invalidated: false }; // already expired
 
   db.prepare(`UPDATE knowledge SET valid_until = ? WHERE id = ?`).run(Date.now(), id);
   return { invalidated: true };

@@ -1,7 +1,7 @@
 {
   "name": "@tanarchy/qmd",
-  "version": "2.1.0-dev.11",
-  "description": "Query Markup Documents - On-device hybrid search for markdown files with BM25, vector search, and LLM reranking",
+  "version": "2.1.0-dev.13",
+  "description": "Search + memory + knowledge graph for AI agents. BM25, vector, RRF fusion, LLM reranking, Weibull decay, temporal knowledge. Local or cloud.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -18,12 +18,14 @@
     "bin/",
     "dist/",
     "hooks/",
+    "openclaw.plugin.json",
+    "README.md",
     "LICENSE",
     "CHANGELOG.md"
   ],
   "scripts": {
     "prepare": "node -e \"try{require('child_process').execSync('bash ./scripts/install-hooks.sh',{stdio:'ignore'})}catch{}\"",
-    "build": "tsc -p tsconfig.build.json && printf '#!/usr/bin/env node\n' | cat - dist/cli/qmd.js > dist/cli/qmd.tmp && mv dist/cli/qmd.tmp dist/cli/qmd.js && chmod +x dist/cli/qmd.js",
+    "build": "node -e \"const p=require('./package.json'),m=require('./openclaw.plugin.json');if(m.version!==p.version){m.version=p.version;require('fs').writeFileSync('openclaw.plugin.json',JSON.stringify(m,null,2)+'\\n')}\" && tsc -p tsconfig.build.json && printf '#!/usr/bin/env node\n' | cat - dist/cli/qmd.js > dist/cli/qmd.tmp && mv dist/cli/qmd.tmp dist/cli/qmd.js && chmod +x dist/cli/qmd.js",
     "test": "vitest run --reporter=verbose test/",
     "typecheck": "tsc --noEmit",
     "qmd": "tsx src/cli/qmd.ts",
@@ -114,9 +116,13 @@
     "mcp",
     "reranking",
     "knowledge-base",
+    "knowledge-graph",
+    "memory",
+    "agent-memory",
+    "openclaw",
     "local-ai",
     "llm"
   ],
-  "author": "Tobi Lutke <tobi@lutke.com>",
+  "author": "David Gillot <admin@tanarchy.org>",
   "license": "MIT"
 }

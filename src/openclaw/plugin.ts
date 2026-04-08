@@ -82,7 +82,7 @@ function getDb(config: QmdPluginConfig) {
 
 const qmdPlugin = definePluginEntry({
   id: "tanarchy-qmd",
-  name: "QMD Memory + Search",
+  name: "Tanarchy QMD",
   description: "Document search + conversation memory + knowledge graph powered by QMD",
   kind: "memory",  // Register as exclusive memory slot plugin
 

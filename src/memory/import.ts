@@ -9,7 +9,7 @@
 
 import type { Database } from "../db.js";
 import { memoryStore } from "./index.js";
-import { extractAndStore } from "./extractor.js";
+import { extractAndStore as _extractAndStore } from "./extractor.js";
 import { readFileSync, writeFileSync } from "node:fs";
 
 // =============================================================================
@@ -168,7 +168,7 @@ export async function importConversation(
 
     if (chunk.length < 30) continue;
 
-    const result = await extractAndStore(db, chunk, scope);
+    const result = await _extractAndStore(db, chunk, scope, memoryStore);
     memoriesStored += result.stored;
     duplicates += result.duplicates;
   }

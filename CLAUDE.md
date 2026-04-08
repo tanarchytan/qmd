@@ -1,42 +1,135 @@
-# QMD - Query Markup Documents
+# CLAUDE.md
 
-Use Bun instead of Node.js (`bun` not `node`, `bun install` not `npm install`).
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Package
+
+`@tanarchy/qmd` — on-device hybrid search for markdown files with BM25, vector search, and LLM reranking. Plus a memory system with decay, knowledge graph, and OpenClaw integration.
+
+Repo: `github.com/tanarchytan/qmd` — `main` (stable) + `dev` (active development).
+
+## Build & Development
+
+```sh
+bun install                        # Install dependencies (prefer Bun over npm)
+npm run build                      # tsc -p tsconfig.build.json → dist/
+npm run typecheck                  # tsc --noEmit (no emit, just type-check)
+bun src/cli/qmd.ts <command>       # Run CLI from source (dev mode)
+bun link                           # Install globally as 'qmd'
+```
+
+**Never run `bun build --compile`** — it overwrites the shell wrapper (`bin/qmd`) and breaks sqlite-vec. The `qmd` binary is a shell script that dispatches to `dist/cli/qmd.js`.
+
+## Tests
+
+Framework: Vitest. All tests in `test/`. Timeout: 30s.
+
+```sh
+npx vitest run --reporter=verbose test/             # Run all tests (npm)
+npx vitest run --reporter=verbose test/store.test.ts # Run a single test file
+bun test --preload ./src/test-preload.ts test/       # Run all tests (Bun)
+```
+
+CI runs on Node 22/23, Ubuntu/macOS, both npm and Bun runtimes.
+
+## MCP Inspector
+
+```sh
+npm run inspector   # Launches @modelcontextprotocol/inspector against the MCP server
+```
+
+## Releasing
+
+Use `/release <version>` to cut a release. Add changelog entries under `## [Unreleased]` in CHANGELOG.md as you make changes — the release script renames it to `[X.Y.Z] - date`. Full details in `skills/release/SKILL.md`.
+
+## Architecture
+
+### Entry points
+
+| Entry | File | Purpose |
+|-------|------|---------|
+| CLI | `src/cli/qmd.ts` | ~40 commands, main user interface |
+| SDK | `src/index.ts` | `createStore()` + typed search/retrieval API |
+| MCP | `src/mcp/server.ts` | MCP tools (stdio + HTTP transport) |
+| OpenClaw | `src/openclaw/plugin.ts` | Auto-recall/capture hooks for agent frameworks |
+
+### Core modules
+
+- **`src/store.ts`** — The heart of QMD. Document storage, FTS5 indexing, vector search, chunking, RRF fusion, reranking pipeline, memory CRUD. Most search logic lives here.
+- **`src/llm.ts`** — LLM abstraction layer. Local models via node-llama-cpp (embeddings: embeddinggemma, reranking: qwen3-reranker, generation: Qwen3). Remote providers: OpenAI-compatible, ZeroEntropy, SiliconFlow, Gemini, Nebius. Lazy-loads models, auto-unloads after 5min inactivity.
+- **`src/db.ts`** — better-sqlite3 + sqlite-vec initialization, PRAGMA tuning.
+- **`src/collections.ts`** — YAML config parsing, collection CRUD with write-through to both SQLite and YAML.
+- **`src/remote-config.ts`** — Per-operation provider configuration builder (`QMD_EMBED_PROVIDER`, `QMD_RERANK_PROVIDER`, `QMD_QUERY_EXPANSION_PROVIDER`).
+- **`src/ast.ts`** — AST-aware code chunking via tree-sitter (TS/JS/Python/Go/Rust). Falls back to regex chunking for markdown and unknown types.
+
+### Memory system (`src/memory/`)
+
+- **`index.ts`** — Memory store: FTS5 + sqlite-vec hybrid search, content-hash dedup + cosine dedup (≥0.9), LRU embedding cache.
+- **`decay.ts`** — Weibull decay engine: `composite = 0.4×recency + 0.3×frequency + 0.3×intrinsic`. Three-tier promotion (peripheral → working → core).
+- **`knowledge.ts`** — Temporal knowledge graph: subject/predicate/object triples with `valid_from`/`valid_until` windows.
+- **`patterns.ts`** — 16 regex patterns for zero-LLM memory classification.
+- **`extractor.ts`** — Optional LLM-based memory extraction from conversation text.
+
+### Search pipeline
+
+```
+Query → BM25 (FTS5) + Vector (sqlite-vec) in parallel
+      → RRF Fusion (k=60, 2× BM25 weight)
+      → Zero-LLM boosts (keyword overlap, quoted phrases, person names)
+      → LLM Reranking (local or remote)
+      → Position-aware blend
+      → Final results
+```
+
+### Data flow
+
+Config (YAML or inline) → `collections.ts` → SQLite `store_collections` table.
+Files on disk → `store.ts` reindex → documents table + FTS5 + chunks + sqlite-vec vectors.
+Queries flow through `hybridQuery()` or `structuredSearch()` in `store.ts`.
+
+## Environment
+
+Config lives in `~/.config/qmd/.env` (see `.env.example` for all options).
+Index stored at `~/.cache/qmd/index.sqlite`.
+
+Key env vars:
+- `QMD_LOCAL=no` — skip node-llama-cpp entirely (no cmake, no GPU)
+- `QMD_LLAMA_BUILD=auto` — allow cmake builds for node-llama-cpp
+- `QMD_EMBED_PROVIDER`, `QMD_RERANK_PROVIDER`, `QMD_QUERY_EXPANSION_PROVIDER` — per-operation remote LLM config
 
 ## Commands
 
 ```sh
-qmd collection add . --name <n>   # Create/index collection
-qmd collection list               # List all collections with details
-qmd collection remove <name>      # Remove a collection by name
-qmd collection rename <old> <new> # Rename a collection
-qmd ls [collection[/path]]        # List collections or files in a collection
-qmd context add [path] "text"     # Add context for path (defaults to current dir)
-qmd context list                  # List all contexts
-qmd context check                 # Check for collections/paths missing context
+qmd collection add . --name <n>   # Index a directory
+qmd collection list               # List collections
+qmd collection remove <name>      # Remove collection
+qmd collection rename <old> <new> # Rename collection
+qmd ls [collection[/path]]        # List files
+qmd context add [path] "text"     # Add context for path
+qmd context list                  # List contexts
+qmd context check                 # Find missing contexts
 qmd context rm <path>             # Remove context
-qmd get <file>                    # Get document by path or docid (#abc123)
-qmd multi-get <pattern>           # Get multiple docs by glob or comma-separated list
-qmd status                        # Show index status and collections
-qmd update [--pull]               # Re-index all collections (--pull: git pull first)
-qmd embed                         # Generate vector embeddings (uses node-llama-cpp)
-qmd query <query>                 # Search with query expansion + reranking (recommended)
-qmd search <query>                # Full-text keyword search (BM25, no LLM)
-qmd vsearch <query>               # Vector similarity search (no reranking)
-qmd mcp                           # Start MCP server (stdio transport)
-qmd mcp --http [--port N]         # Start MCP server (HTTP, default port 8181)
-qmd mcp --http --daemon           # Start as background daemon
-qmd mcp stop                      # Stop background MCP daemon
-qmd sync                          # Update all collections + embed (one command)
-qmd vacuum                        # Reclaim database space
-qmd cleanup                       # Clear cache + orphans + vacuum
-qmd memory store <text>           # Store a memory (auto-classify + dedup)
+qmd get <file>                    # Get doc by path or docid (#abc123)
+qmd multi-get <pattern>           # Get multiple docs
+qmd status                        # Index status
+qmd update [--pull]               # Re-index (--pull: git pull first)
+qmd embed                         # Generate embeddings
+qmd query <query>                 # Full search (expand + rerank)
+qmd search <query>                # BM25 keyword search
+qmd vsearch <query>               # Vector similarity search
+qmd mcp                           # MCP server (stdio)
+qmd mcp --http [--port N]         # MCP server (HTTP)
+qmd mcp --http --daemon           # MCP daemon
+qmd sync                          # update + embed
+qmd vacuum                        # Reclaim space
+qmd memory store <text>           # Store memory
 qmd memory recall <query>         # Search memories
-qmd memory forget <id>            # Delete a memory
-qmd memory extract <text>         # Extract memories from conversation text
-qmd memory stats                  # Memory count by tier/category/scope
-qmd memory decay                  # Run decay pass (promote/demote tiers)
-qmd memory import <file>          # Import memories or conversations
-qmd memory export [file.json]     # Export all memories
+qmd memory forget <id>            # Delete memory
+qmd memory extract <text>         # Extract from conversation
+qmd memory stats                  # Memory stats
+qmd memory decay                  # Run decay pass
+qmd memory import <file>          # Import memories
+qmd memory export [file.json]     # Export memories
 ```
 
 ## MCP Tools
@@ -45,146 +138,9 @@ Document search: `query`, `get`, `multi_get`, `status`, `briefing`, `manage`
 Memory: `memory_store`, `memory_recall`, `memory_forget`, `memory_update`, `memory_extract`, `memory_stats`
 Knowledge: `knowledge_store`, `knowledge_query`, `knowledge_invalidate`, `knowledge_entities`
 
-## Cloud Configuration
+## Important constraints
 
-Set in `~/.config/qmd/.env`:
-- `QMD_LOCAL=no` — disable local node-llama-cpp (remote-only mode)
-- `QMD_EMBED_PROVIDER`, `QMD_RERANK_PROVIDER`, `QMD_QUERY_EXPANSION_PROVIDER` — per-operation config
-- See `.env.example` for full reference
-
-## Collection Management
-
-```sh
-# List all collections
-qmd collection list
-
-# Create a collection with explicit name
-qmd collection add ~/Documents/notes --name mynotes --mask '**/*.md'
-
-# Remove a collection
-qmd collection remove mynotes
-
-# Rename a collection
-qmd collection rename mynotes my-notes
-
-# List all files in a collection
-qmd ls mynotes
-
-# List files with a path prefix
-qmd ls journals/2025
-qmd ls qmd://journals/2025
-```
-
-## Context Management
-
-```sh
-# Add context to current directory (auto-detects collection)
-qmd context add "Description of these files"
-
-# Add context to a specific path
-qmd context add /subfolder "Description for subfolder"
-
-# Add global context to all collections (system message)
-qmd context add / "Always include this context"
-
-# Add context using virtual paths
-qmd context add qmd://journals/ "Context for entire journals collection"
-qmd context add qmd://journals/2024 "Journal entries from 2024"
-
-# List all contexts
-qmd context list
-
-# Check for collections or paths without context
-qmd context check
-
-# Remove context
-qmd context rm qmd://journals/2024
-qmd context rm /  # Remove global context
-```
-
-## Document IDs (docid)
-
-Each document has a unique short ID (docid) - the first 6 characters of its content hash.
-Docids are shown in search results as `#abc123` and can be used with `get` and `multi-get`:
-
-```sh
-# Search returns docid in results
-qmd search "query" --json
-# Output: [{"docid": "#abc123", "score": 0.85, "file": "docs/readme.md", ...}]
-
-# Get document by docid
-qmd get "#abc123"
-qmd get abc123              # Leading # is optional
-
-# Docids also work in multi-get comma-separated lists
-qmd multi-get "#abc123, #def456"
-```
-
-## Options
-
-```sh
-# Search & retrieval
--c, --collection <name>  # Restrict search to a collection (matches pwd suffix)
--n <num>                 # Number of results
---all                    # Return all matches
---min-score <num>        # Minimum score threshold
---full                   # Show full document content
---line-numbers           # Add line numbers to output
-
-# Multi-get specific
--l <num>                 # Maximum lines per file
---max-bytes <num>        # Skip files larger than this (default 10KB)
-
-# Output formats (search and multi-get)
---json, --csv, --md, --xml, --files
-```
-
-## Development
-
-```sh
-bun src/cli/qmd.ts <command>   # Run from source
-bun link               # Install globally as 'qmd'
-```
-
-## Tests
-
-All tests live in `test/`. Run everything:
-
-```sh
-npx vitest run --reporter=verbose test/
-bun test --preload ./src/test-preload.ts test/
-```
-
-## Architecture
-
-- SQLite FTS5 for full-text search (BM25)
-- sqlite-vec for vector similarity search
-- node-llama-cpp for embeddings (embeddinggemma), reranking (qwen3-reranker), and query expansion (Qwen3)
-- Reciprocal Rank Fusion (RRF) for combining results
-- Smart chunking: 900 tokens/chunk with 15% overlap, prefers markdown headings as boundaries
-- AST-aware chunking: use `--chunk-strategy auto` to chunk code files (.ts/.js/.py/.go/.rs) at function/class/import boundaries via tree-sitter. Default is `regex` (existing behavior). Markdown and unknown file types always use regex chunking.
-
-## Important: Do NOT run automatically
-
-- Never run `qmd collection add`, `qmd embed`, or `qmd update` automatically
-- Never modify the SQLite database directly
-- Write out example commands for the user to run manually
-- Index is stored at `~/.cache/qmd/index.sqlite`
-
-## Do NOT compile
-
-- Never run `bun build --compile` - it overwrites the shell wrapper and breaks sqlite-vec
-- The `qmd` file is a shell script that runs compiled JS from `dist/` - do not replace it
-- `npm run build` compiles TypeScript to `dist/` via `tsc -p tsconfig.build.json`
-
-## Releasing
-
-Use `/release <version>` to cut a release. Full changelog standards,
-release workflow, and git hook setup are documented in the
-[release skill](skills/release/SKILL.md).
-
-Key points:
-- Add changelog entries under `## [Unreleased]` **as you make changes**
-- The release script renames `[Unreleased]` → `[X.Y.Z] - date` at release time
-- Credit external PRs with `#NNN (thanks @username)`
-- GitHub releases roll up the full minor series (e.g. 1.2.0 through 1.2.3)
+- **Never run `qmd collection add`, `qmd embed`, or `qmd update` automatically** — write out commands for the user to run
+- **Never modify the SQLite database directly** — use the CLI or SDK
+- **Never run `bun build --compile`** — breaks the shell wrapper and sqlite-vec
+- Node.js ≥22 required
