@@ -122,7 +122,7 @@ function getStore(): ReturnType<typeof createStore> {
     try {
       const config = loadConfig();
       syncConfigToDb(store.db, config);
-      if (config.models) {
+      if (config.models && isLocalEnabled()) {
         setDefaultLlamaCpp(new LlamaCpp({
           embedModel: config.models.embed,
           generateModel: config.models.generate,
@@ -1697,7 +1697,12 @@ async function vectorIndex(
     return;
   }
 
-  console.log(`${c.dim}Model: ${model}${c.reset}\n`);
+  const rc = getRemoteConfig();
+  if (rc?.embed) {
+    console.log(`${c.dim}Embed: ${rc.embed.provider} → ${rc.embed.url || '(alias default)'}${rc.embed.model ? `  model: ${rc.embed.model}` : ''}${c.reset}\n`);
+  } else {
+    console.log(`${c.dim}Model: ${model}${c.reset}\n`);
+  }
   if (batchOptions?.maxDocsPerBatch !== undefined || batchOptions?.maxBatchBytes !== undefined) {
     const maxDocsPerBatch = batchOptions.maxDocsPerBatch ?? DEFAULT_EMBED_MAX_DOCS_PER_BATCH;
     const maxBatchBytes = batchOptions.maxBatchBytes ?? DEFAULT_EMBED_MAX_BATCH_BYTES;

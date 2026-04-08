@@ -27,7 +27,7 @@ import {
   type RerankDocument,
   type ILLMSession,
 } from "./llm.js";
-import { getRemoteConfig, getRemoteLLM } from "./remote-config.js";
+import { getRemoteConfig, getRemoteLLM, isLocalEnabled } from "./remote-config.js";
 import type {
   NamedCollection,
   Collection,
@@ -2305,8 +2305,6 @@ export async function chunkDocumentByTokens(
   chunkStrategy: ChunkStrategy = "regex",
   signal?: AbortSignal
 ): Promise<{ text: string; pos: number; tokens: number }[]> {
-  const llm = getDefaultLlamaCpp();
-
   // Use moderate chars/token estimate (prose ~4, code ~2, mixed ~3)
   // If chunks exceed limit, they'll be re-split with actual ratio
   const avgCharsPerToken = 3;
@@ -2317,6 +2315,17 @@ export async function chunkDocumentByTokens(
   // Chunk in character space with conservative estimate
   // Use AST-aware chunking for the first pass when filepath/strategy provided
   let charChunks = await chunkDocumentAsync(content, maxChars, overlapChars, windowChars, filepath, chunkStrategy);
+
+  // When local LLM is disabled, use char-based approximation for token counts
+  if (!isLocalEnabled()) {
+    return charChunks.map(chunk => ({
+      text: chunk.text,
+      pos: chunk.pos,
+      tokens: Math.ceil(chunk.text.length / avgCharsPerToken),
+    }));
+  }
+
+  const llm = getDefaultLlamaCpp();
 
   // Tokenize and split any chunks that still exceed limit
   const results: { text: string; pos: number; tokens: number }[] = [];
