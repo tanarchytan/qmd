@@ -321,9 +321,19 @@ export const BLEND_RRF_REST = parseFloat(process.env.QMD_BLEND_RRF_REST ?? "0.40
 // From MemPalace benchmarks: +3.4% recall with no LLM calls
 // =============================================================================
 
+const BOOST_STOP_WORDS = new Set([
+  "what", "when", "where", "who", "how", "which", "did", "do",
+  "was", "were", "have", "has", "had", "is", "are", "the", "a",
+  "an", "my", "me", "i", "you", "your", "their", "it", "its",
+  "in", "on", "at", "to", "for", "of", "with", "by", "from",
+  "ago", "last", "that", "this", "there", "about", "get", "got",
+  "give", "gave", "buy", "bought", "made", "make", "can", "could",
+  "would", "should", "will", "shall", "may", "might", "been",
+]);
+
 /** Boost when query keywords appear verbatim in result text (+1.2% recall) */
 function keywordOverlapBoost(query: string, text: string): number {
-  const queryWords = new Set(query.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  const queryWords = new Set(query.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !BOOST_STOP_WORDS.has(w)));
   if (queryWords.size === 0) return 1.0;
   const textLower = text.toLowerCase();
   let hits = 0;
@@ -921,6 +931,69 @@ function initializeDatabase(db: Database): void {
       WHERE new.active = 1;
     END
   `);
+
+  // ==========================================================================
+  // Memory tables — conversation memory for agents
+  // ==========================================================================
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memories (
+      id TEXT PRIMARY KEY,
+      text TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'other',
+      scope TEXT NOT NULL DEFAULT 'global',
+      importance REAL NOT NULL DEFAULT 0.5,
+      tier TEXT NOT NULL DEFAULT 'peripheral',
+      access_count INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      last_accessed INTEGER,
+      metadata TEXT
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_hash ON memories(content_hash)`);
+
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+      text, category, scope,
+      tokenize='porter unicode61'
+    )
+  `);
+
+  // Keep memories_fts in sync
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+      INSERT INTO memories_fts(rowid, text, category, scope)
+      VALUES (new.rowid, new.text, new.category, new.scope);
+    END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+      DELETE FROM memories_fts WHERE rowid = old.rowid;
+    END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+      DELETE FROM memories_fts WHERE rowid = old.rowid;
+      INSERT INTO memories_fts(rowid, text, category, scope)
+      VALUES (new.rowid, new.text, new.category, new.scope);
+    END
+  `);
+
+  // Memory changelog — audit trail for memory operations
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      memory_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      old_value TEXT,
+      new_value TEXT,
+      timestamp INTEGER NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_history_mid ON memory_history(memory_id)`);
 }
 
 // =============================================================================

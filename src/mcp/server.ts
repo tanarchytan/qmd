@@ -34,6 +34,7 @@ import {
 } from "../index.js";
 import { getConfigPath } from "../collections.js";
 import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections as storeListCollections, generateEmbeddings, reindexCollection } from "../store.js";
+import { memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats, MEMORY_CATEGORIES } from "../memory/index.js";
 
 // =============================================================================
 // Types for structured content
@@ -592,6 +593,127 @@ Intent-aware lex (C++ performance, not sports):
 
       return {
         content: [{ type: "text", text: lines.join('\n') }],
+      };
+    }
+  );
+
+  // =========================================================================
+  // Memory tools — conversation memory for agents
+  // =========================================================================
+
+  server.registerTool(
+    "memory_store",
+    {
+      title: "Store Memory",
+      description: "Store a fact, preference, decision, or other memory. Deduplicates automatically (exact match + semantic similarity). Returns the memory ID.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        text: z.string().describe("The memory content to store (verbatim text)"),
+        category: z.enum(["preference", "fact", "decision", "entity", "reflection", "other"]).optional().describe("Memory category (default: other)"),
+        scope: z.string().optional().describe("Scope for isolation: agent name, project, or 'global' (default: global)"),
+        importance: z.number().min(0).max(1).optional().describe("Importance 0-1 (default: 0.5). Higher = persists longer."),
+      },
+    },
+    async ({ text, category, scope, importance }) => {
+      const db = store.internal.db;
+      const result = await memoryStore(db, { text, category, scope, importance });
+      const msg = result.status === "created"
+        ? `Memory stored (id: ${result.id})`
+        : `Duplicate found (existing id: ${result.duplicate_id})`;
+      return { content: [{ type: "text", text: msg }] };
+    }
+  );
+
+  server.registerTool(
+    "memory_recall",
+    {
+      title: "Recall Memories",
+      description: "Search memories by natural language query. Uses hybrid search (semantic + keyword). Returns ranked results.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {
+        query: z.string().describe("Search query"),
+        scope: z.string().optional().describe("Filter by scope (agent name, project, or 'global')"),
+        category: z.enum(["preference", "fact", "decision", "entity", "reflection", "other"]).optional().describe("Filter by category"),
+        limit: z.number().optional().describe("Max results (default: 10)"),
+      },
+    },
+    async ({ query, scope, category, limit }) => {
+      const db = store.internal.db;
+      const results = await memoryRecall(db, { query, scope, category, limit });
+      if (results.length === 0) {
+        return { content: [{ type: "text", text: "No memories found." }] };
+      }
+      const lines = results.map((r, i) =>
+        `${i + 1}. [${r.category}] (score: ${r.score.toFixed(2)}, scope: ${r.scope}) ${r.text}\n   id: ${r.id}`
+      );
+      return {
+        content: [{ type: "text", text: lines.join('\n') }],
+        structuredContent: { results },
+      };
+    }
+  );
+
+  server.registerTool(
+    "memory_forget",
+    {
+      title: "Forget Memory",
+      description: "Delete a specific memory by ID.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        id: z.string().describe("Memory ID to delete"),
+      },
+    },
+    async ({ id }) => {
+      const db = store.internal.db;
+      const result = memoryForget(db, id);
+      return {
+        content: [{ type: "text", text: result.deleted ? `Memory ${id} deleted.` : `Memory ${id} not found.` }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "memory_update",
+    {
+      title: "Update Memory",
+      description: "Update an existing memory's text, importance, or category. Re-embeds if text changes.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        id: z.string().describe("Memory ID to update"),
+        text: z.string().optional().describe("New memory text (triggers re-embedding)"),
+        importance: z.number().min(0).max(1).optional().describe("New importance 0-1"),
+        category: z.enum(["preference", "fact", "decision", "entity", "reflection", "other"]).optional().describe("New category"),
+      },
+    },
+    async ({ id, text, importance, category }) => {
+      const db = store.internal.db;
+      const result = await memoryUpdate(db, { id, text, importance, category });
+      return {
+        content: [{ type: "text", text: result.updated ? `Memory ${id} updated.` : `Memory ${id} not found.` }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "memory_stats",
+    {
+      title: "Memory Statistics",
+      description: "Show memory statistics: total count, breakdown by tier, category, and scope.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {},
+    },
+    async () => {
+      const db = store.internal.db;
+      const stats = memoryStats(db);
+      const lines = [
+        `Total memories: ${stats.total}`,
+        `\nBy tier: ${Object.entries(stats.byTier).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none'}`,
+        `By category: ${Object.entries(stats.byCategory).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none'}`,
+        `By scope: ${Object.entries(stats.byScope).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none'}`,
+      ];
+      return {
+        content: [{ type: "text", text: lines.join('\n') }],
+        structuredContent: stats,
       };
     }
   );

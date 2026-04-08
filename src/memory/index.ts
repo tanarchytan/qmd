@@ -1,0 +1,439 @@
+/**
+ * memory/index.ts — Conversation memory layer for QMD.
+ *
+ * Stores and retrieves agent memories alongside document search.
+ * Same SQLite DB, same embed/rerank providers, same search pipeline.
+ */
+
+import { createHash, randomUUID } from "node:crypto";
+import type { Database } from "../db.js";
+import { getRemoteConfig, getRemoteLLM } from "../remote-config.js";
+import { getDefaultLlamaCpp, type EmbeddingResult } from "../llm.js";
+import { isLocalEnabled } from "../remote-config.js";
+
+// =============================================================================
+// Types
+// =============================================================================
+
+export const MEMORY_CATEGORIES = [
+  "preference", "fact", "decision", "entity", "reflection", "other",
+] as const;
+export type MemoryCategory = typeof MEMORY_CATEGORIES[number];
+
+export type Memory = {
+  id: string;
+  text: string;
+  content_hash: string;
+  category: MemoryCategory;
+  scope: string;
+  importance: number;
+  tier: string;
+  access_count: number;
+  created_at: number;
+  last_accessed: number | null;
+  metadata: string | null;
+};
+
+export type MemoryStoreOptions = {
+  text: string;
+  category?: MemoryCategory;
+  scope?: string;
+  importance?: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type MemoryRecallOptions = {
+  query: string;
+  scope?: string;
+  category?: MemoryCategory;
+  limit?: number;
+};
+
+export type MemoryRecallResult = {
+  id: string;
+  text: string;
+  category: string;
+  scope: string;
+  importance: number;
+  score: number;
+  created_at: number;
+};
+
+export type MemoryUpdateOptions = {
+  id: string;
+  text?: string;
+  importance?: number;
+  category?: MemoryCategory;
+  metadata?: Record<string, unknown>;
+};
+
+// =============================================================================
+// Content hash for fast dedup
+// =============================================================================
+
+function contentHash(text: string): string {
+  return createHash("md5").update(text.trim().toLowerCase()).digest("hex");
+}
+
+// =============================================================================
+// Stop words for keyword boost (from MemPalace benchmarks)
+// =============================================================================
+
+const STOP_WORDS = new Set([
+  "what", "when", "where", "who", "how", "which", "did", "do",
+  "was", "were", "have", "has", "had", "is", "are", "the", "a",
+  "an", "my", "me", "i", "you", "your", "their", "it", "its",
+  "in", "on", "at", "to", "for", "of", "with", "by", "from",
+  "ago", "last", "that", "this", "there", "about", "get", "got",
+  "give", "gave", "buy", "bought", "made", "make", "can", "could",
+  "would", "should", "will", "shall", "may", "might", "been",
+  "being", "does", "done", "not", "no", "nor", "but", "and",
+  "or", "so", "than", "too", "very", "just", "also", "some",
+  "any", "all", "each", "every", "both", "few", "more", "most",
+  "other", "such", "only", "same", "into", "over", "after",
+  "before", "between", "through", "during", "above", "below",
+]);
+
+function extractKeywords(text: string): string[] {
+  return text.toLowerCase().split(/\s+/)
+    .filter(w => w.length > 2 && !STOP_WORDS.has(w));
+}
+
+// =============================================================================
+// Embed helper — uses remote or local
+// =============================================================================
+
+async function embedText(text: string): Promise<number[] | null> {
+  const remoteConfig = getRemoteConfig();
+  if (remoteConfig?.embed) {
+    try {
+      const remote = getRemoteLLM()!;
+      const result = await remote.embed(text, { isQuery: false });
+      return result?.embedding || null;
+    } catch (err) {
+      process.stderr.write(`Memory embed failed: ${err instanceof Error ? err.message : err}\n`);
+      return null;
+    }
+  }
+  if (isLocalEnabled()) {
+    try {
+      const llm = getDefaultLlamaCpp();
+      const result = await llm.embed(text);
+      return result?.embedding || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function embedQuery(text: string): Promise<number[] | null> {
+  const remoteConfig = getRemoteConfig();
+  if (remoteConfig?.embed) {
+    try {
+      const remote = getRemoteLLM()!;
+      const result = await remote.embed(text, { isQuery: true });
+      return result?.embedding || null;
+    } catch (err) {
+      process.stderr.write(`Memory query embed failed: ${err instanceof Error ? err.message : err}\n`);
+      return null;
+    }
+  }
+  if (isLocalEnabled()) {
+    try {
+      const llm = getDefaultLlamaCpp();
+      const result = await llm.embed(text, { isQuery: true });
+      return result?.embedding || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+// =============================================================================
+// Ensure memories_vec table (dynamic dimensions, same pattern as vectors_vec)
+// =============================================================================
+
+let _memoriesVecInitialized = false;
+
+function ensureMemoriesVecTable(db: Database, dimensions: number): void {
+  if (_memoriesVecInitialized) return;
+  const tableInfo = db.prepare(
+    `SELECT sql FROM sqlite_master WHERE type='table' AND name='memories_vec'`
+  ).get() as { sql: string } | null;
+  if (tableInfo) {
+    const match = tableInfo.sql.match(/float\[(\d+)\]/);
+    const existingDims = match?.[1] ? parseInt(match[1], 10) : null;
+    if (existingDims === dimensions) {
+      _memoriesVecInitialized = true;
+      return;
+    }
+    // Dimension mismatch — drop and recreate
+    db.exec(`DROP TABLE IF EXISTS memories_vec`);
+  }
+  db.exec(
+    `CREATE VIRTUAL TABLE memories_vec USING vec0(id TEXT PRIMARY KEY, embedding float[${dimensions}] distance_metric=cosine)`
+  );
+  _memoriesVecInitialized = true;
+}
+
+// =============================================================================
+// Cosine dedup check
+// =============================================================================
+
+function findSimilarMemory(db: Database, embedding: number[], threshold: number = 0.9): { id: string; score: number } | null {
+  try {
+    const results = db.prepare(
+      `SELECT id, distance FROM memories_vec WHERE embedding MATCH ? AND k = 5`
+    ).all(new Float32Array(embedding)) as { id: string; distance: number }[];
+    for (const r of results) {
+      const similarity = 1 - r.distance;
+      if (similarity >= threshold) {
+        return { id: r.id, score: similarity };
+      }
+    }
+  } catch {
+    // memories_vec may not exist yet
+  }
+  return null;
+}
+
+// =============================================================================
+// Memory CRUD
+// =============================================================================
+
+export async function memoryStore(
+  db: Database,
+  options: MemoryStoreOptions
+): Promise<{ id: string; status: "created" | "duplicate"; duplicate_id?: string }> {
+  const text = options.text.trim();
+  if (!text) throw new Error("Memory text cannot be empty");
+
+  const hash = contentHash(text);
+  const category = options.category || "other";
+  const scope = options.scope || "global";
+  const importance = Math.max(0, Math.min(1, options.importance ?? 0.5));
+  const now = Date.now();
+
+  // Fast dedup: exact content hash match
+  const existing = db.prepare(
+    `SELECT id FROM memories WHERE content_hash = ?`
+  ).get(hash) as { id: string } | null;
+  if (existing) {
+    // Touch access count
+    db.prepare(`UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?`).run(now, existing.id);
+    return { id: existing.id, status: "duplicate", duplicate_id: existing.id };
+  }
+
+  // Embed for vector dedup + storage
+  const embedding = await embedText(text);
+
+  // Cosine dedup: near-duplicate check
+  if (embedding) {
+    const similar = findSimilarMemory(db, embedding, 0.9);
+    if (similar) {
+      db.prepare(`UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?`).run(now, similar.id);
+      return { id: similar.id, status: "duplicate", duplicate_id: similar.id };
+    }
+  }
+
+  // Insert memory
+  const id = randomUUID();
+  db.prepare(`
+    INSERT INTO memories (id, text, content_hash, category, scope, importance, tier, access_count, created_at, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, 'peripheral', 0, ?, ?)
+  `).run(id, text, hash, category, scope, importance, now, options.metadata ? JSON.stringify(options.metadata) : null);
+
+  // Insert vector
+  if (embedding) {
+    ensureMemoriesVecTable(db, embedding.length);
+    db.prepare(`INSERT INTO memories_vec (id, embedding) VALUES (?, ?)`).run(id, new Float32Array(embedding));
+  }
+
+  // Changelog
+  db.prepare(`INSERT INTO memory_history (memory_id, action, new_value, timestamp) VALUES (?, 'ADD', ?, ?)`).run(id, text, now);
+
+  return { id, status: "created" };
+}
+
+export async function memoryRecall(
+  db: Database,
+  options: MemoryRecallOptions
+): Promise<MemoryRecallResult[]> {
+  const query = options.query.trim();
+  if (!query) return [];
+  const limit = options.limit || 10;
+  const scope = options.scope;
+  const category = options.category;
+
+  const results = new Map<string, MemoryRecallResult>();
+
+  // 1. FTS search
+  try {
+    let ftsQuery = `SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ?`;
+    const ftsParams: unknown[] = [query];
+
+    const ftsResults = db.prepare(ftsQuery).all(...ftsParams) as { rowid: number; rank: number }[];
+    for (const r of ftsResults) {
+      const mem = db.prepare(`SELECT * FROM memories WHERE rowid = ?`).get(r.rowid) as Memory | null;
+      if (!mem) continue;
+      if (scope && mem.scope !== scope) continue;
+      if (category && mem.category !== category) continue;
+      results.set(mem.id, {
+        id: mem.id,
+        text: mem.text,
+        category: mem.category,
+        scope: mem.scope,
+        importance: mem.importance,
+        score: Math.abs(r.rank), // FTS5 rank is negative
+        created_at: mem.created_at,
+      });
+    }
+  } catch {
+    // FTS may fail on complex queries
+  }
+
+  // 2. Vector search
+  const queryEmbedding = await embedQuery(query);
+  if (queryEmbedding) {
+    try {
+      const vecResults = db.prepare(
+        `SELECT id, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?`
+      ).all(new Float32Array(queryEmbedding), limit * 3) as { id: string; distance: number }[];
+
+      for (const r of vecResults) {
+        const similarity = 1 - r.distance;
+        if (similarity < 0.3) continue;
+        const mem = db.prepare(`SELECT * FROM memories WHERE id = ?`).get(r.id) as Memory | null;
+        if (!mem) continue;
+        if (scope && mem.scope !== scope) continue;
+        if (category && mem.category !== category) continue;
+
+        const existing = results.get(mem.id);
+        if (existing) {
+          // RRF-style fusion: boost score when both FTS and vec match
+          existing.score = existing.score + similarity;
+        } else {
+          results.set(mem.id, {
+            id: mem.id,
+            text: mem.text,
+            category: mem.category,
+            scope: mem.scope,
+            importance: mem.importance,
+            score: similarity,
+            created_at: mem.created_at,
+          });
+        }
+      }
+    } catch {
+      // memories_vec may not exist
+    }
+  }
+
+  // 3. Apply keyword boost
+  const keywords = extractKeywords(query);
+  for (const result of results.values()) {
+    const textLower = result.text.toLowerCase();
+    let hits = 0;
+    for (const kw of keywords) {
+      if (textLower.includes(kw)) hits++;
+    }
+    if (keywords.length > 0) {
+      result.score *= 1 + 0.3 * (hits / keywords.length);
+    }
+  }
+
+  // 4. Sort by score, limit, update access counts
+  const sorted = [...results.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+
+  // Touch access counts for recalled memories
+  const now = Date.now();
+  for (const r of sorted) {
+    db.prepare(`UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?`).run(now, r.id);
+  }
+
+  return sorted;
+}
+
+export function memoryForget(
+  db: Database,
+  id: string
+): { deleted: boolean } {
+  const mem = db.prepare(`SELECT text FROM memories WHERE id = ?`).get(id) as { text: string } | null;
+  if (!mem) return { deleted: false };
+
+  const now = Date.now();
+  db.prepare(`INSERT INTO memory_history (memory_id, action, old_value, timestamp) VALUES (?, 'DELETE', ?, ?)`).run(id, mem.text, now);
+  db.prepare(`DELETE FROM memories WHERE id = ?`).run(id);
+  try { db.prepare(`DELETE FROM memories_vec WHERE id = ?`).run(id); } catch {}
+
+  return { deleted: true };
+}
+
+export async function memoryUpdate(
+  db: Database,
+  options: MemoryUpdateOptions
+): Promise<{ updated: boolean }> {
+  const mem = db.prepare(`SELECT * FROM memories WHERE id = ?`).get(options.id) as Memory | null;
+  if (!mem) return { updated: false };
+
+  const now = Date.now();
+  const changes: string[] = [];
+
+  if (options.text !== undefined && options.text !== mem.text) {
+    const newText = options.text.trim();
+    const newHash = contentHash(newText);
+    db.prepare(`UPDATE memories SET text = ?, content_hash = ? WHERE id = ?`).run(newText, newHash, options.id);
+    db.prepare(`INSERT INTO memory_history (memory_id, action, old_value, new_value, timestamp) VALUES (?, 'UPDATE', ?, ?, ?)`).run(options.id, mem.text, newText, now);
+
+    // Re-embed
+    const embedding = await embedText(newText);
+    if (embedding) {
+      ensureMemoriesVecTable(db, embedding.length);
+      try { db.prepare(`DELETE FROM memories_vec WHERE id = ?`).run(options.id); } catch {}
+      db.prepare(`INSERT INTO memories_vec (id, embedding) VALUES (?, ?)`).run(options.id, new Float32Array(embedding));
+    }
+    changes.push("text");
+  }
+
+  if (options.importance !== undefined) {
+    db.prepare(`UPDATE memories SET importance = ? WHERE id = ?`).run(Math.max(0, Math.min(1, options.importance)), options.id);
+    changes.push("importance");
+  }
+
+  if (options.category !== undefined) {
+    db.prepare(`UPDATE memories SET category = ? WHERE id = ?`).run(options.category, options.id);
+    changes.push("category");
+  }
+
+  if (options.metadata !== undefined) {
+    db.prepare(`UPDATE memories SET metadata = ? WHERE id = ?`).run(JSON.stringify(options.metadata), options.id);
+    changes.push("metadata");
+  }
+
+  return { updated: changes.length > 0 };
+}
+
+// =============================================================================
+// Memory stats
+// =============================================================================
+
+export function memoryStats(db: Database): {
+  total: number;
+  byTier: Record<string, number>;
+  byCategory: Record<string, number>;
+  byScope: Record<string, number>;
+} {
+  const total = (db.prepare(`SELECT COUNT(*) as count FROM memories`).get() as { count: number }).count;
+  const tierRows = db.prepare(`SELECT tier, COUNT(*) as count FROM memories GROUP BY tier`).all() as { tier: string; count: number }[];
+  const catRows = db.prepare(`SELECT category, COUNT(*) as count FROM memories GROUP BY category`).all() as { category: string; count: number }[];
+  const scopeRows = db.prepare(`SELECT scope, COUNT(*) as count FROM memories GROUP BY scope`).all() as { scope: string; count: number }[];
+
+  return {
+    total,
+    byTier: Object.fromEntries(tierRows.map(r => [r.tier, r.count])),
+    byCategory: Object.fromEntries(catRows.map(r => [r.category, r.count])),
+    byScope: Object.fromEntries(scopeRows.map(r => [r.scope, r.count])),
+  };
+}
