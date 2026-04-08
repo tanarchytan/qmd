@@ -445,6 +445,20 @@ export async function memoryRecall(
   const timeRef = parseTimeReference(query);
   if (timeRef) {
     const MS_PER_DAY = 86400000;
+
+    // Also inject recent memories by timestamp (temporal queries often don't match FTS/vec)
+    const windowMs = timeRef.windowDays * MS_PER_DAY;
+    const recentRows = db.prepare(
+      `SELECT * FROM memories WHERE created_at > ? AND created_at < ? ORDER BY created_at DESC LIMIT ?`
+    ).all(timeRef.targetMs - windowMs, timeRef.targetMs + windowMs, limit) as Memory[];
+    for (const mem of recentRows) {
+      if (scope && mem.scope !== scope) continue;
+      if (category && mem.category !== category) continue;
+      if (!results.has(mem.id)) {
+        addResult(mem, 0.5); // base score for time-matched memories
+      }
+    }
+
     for (const result of results.values()) {
       const daysDiff = Math.abs(result.created_at - timeRef.targetMs) / MS_PER_DAY;
       const boost = Math.max(0, 0.40 * (1 - daysDiff / timeRef.windowDays));

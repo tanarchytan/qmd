@@ -8,9 +8,19 @@
  */
 
 import type { Database } from "../db.js";
-import { memoryStore } from "./index.js";
-import { extractAndStore as _extractAndStore } from "./extractor.js";
+import { extractAndStore as _rawExtractAndStore } from "./extractor.js";
 import { readFileSync, writeFileSync } from "node:fs";
+
+// Break circular: memoryStore is resolved lazily at call time
+async function getMemoryStore() {
+  const mod = await import("./index.js");
+  return mod.memoryStore;
+}
+
+async function extractAndStore(db: Database, text: string, scope?: string) {
+  const store = await getMemoryStore();
+  return _rawExtractAndStore(db, text, scope, store);
+}
 
 // =============================================================================
 // Types
@@ -168,7 +178,7 @@ export async function importConversation(
 
     if (chunk.length < 30) continue;
 
-    const result = await _extractAndStore(db, chunk, scope, memoryStore);
+    const result = await extractAndStore(db, chunk, scope);
     memoriesStored += result.stored;
     duplicates += result.duplicates;
   }
@@ -206,7 +216,8 @@ export async function importMemories(
   let duplicates = 0;
 
   for (const mem of memories) {
-    const result = await memoryStore(db, {
+    const store = await getMemoryStore();
+    const result = await store(db, {
       text: mem.text,
       category: mem.category as any,
       scope: mem.scope,
