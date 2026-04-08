@@ -103,7 +103,7 @@ import {
 } from "../collections.js";
 import { getEmbeddedQmdSkillContent, getEmbeddedQmdSkillFiles } from "../embedded-skills.js";
 import { isLocalEnabled, getRemoteConfig } from "../remote-config.js";
-import { memoryStore, memoryRecall, memoryForget, memoryStats, extractAndStore, runDecayPass } from "../memory/index.js";
+import { memoryStore, memoryRecall, memoryForget, memoryStats, extractAndStore, runDecayPass, importConversation, exportMemories, importMemories } from "../memory/index.js";
 
 // Enable production mode - allows using default database path
 // Tests must set INDEX_PATH or use createStore() with explicit path
@@ -3401,8 +3401,35 @@ if (isMain) {
       } else if (subCmd === "decay") {
         const result = runDecayPass(db);
         console.log(`Processed ${result.processed}, promoted ${result.promoted}, demoted ${result.demoted}, stale ${result.stale}`);
+      } else if (subCmd === "import") {
+        const filePath = cli.args[1];
+        if (!filePath) { console.error("Usage: qmd memory import <file.json>"); process.exit(1); }
+        if (filePath.endsWith(".json")) {
+          // Try as memory export first, fall back to conversation
+          try {
+            const content = readFileSync(filePath, "utf-8");
+            const parsed = JSON.parse(content);
+            if (Array.isArray(parsed) && parsed[0]?.text && parsed[0]?.category) {
+              const result = await importMemories(db, filePath);
+              console.log(`Imported ${result.imported} memories, ${result.duplicates} duplicates`);
+            } else {
+              const result = await importConversation(db, filePath, cli.args[2]);
+              console.log(`Parsed ${result.messages} messages, stored ${result.memoriesStored} memories, ${result.duplicates} duplicates`);
+            }
+          } catch (err) {
+            console.error(`Import failed: ${err instanceof Error ? err.message : err}`);
+            process.exit(1);
+          }
+        } else {
+          const result = await importConversation(db, filePath, cli.args[2]);
+          console.log(`Parsed ${result.messages} messages, stored ${result.memoriesStored} memories, ${result.duplicates} duplicates`);
+        }
+      } else if (subCmd === "export") {
+        const filePath = cli.args[1] || "memories.json";
+        const count = exportMemories(db, filePath);
+        console.log(`Exported ${count} memories to ${filePath}`);
       } else {
-        console.error("Usage: qmd memory <store|recall|forget|extract|stats|decay> [args]");
+        console.error("Usage: qmd memory <store|recall|forget|extract|stats|decay|import|export> [args]");
         process.exit(1);
       }
       closeDb();

@@ -39,6 +39,7 @@ export { runDecayPass, type DecayResult } from "./decay.js";
 export { extractAndStore, type ExtractionResult } from "./extractor.js";
 export { classifyMemory, extractPreferences, hasMemorySignal } from "./patterns.js";
 export { knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeAbout, toSlug } from "./knowledge.js";
+export { importConversation, exportMemories, importMemories } from "./import.js";
 
 // =============================================================================
 // Types
@@ -126,6 +127,48 @@ const STOP_WORDS = new Set([
 function extractKeywords(text: string): string[] {
   return text.toLowerCase().split(/\s+/)
     .filter(w => w.length > 2 && !STOP_WORDS.has(w));
+}
+
+// =============================================================================
+// Temporal reference parsing (from MemPalace HYBRID_MODE.md)
+// Detects "N days/weeks/months ago", "last week", "recently" etc.
+// =============================================================================
+
+type TimeReference = { targetMs: number; windowDays: number };
+
+function parseTimeReference(query: string): TimeReference | null {
+  const now = Date.now();
+  const MS_PER_DAY = 86400000;
+  const lower = query.toLowerCase();
+
+  // "N days ago"
+  let match = lower.match(/(\d+)\s*days?\s*ago/);
+  if (match) return { targetMs: now - parseInt(match[1]!) * MS_PER_DAY, windowDays: 3 };
+
+  // "a couple of days ago"
+  if (/a couple of days ago/.test(lower)) return { targetMs: now - 2 * MS_PER_DAY, windowDays: 2 };
+
+  // "N weeks ago"
+  match = lower.match(/(\d+)\s*weeks?\s*ago/);
+  if (match) return { targetMs: now - parseInt(match[1]!) * 7 * MS_PER_DAY, windowDays: 7 };
+
+  // "a week ago" / "last week"
+  if (/(?:a week ago|last week)/.test(lower)) return { targetMs: now - 7 * MS_PER_DAY, windowDays: 7 };
+
+  // "N months ago"
+  match = lower.match(/(\d+)\s*months?\s*ago/);
+  if (match) return { targetMs: now - parseInt(match[1]!) * 30 * MS_PER_DAY, windowDays: 14 };
+
+  // "a month ago" / "last month"
+  if (/(?:a month ago|last month)/.test(lower)) return { targetMs: now - 30 * MS_PER_DAY, windowDays: 14 };
+
+  // "yesterday"
+  if (/yesterday/.test(lower)) return { targetMs: now - MS_PER_DAY, windowDays: 1 };
+
+  // "recently" / "the other day"
+  if (/(?:recently|the other day)/.test(lower)) return { targetMs: now - 3 * MS_PER_DAY, windowDays: 7 };
+
+  return null;
 }
 
 // =============================================================================
@@ -386,6 +429,18 @@ export async function memoryRecall(
   for (const result of results.values()) {
     const decay = getDecayScore(result.created_at, result._access_count, result.importance, result._tier);
     result.score *= decay;
+  }
+
+  // 4b. Temporal boost — memories near a time reference in the query score higher
+  // From MemPalace HYBRID_MODE.md: up to 40% boost for time-proximate memories
+  const timeRef = parseTimeReference(query);
+  if (timeRef) {
+    const MS_PER_DAY = 86400000;
+    for (const result of results.values()) {
+      const daysDiff = Math.abs(result.created_at - timeRef.targetMs) / MS_PER_DAY;
+      const boost = Math.max(0, 0.40 * (1 - daysDiff / timeRef.windowDays));
+      if (boost > 0) result.score *= 1 + boost;
+    }
   }
 
   // 5. Sort by score, limit, update access counts
