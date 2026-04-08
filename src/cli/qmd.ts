@@ -103,6 +103,7 @@ import {
 } from "../collections.js";
 import { getEmbeddedQmdSkillContent, getEmbeddedQmdSkillFiles } from "../embedded-skills.js";
 import { isLocalEnabled, getRemoteConfig } from "../remote-config.js";
+import { memoryStore, memoryRecall, memoryForget, memoryStats, extractAndStore, runDecayPass } from "../memory/index.js";
 
 // Enable production mode - allows using default database path
 // Tests must set INDEX_PATH or use createStore() with explicit path
@@ -337,7 +338,14 @@ async function showStatus(): Promise<void> {
   // Most recent update across all collections
   const mostRecent = db.prepare(`SELECT MAX(modified_at) as latest FROM documents WHERE active = 1`).get() as { latest: string | null };
 
-  console.log(`${c.bold}QMD Status${c.reset}\n`);
+  // Read version from package.json
+  let version = "unknown";
+  try {
+    const pkgPath = pathJoin(dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1")), "../../package.json");
+    version = JSON.parse(readFileSync(pkgPath, "utf-8")).version ?? "unknown";
+  } catch {}
+
+  console.log(`${c.bold}QMD Status${c.reset}  v${version}\n`);
   console.log(`Index: ${dbPath}`);
   console.log(`Size:  ${formatBytes(indexSize)}`);
 
@@ -3349,6 +3357,54 @@ if (isMain) {
       const sizeAfter = statSync(dbPath).size;
       const freed = sizeBefore - sizeAfter;
       console.log(`${c.green}✓${c.reset} Vacuumed: ${formatBytes(sizeBefore)} → ${formatBytes(sizeAfter)}${freed > 0 ? ` (${formatBytes(freed)} freed)` : ''}`);
+      closeDb();
+      break;
+    }
+
+    case "memory": {
+      const subCmd = cli.args[0];
+      const db = getDb();
+
+      if (subCmd === "store" || subCmd === "add") {
+        const text = cli.args.slice(1).join(" ");
+        if (!text) { console.error("Usage: qmd memory store <text>"); process.exit(1); }
+        const result = await memoryStore(db, { text });
+        console.log(result.status === "created" ? `Stored: ${result.id}` : `Duplicate: ${result.duplicate_id}`);
+      } else if (subCmd === "recall" || subCmd === "search") {
+        const query = cli.args.slice(1).join(" ");
+        if (!query) { console.error("Usage: qmd memory recall <query>"); process.exit(1); }
+        const results = await memoryRecall(db, { query, limit: 10 });
+        if (results.length === 0) { console.log("No memories found."); }
+        else {
+          for (const r of results) {
+            console.log(`[${r.category}] (score: ${r.score.toFixed(2)}) ${r.text}`);
+            console.log(`  id: ${r.id}`);
+          }
+        }
+      } else if (subCmd === "forget" || subCmd === "delete") {
+        const id = cli.args[1];
+        if (!id) { console.error("Usage: qmd memory forget <id>"); process.exit(1); }
+        const result = memoryForget(db, id);
+        console.log(result.deleted ? `Deleted: ${id}` : `Not found: ${id}`);
+      } else if (subCmd === "extract") {
+        const text = cli.args.slice(1).join(" ");
+        if (!text) { console.error("Usage: qmd memory extract <text>"); process.exit(1); }
+        const result = await extractAndStore(db, text);
+        console.log(`Extracted ${result.extracted.length} memories: ${result.stored} stored, ${result.duplicates} duplicates`);
+        for (const m of result.extracted) { console.log(`  [${m.category}] ${m.text.slice(0, 100)}`); }
+      } else if (subCmd === "stats") {
+        const stats = memoryStats(db);
+        console.log(`Total: ${stats.total}`);
+        console.log(`Tiers: ${Object.entries(stats.byTier).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none'}`);
+        console.log(`Categories: ${Object.entries(stats.byCategory).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none'}`);
+        console.log(`Scopes: ${Object.entries(stats.byScope).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none'}`);
+      } else if (subCmd === "decay") {
+        const result = runDecayPass(db);
+        console.log(`Processed ${result.processed}, promoted ${result.promoted}, demoted ${result.demoted}, stale ${result.stale}`);
+      } else {
+        console.error("Usage: qmd memory <store|recall|forget|extract|stats|decay> [args]");
+        process.exit(1);
+      }
       closeDb();
       break;
     }
