@@ -369,8 +369,9 @@ function personNameBoost(query: string, text: string): number {
 function applySearchBoosts(query: string, text: string, score: number): number {
   let boost = 1.0;
   boost *= keywordOverlapBoost(query, text);
-  boost *= quotedPhraseBoost(query, text);
-  boost *= personNameBoost(query, text);
+  // Short-circuit: only run phrase/name boosts if query has indicators
+  if (query.includes('"') || query.includes("'")) boost *= quotedPhraseBoost(query, text);
+  if (/[A-Z][a-z]{2,}/.test(query)) boost *= personNameBoost(query, text);
   return score * boost;
 }
 

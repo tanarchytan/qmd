@@ -11,7 +11,11 @@
 
 import type { Database } from "../db.js";
 import { classifyMemory, extractPreferences, hasMemorySignal, type PatternCategory } from "./patterns.js";
-import { memoryStore, type MemoryStoreOptions } from "./index.js";
+
+// Note: memoryStore is passed as a parameter to break circular import
+// (index.ts exports from extractor.ts, extractor.ts was importing from index.ts)
+type StoreFn = (db: Database, opts: any) =>
+  Promise<{ id: string; status: "created" | "duplicate"; duplicate_id?: string }>;
 
 export type ExtractedMemory = {
   text: string;
@@ -123,7 +127,11 @@ export async function extractAndStore(
   db: Database,
   text: string,
   scope?: string,
+  storeFn?: StoreFn,
 ): Promise<ExtractionResult> {
+  // storeFn is injected by the caller (memory/index.ts) to break circular import
+  const store = storeFn!;
+
   // Heuristic extraction (zero-LLM, proven effective by MemPalace benchmarks)
   const extracted = extractHeuristic(text);
 
@@ -135,7 +143,7 @@ export async function extractAndStore(
 
   // Store each extracted memory
   for (const mem of extracted) {
-    const result = await memoryStore(db, {
+    const result = await store(db, {
       text: mem.text,
       category: mem.category,
       scope,
@@ -147,7 +155,7 @@ export async function extractAndStore(
 
   // Store preference synthetic entries (lower importance, tagged as preference)
   for (const pref of preferences) {
-    const result = await memoryStore(db, {
+    const result = await store(db, {
       text: pref,
       category: "preference",
       scope,

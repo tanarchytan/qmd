@@ -36,7 +36,13 @@ function setCachedEmbedding(text: string, embedding: number[]): void {
   embedCache.set(key, embedding);
 }
 export { runDecayPass, type DecayResult } from "./decay.js";
-export { extractAndStore, type ExtractionResult } from "./extractor.js";
+import { extractAndStore as _extractAndStore, type ExtractionResult } from "./extractor.js";
+export type { ExtractionResult } from "./extractor.js";
+
+/** Wrapper that injects memoryStore to break circular import */
+export async function extractAndStore(db: Database, text: string, scope?: string): Promise<ExtractionResult> {
+  return _extractAndStore(db, text, scope, memoryStore);
+}
 export { classifyMemory, extractPreferences, hasMemorySignal } from "./patterns.js";
 export { knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeAbout, toSlug } from "./knowledge.js";
 export { importConversation, exportMemories, importMemories } from "./import.js";
@@ -378,7 +384,10 @@ export async function memoryRecall(
     }
   };
 
-  // 1. FTS search — sanitize query for FTS5 syntax
+  // 1+2. FTS and embedding run in parallel (embedding is the slow part)
+  const embeddingPromise = embedQuery(query);
+
+  // FTS search (synchronous, runs while embedding request is in flight)
   try {
     const safeFtsQuery = `"${query.replace(/"/g, '""')}"`;
     const ftsResults = db.prepare(
@@ -393,8 +402,8 @@ export async function memoryRecall(
     // FTS may fail on complex queries
   }
 
-  // 2. Vector search
-  const queryEmbedding = await embedQuery(query);
+  // Vector search (await the embedding that started in parallel with FTS)
+  const queryEmbedding = await embeddingPromise;
   if (queryEmbedding) {
     try {
       const vecResults = db.prepare(

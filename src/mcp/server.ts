@@ -108,7 +108,14 @@ function getPackageVersion(): string {
  * Injected into the LLM's system prompt via MCP initialize response —
  * gives the LLM immediate context about what's searchable without a tool call.
  */
+// Cached instructions — rebuilt every 60 seconds or on first call
+let _instructionsCache: { text: string; builtAt: number } | null = null;
+const INSTRUCTIONS_TTL_MS = 60_000;
+
 async function buildInstructions(store: QMDStore): Promise<string> {
+  if (_instructionsCache && Date.now() - _instructionsCache.builtAt < INSTRUCTIONS_TTL_MS) {
+    return _instructionsCache.text;
+  }
   const status = await store.getStatus();
   const contexts = await store.listContexts();
   const globalCtx = await store.getGlobalContext();
@@ -175,7 +182,9 @@ async function buildInstructions(store: QMDStore): Promise<string> {
   lines.push("  - Use `minScore: 0.5` to filter low-confidence results.");
   lines.push("  - Results include a `context` field describing the content type.");
 
-  return lines.join("\n");
+  const result = lines.join("\n");
+  _instructionsCache = { text: result, builtAt: Date.now() };
+  return result;
 }
 
 /**

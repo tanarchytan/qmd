@@ -1,6 +1,6 @@
 {
   "name": "@tanarchy/qmd",
-  "version": "2.1.0-dev.9",
+  "version": "2.1.0-dev.11",
   "description": "Query Markup Documents - On-device hybrid search for markdown files with BM25, vector search, and LLM reranking",
   "type": "module",
   "main": "dist/index.js",
@@ -88,7 +88,14 @@
     ]
   },
   "peerDependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "openclaw": ">=2026.4.0"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": { "optional": true }
+  },
+  "openclaw": {
+    "extensions": ["./dist/openclaw/plugin.js"]
   },
   "engines": {
     "node": ">=22.0.0"

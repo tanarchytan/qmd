@@ -26,7 +26,31 @@ qmd mcp                           # Start MCP server (stdio transport)
 qmd mcp --http [--port N]         # Start MCP server (HTTP, default port 8181)
 qmd mcp --http --daemon           # Start as background daemon
 qmd mcp stop                      # Stop background MCP daemon
+qmd sync                          # Update all collections + embed (one command)
+qmd vacuum                        # Reclaim database space
+qmd cleanup                       # Clear cache + orphans + vacuum
+qmd memory store <text>           # Store a memory (auto-classify + dedup)
+qmd memory recall <query>         # Search memories
+qmd memory forget <id>            # Delete a memory
+qmd memory extract <text>         # Extract memories from conversation text
+qmd memory stats                  # Memory count by tier/category/scope
+qmd memory decay                  # Run decay pass (promote/demote tiers)
+qmd memory import <file>          # Import memories or conversations
+qmd memory export [file.json]     # Export all memories
 ```
+
+## MCP Tools
+
+Document search: `query`, `get`, `multi_get`, `status`, `briefing`, `manage`
+Memory: `memory_store`, `memory_recall`, `memory_forget`, `memory_update`, `memory_extract`, `memory_stats`
+Knowledge: `knowledge_store`, `knowledge_query`, `knowledge_invalidate`, `knowledge_entities`
+
+## Cloud Configuration
+
+Set in `~/.config/qmd/.env`:
+- `QMD_LOCAL=no` — disable local node-llama-cpp (remote-only mode)
+- `QMD_EMBED_PROVIDER`, `QMD_RERANK_PROVIDER`, `QMD_QUERY_EXPANSION_PROVIDER` — per-operation config
+- See `.env.example` for full reference
 
 ## Collection Management
 
