@@ -2,7 +2,7 @@
   "id": "tanarchy-qmd",
   "name": "Tanarchy QMD",
   "description": "QMD memory + knowledge graph plugin for OpenClaw",
-  "version": "2.1.0-dev.17",
+  "version": "2.1.0-dev.18",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
