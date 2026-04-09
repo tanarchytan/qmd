@@ -13,7 +13,7 @@ declare module "openclaw/plugin-sdk/plugin-entry" {
     description: string;
     kind?: "memory" | "context-engine";
     configSchema?: unknown;
-    register: (api: import("openclaw/plugin-sdk").OpenClawPluginApi) => void;
+    register: (api: import("openclaw/plugin-sdk").OpenClawPluginApi) => void | Promise<void>;
   }): unknown;
 }
 

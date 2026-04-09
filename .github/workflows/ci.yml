@@ -37,36 +37,3 @@ jobs:
         run: npx vitest run --reporter=verbose --testTimeout 60000 test/
         env:
           CI: true
-
-  test-bun:
-    name: Bun (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install SQLite (Ubuntu)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
-
-      - name: Install SQLite (macOS)
-        if: runner.os == 'macOS'
-        run: brew install sqlite
-
-      - name: Verify lockfile is up-to-date
-        run: bun install --frozen-lockfile
-
-      - name: Tests
-        run: bun test --timeout 60000 --preload ./src/test-preload.ts test/
-        env:
-          CI: true
-          DYLD_LIBRARY_PATH: /opt/homebrew/opt/sqlite/lib
-          LD_LIBRARY_PATH: /usr/lib/x86_64-linux-gnu

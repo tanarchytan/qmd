@@ -108,11 +108,31 @@ Example output:
 Conversation text:
 `;
 
-// NOTE: LLM extraction via expandQuery was broken (expandQuery returns lex/vec/hyde
-// format, not free-form extraction). Heuristic extraction is the primary path.
-// MemPalace benchmarks show raw verbatim + heuristic patterns outperforms
-// LLM extraction (96.6% vs Mem0's 30-45%). LLM extraction deferred to when
-// we add a direct chat completions call path.
+// LLM extraction via chatComplete — uses query expansion provider for freeform extraction.
+// Falls back to heuristic if LLM unavailable.
+async function extractWithLLM(text: string): Promise<ExtractedMemory[]> {
+  try {
+    const { getRemoteLLM } = await import("../remote-config.js");
+    const remote = getRemoteLLM();
+    if (!remote) return [];
+    const response = await remote.chatComplete(EXTRACTION_PROMPT + text);
+    if (!response) return [];
+
+    const memories: ExtractedMemory[] = [];
+    for (const line of response.split('\n')) {
+      const match = line.match(/^\[(\w+)\]\s+(.+)/);
+      if (!match) continue;
+      const cat = match[1]!.toLowerCase() as PatternCategory;
+      if (!["preference", "fact", "decision", "entity", "reflection"].includes(cat)) continue;
+      const memText = match[2]!.trim();
+      if (memText.length < 10) continue;
+      memories.push({ text: memText, category: cat, importance: estimateImportance(memText, cat) });
+    }
+    return memories;
+  } catch {
+    return [];
+  }
+}
 
 // =============================================================================
 // Public API
@@ -132,8 +152,11 @@ export async function extractAndStore(
   // storeFn is injected by the caller (memory/index.ts) to break circular import
   const store = storeFn!;
 
-  // Heuristic extraction (zero-LLM, proven effective by MemPalace benchmarks)
-  const extracted = extractHeuristic(text);
+  // Try LLM first (via chatComplete), fall back to heuristic
+  let extracted = await extractWithLLM(text);
+  if (extracted.length === 0) {
+    extracted = extractHeuristic(text);
+  }
 
   // Also extract preference patterns for synthetic FTS entries
   const preferences = extractPreferences(text);

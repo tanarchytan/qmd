@@ -1940,6 +1940,56 @@ export class RemoteLLM implements LLM {
     }
   }
 
+  /**
+   * Send a freeform prompt via the query expansion provider and get text back.
+   * Used for memory extraction, LLM conflict resolution, and other non-search calls.
+   */
+  async chatComplete(prompt: string): Promise<string | null> {
+    const cfg = this.config.queryExpansion;
+    if (!cfg) return null;
+    try {
+      if (cfg.provider === 'gemini') {
+        const baseUrl = (cfg.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
+        const model = cfg.model || 'gemini-2.5-flash';
+        const resp = await fetchWithRetry(
+          `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+          {
+            method: "POST",
+            headers: { "x-goog-api-key": cfg.apiKey, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { temperature: 0, maxOutputTokens: 1000 },
+            }),
+          },
+          { provider: "gemini", operation: "generate", timeoutMs: this.config.timeoutsMs?.generate },
+        );
+        const data = await resp.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+        return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
+      } else {
+        const url = cfg.provider === 'api'
+          ? `${(cfg.url || '').replace(/\/$/, '')}/chat/completions`
+          : cfg.url!;
+        if (!url || url === '/chat/completions') return null;
+        const body: Record<string, unknown> = {
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 1000,
+          temperature: 0,
+        };
+        if (cfg.model) body.model = cfg.model;
+        const resp = await fetchWithRetry(url, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }, { provider: cfg.provider, operation: "generate", timeoutMs: this.config.timeoutsMs?.generate });
+        const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }> };
+        return data.choices?.[0]?.message?.content || null;
+      }
+    } catch (err) {
+      process.stderr.write(`[chatComplete] error: ${err}\n`);
+      return null;
+    }
+  }
+
   async rerank(
     query: string,
     documents: RerankDocument[],

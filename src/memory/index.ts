@@ -44,7 +44,7 @@ export async function extractAndStore(db: Database, text: string, scope?: string
   return _extractAndStore(db, text, scope, memoryStore);
 }
 export { classifyMemory, extractPreferences, hasMemorySignal } from "./patterns.js";
-export { knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeAbout, toSlug } from "./knowledge.js";
+export { knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeAbout, knowledgeTimeline, knowledgeStats, toSlug } from "./knowledge.js";
 export { importConversation, exportMemories, importMemories } from "./import.js";
 
 // =============================================================================
@@ -325,8 +325,46 @@ export async function memoryStore(
   if (embedding) {
     const similar = findSimilarMemory(db, embedding, 0.9);
     if (similar) {
-      db.prepare(`UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?`).run(now, similar.id);
-      return { id: similar.id, status: "duplicate", duplicate_id: similar.id };
+      // Try LLM conflict resolution if available (from Mem0 pattern)
+      try {
+        const { getRemoteLLM } = await import("./index.js").then(() => import("../remote-config.js"));
+        const remote = getRemoteLLM();
+        if (remote) {
+          const existingMem = db.prepare(`SELECT text FROM memories WHERE id = ?`).get(similar.id) as { text: string } | null;
+          if (existingMem) {
+            const prompt = `Compare these two memory statements and decide the action:\n\nExisting: "${existingMem.text}"\nNew: "${text}"\n\nRespond with exactly one word: ADD (new fact), UPDATE (merge into existing), DELETE (contradicts existing), or NONE (duplicate).`;
+            const decision = await remote.chatComplete(prompt);
+            const action = decision?.trim().toUpperCase();
+            if (action === "UPDATE") {
+              const merged = await remote.chatComplete(`Merge these into one concise statement:\n1. "${existingMem.text}"\n2. "${text}"\n\nRespond with only the merged statement.`);
+              if (merged && merged.length > 10) {
+                db.prepare(`UPDATE memories SET text = ?, content_hash = ?, last_accessed = ? WHERE id = ?`).run(merged.trim(), contentHash(merged.trim()), now, similar.id);
+                db.prepare(`INSERT INTO memory_history (memory_id, action, old_value, new_value, timestamp) VALUES (?, 'UPDATE', ?, ?, ?)`).run(similar.id, existingMem.text, merged.trim(), now);
+                return { id: similar.id, status: "duplicate", duplicate_id: similar.id };
+              }
+            } else if (action === "DELETE") {
+              db.prepare(`INSERT INTO memory_history (memory_id, action, old_value, timestamp) VALUES (?, 'DELETE', ?, ?)`).run(similar.id, existingMem.text, now);
+              db.prepare(`DELETE FROM memories WHERE id = ?`).run(similar.id);
+              try { db.prepare(`DELETE FROM memories_vec WHERE id = ?`).run(similar.id); } catch {}
+              // Fall through to insert the new memory
+            } else if (action === "ADD") {
+              // Fall through to insert as new memory
+            } else {
+              // NONE or unrecognized — treat as duplicate
+              db.prepare(`UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?`).run(now, similar.id);
+              return { id: similar.id, status: "duplicate", duplicate_id: similar.id };
+            }
+          }
+        } else {
+          // No LLM — fall back to cosine threshold
+          db.prepare(`UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?`).run(now, similar.id);
+          return { id: similar.id, status: "duplicate", duplicate_id: similar.id };
+        }
+      } catch {
+        // LLM conflict resolution failed — fall back to cosine threshold
+        db.prepare(`UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?`).run(now, similar.id);
+        return { id: similar.id, status: "duplicate", duplicate_id: similar.id };
+      }
     }
   }
 
@@ -370,7 +408,8 @@ export async function memoryRecall(
   const results = new Map<string, MemoryRecallResult & { _access_count: number; _tier: string }>();
 
   const addResult = (mem: Memory, score: number) => {
-    if (scope && mem.scope !== scope) return;
+    // Multi-agent: agent-scoped queries also see global memories
+    if (scope && mem.scope !== scope && mem.scope !== "global") return;
     if (category && mem.category !== category) return;
     const existing = results.get(mem.id);
     if (existing) {

@@ -1018,6 +1018,9 @@ function initializeDatabase(db: Database): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_knowledge_predicate ON knowledge(predicate)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_knowledge_object ON knowledge(object)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_knowledge_valid ON knowledge(valid_from, valid_until)`);
+  // Add scope column for multi-agent isolation (migration-safe)
+  try { db.exec(`ALTER TABLE knowledge ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'`); } catch {}
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_knowledge_scope ON knowledge(scope)`);
 }
 
 // =============================================================================

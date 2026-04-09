@@ -1,11 +1,11 @@
 ---
 name: qmd
-description: Search markdown knowledge bases, notes, and documentation using QMD. Use when users ask to search notes, find documents, or look up information.
+description: Search + memory + knowledge graph for AI agents. Use for searching docs, storing memories, tracking knowledge, and recalling past decisions.
 license: MIT
-compatibility: Requires qmd CLI or MCP server. Install via `npm install -g @tanarchy/qmd`.
+compatibility: Requires qmd CLI or MCP server. Install via `npm install -g @tanarchy/qmd@dev`.
 metadata:
   author: tanarchy
-  version: "2.1.0"
+  version: "2.1.0-dev"
 allowed-tools: Bash(qmd:*), mcp__qmd__*
 ---
 
@@ -150,7 +150,19 @@ curl -X POST http://localhost:8181/query \
 ## Setup
 
 ```bash
-npm install -g @tanarchy/qmd
+npm install -g @tanarchy/qmd@dev
 qmd collection add ~/notes --name notes
 qmd embed
+```
+
+## Memory
+
+```bash
+qmd memory store "I prefer TypeScript for backend"    # Store (auto-classify)
+qmd memory recall "what language do I prefer"          # Search memories
+qmd memory extract "conversation text here"            # Extract from conversation
+qmd memory stats                                       # Stats by tier/category/scope
+qmd memory decay                                       # Run decay pass
+qmd memory import conversations.json                   # Import conversations
+qmd memory export memories.json                        # Export all memories
 ```

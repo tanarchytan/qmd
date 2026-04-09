@@ -34,7 +34,7 @@ import {
 } from "../index.js";
 import { getConfigPath } from "../collections.js";
 import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections as storeListCollections, generateEmbeddings, reindexCollection } from "../store.js";
-import { memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, extractAndStore, knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, MEMORY_CATEGORIES } from "../memory/index.js";
+import { memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, extractAndStore, knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeTimeline, knowledgeStats, MEMORY_CATEGORIES } from "../memory/index.js";
 
 // =============================================================================
 // Types for structured content
@@ -866,6 +866,47 @@ Intent-aware lex (C++ performance, not sports):
         return { content: [{ type: "text", text: "No entities in knowledge graph." }] };
       }
       return { content: [{ type: "text", text: `Entities (${entities.length}):\n${entities.join('\n')}` }] };
+    }
+  );
+
+  server.registerTool(
+    "knowledge_timeline",
+    {
+      title: "Knowledge Timeline",
+      description: "Show all facts about an entity over time (including expired).",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {
+        subject: z.string().describe("Entity name"),
+      },
+    },
+    async ({ subject }) => {
+      const db = store.internal.db;
+      const facts = knowledgeTimeline(db, subject);
+      if (facts.length === 0) return { content: [{ type: "text", text: `No facts found for "${subject}".` }] };
+      const lines = facts.map(r => {
+        const from = r.valid_from ? new Date(r.valid_from).toISOString().slice(0, 10) : "always";
+        const until = r.valid_until ? new Date(r.valid_until).toISOString().slice(0, 10) : "current";
+        return `${from} → ${until}: ${r.subject} → ${r.predicate} → ${r.object}`;
+      });
+      return { content: [{ type: "text", text: lines.join('\n') }] };
+    }
+  );
+
+  server.registerTool(
+    "knowledge_stats",
+    {
+      title: "Knowledge Stats",
+      description: "Show knowledge graph statistics: entity count, fact count, active vs expired.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {},
+    },
+    async () => {
+      const db = store.internal.db;
+      const stats = knowledgeStats(db);
+      return {
+        content: [{ type: "text", text: `Entities: ${stats.entities}\nFacts: ${stats.facts} (${stats.activeFacts} active, ${stats.expiredFacts} expired)` }],
+        structuredContent: stats,
+      };
     }
   );
 

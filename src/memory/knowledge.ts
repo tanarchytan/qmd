@@ -34,6 +34,7 @@ export type KnowledgeStoreOptions = {
   valid_from?: number;
   confidence?: number;
   source_memory_id?: string;
+  scope?: string;
 };
 
 export type KnowledgeQueryOptions = {
@@ -41,6 +42,7 @@ export type KnowledgeQueryOptions = {
   predicate?: string;
   object?: string;
   as_of?: number;  // timestamp — return facts valid at this time
+  scope?: string;
   limit?: number;
 };
 
@@ -72,6 +74,7 @@ export function knowledgeStore(
   const subject = toSlug(options.subject);
   const predicate = options.predicate.toLowerCase().trim();
   const object = options.object.trim();
+  const scope = options.scope || "global";
   const now = Date.now();
   const validFrom = options.valid_from ?? now;
   const confidence = Math.max(0, Math.min(1, options.confidence ?? 1.0));
@@ -95,9 +98,9 @@ export function knowledgeStore(
 
   const id = randomUUID();
   db.prepare(`
-    INSERT INTO knowledge (id, subject, predicate, object, valid_from, confidence, source_memory_id, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, subject, predicate, object, validFrom, confidence, options.source_memory_id ?? null, now);
+    INSERT INTO knowledge (id, subject, predicate, object, valid_from, confidence, source_memory_id, scope, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, subject, predicate, object, validFrom, confidence, options.source_memory_id ?? null, scope, now);
 
   return { id, invalidated };
 }
@@ -124,6 +127,11 @@ export function knowledgeQuery(
   if (options.object) {
     conditions.push("object LIKE ? ESCAPE '\\'");
     params.push(`%${options.object.replace(/[%_\\]/g, '\\$&')}%`);
+  }
+  if (options.scope) {
+    // Multi-agent: scope filter also includes global
+    conditions.push("(scope = ? OR scope = 'global')");
+    params.push(options.scope);
   }
   if (options.as_of !== undefined) {
     conditions.push("(valid_from IS NULL OR valid_from <= ?)");
@@ -171,4 +179,27 @@ export function knowledgeAbout(db: Database, subject: string): KnowledgeEntry[] 
   return db.prepare(`
     SELECT * FROM knowledge WHERE subject = ? AND valid_until IS NULL ORDER BY predicate
   `).all(slug) as KnowledgeEntry[];
+}
+
+/**
+ * Timeline: all facts about an entity, sorted by time (including expired).
+ * From MemPalace tool_kg_timeline.
+ */
+export function knowledgeTimeline(db: Database, subject: string): KnowledgeEntry[] {
+  const slug = toSlug(subject);
+  return db.prepare(`
+    SELECT * FROM knowledge WHERE subject = ? ORDER BY valid_from ASC, created_at ASC
+  `).all(slug) as KnowledgeEntry[];
+}
+
+/**
+ * Knowledge graph stats.
+ */
+export function knowledgeStats(db: Database): {
+  entities: number; facts: number; activeFacts: number; expiredFacts: number;
+} {
+  const entities = (db.prepare(`SELECT COUNT(DISTINCT subject) as c FROM knowledge`).get() as { c: number }).c;
+  const facts = (db.prepare(`SELECT COUNT(*) as c FROM knowledge`).get() as { c: number }).c;
+  const activeFacts = (db.prepare(`SELECT COUNT(*) as c FROM knowledge WHERE valid_until IS NULL`).get() as { c: number }).c;
+  return { entities, facts, activeFacts, expiredFacts: facts - activeFacts };
 }
