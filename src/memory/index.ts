@@ -409,7 +409,6 @@ export async function memoryRecall(
   const results = new Map<string, MemoryRecallResult & { _access_count: number; _tier: string }>();
 
   const addResult = (mem: Memory, score: number) => {
-    // Multi-agent: agent-scoped queries also see global memories
     if (scope && mem.scope !== scope && mem.scope !== "global") return;
     if (category && mem.category !== category) return;
     const existing = results.get(mem.id);
@@ -423,6 +422,21 @@ export async function memoryRecall(
       });
     }
   };
+
+  // 0. Query expansion — generate additional search terms via LLM (if configured)
+  let expandedTerms: string[] = [];
+  if (options.rerank !== false) { // reuse rerank flag as "use advanced features"
+    try {
+      const remoteConfig = getRemoteConfig();
+      if (remoteConfig?.queryExpansion) {
+        const remote = getRemoteLLM()!;
+        const expanded = await remote.expandQuery(query, { includeLexical: true });
+        expandedTerms = expanded
+          .filter(r => r.type === "lex" && r.text !== query)
+          .map(r => r.text);
+      }
+    } catch { /* expansion optional */ }
+  }
 
   // 1+2. FTS and embedding run in parallel (embedding is the slow part)
   const embeddingPromise = embedQuery(query);
@@ -465,6 +479,24 @@ export async function memoryRecall(
     for (const r of ftsResults) {
       const mem = getByRowid.get(r.rowid) as Memory | null;
       if (mem) addResult(mem, Math.abs(r.rank));
+    }
+
+    // Run expanded queries through FTS (lower weight — 0.5x)
+    for (const eq of expandedTerms) {
+      const eqTerms = eq.replace(/[^\p{L}\p{N}\s'_-]/gu, '').split(/\s+/)
+        .map(t => t.toLowerCase().replace(/[^\p{L}\p{N}'_]/gu, ''))
+        .filter(t => t.length >= 2 && !STOP_WORDS.has(t));
+      if (eqTerms.length === 0) continue;
+      const eqFts = eqTerms.map(t => `"${t}"*`).join(' OR ');
+      try {
+        const eqResults = db.prepare(
+          `SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?`
+        ).all(eqFts, limit) as { rowid: number; rank: number }[];
+        for (const r of eqResults) {
+          const mem = getByRowid.get(r.rowid) as Memory | null;
+          if (mem) addResult(mem, Math.abs(r.rank) * 0.5);
+        }
+      } catch { /* skip */ }
     }
   } catch {
     // FTS may fail on complex queries

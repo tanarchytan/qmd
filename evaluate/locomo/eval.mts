@@ -31,6 +31,7 @@ loadQmdEnv();
 const { openDatabase } = await import(toUrl(join(QMD_DIR, "src/db.ts")));
 const { initializeDatabase } = await import(toUrl(join(QMD_DIR, "src/store/db-init.ts")));
 const { memoryStore, memoryRecall } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
+const { knowledgeStore, knowledgeQuery, knowledgeAbout } = await import(toUrl(join(QMD_DIR, "src/memory/knowledge.ts")));
 
 type Database = ReturnType<typeof openDatabase>;
 
@@ -231,6 +232,73 @@ function elapsed(startMs: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// Knowledge triple extraction (regex-based, no LLM needed)
+// ---------------------------------------------------------------------------
+
+function parseTimestampMs(text: string): number | undefined {
+  // Parse "[1:56 pm on 8 May, 2023]" style timestamps
+  const m = text.match(/\[([^\]]+)\]/);
+  if (!m) return undefined;
+  try {
+    const d = new Date(m[1]!.replace(/(\d+:\d+\s*[ap]m)\s+on\s+/i, "$1 "));
+    return isNaN(d.getTime()) ? undefined : d.getTime();
+  } catch { return undefined; }
+}
+
+function extractTriplesFromMemory(text: string, memId: string, scope: string): Array<{
+  subject: string; predicate: string; object: string; valid_from?: number;
+}> {
+  const triples: Array<{ subject: string; predicate: string; object: string; valid_from?: number }> = [];
+  const ts = parseTimestampMs(text);
+
+  // Extract speaker from "[date] Speaker: text" format
+  const speakerMatch = text.match(/\]\s*(\w+):\s*/);
+  const speaker = speakerMatch?.[1] || "";
+  const content = text.replace(/\[[^\]]*\]\s*\w+:\s*/, "").trim();
+  const lower = content.toLowerCase();
+
+  // "I went to X" / "I signed up for X" / "I joined X"
+  const actionPatterns = [
+    { re: /\b(?:went to|attended|visited)\s+(?:a\s+)?(.+?)(?:\.|!|$)/i, pred: "attended" },
+    { re: /\bsigned up for\s+(?:a\s+)?(.+?)(?:\.|!|$)/i, pred: "signed_up_for" },
+    { re: /\bjoined\s+(?:a\s+)?(.+?)(?:\.|!|$)/i, pred: "joined" },
+    { re: /\b(?:going to|plan(?:ning)? to (?:go to|attend))\s+(?:a\s+)?(.+?)(?:\.|!|$)/i, pred: "plans_to_attend" },
+    { re: /\bresearch(?:ed|ing)\s+(.+?)(?:\.|!|$)/i, pred: "researched" },
+    { re: /\bmoved (?:from|to)\s+(.+?)(?:\.|!|$)/i, pred: "moved" },
+    { re: /\bpainted\s+(?:a\s+|that\s+)?(.+?)(?:\.|!|$)/i, pred: "painted" },
+    { re: /\b(?:love|like|enjoy)s?\s+(.+?)(?:\.|!|$)/i, pred: "enjoys" },
+  ];
+
+  for (const { re, pred } of actionPatterns) {
+    const m = content.match(re);
+    if (m && speaker) {
+      triples.push({ subject: speaker, predicate: pred, object: m[1]!.slice(0, 100).trim(), valid_from: ts });
+    }
+  }
+
+  // "I'm a/an X" / "I am X" identity patterns
+  const identityMatch = content.match(/\bI(?:'m| am)\s+(?:a |an )?(\w[\w\s]{2,30}?)(?:\.|!|,|$)/i);
+  if (identityMatch && speaker) {
+    triples.push({ subject: speaker, predicate: "identity", object: identityMatch[1]!.trim(), valid_from: ts });
+  }
+
+  // "My kids/children like/love X"
+  const kidsMatch = content.match(/\b(?:my )?(?:kids?|children)\s+(?:like|love|enjoy|are (?:into|stoked for))\s+(.+?)(?:\.|!|$)/i);
+  if (kidsMatch && speaker) {
+    triples.push({ subject: speaker, predicate: "kids_like", object: kidsMatch[1]!.trim(), valid_from: ts });
+  }
+
+  // "X years" / "X year" duration facts
+  const durationMatch = content.match(/(\d+)\s+years?/);
+  if (durationMatch && speaker) {
+    const ctx = content.slice(Math.max(0, content.indexOf(durationMatch[0]) - 40), content.indexOf(durationMatch[0]) + durationMatch[0].length + 20);
+    triples.push({ subject: speaker, predicate: "duration_mentioned", object: ctx.trim(), valid_from: ts });
+  }
+
+  return triples;
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -313,6 +381,21 @@ async function main() {
       process.stdout.write(`\r    ${progressBar(sessionCount, 35)} | ${memoryCount} memories | ${elapsed(ingestStart)}`);
     }
     console.log(`\n    Done: ${sessionCount} sessions, ${memoryCount} memories in ${elapsed(ingestStart)}`);
+
+    // Extract knowledge triples from stored memories
+    console.log(`    Extracting knowledge triples...`);
+    let tripleCount = 0;
+    const allMems = db.prepare(`SELECT id, text, category FROM memories WHERE scope = ?`).all(scope) as Array<{ id: string; text: string; category: string }>;
+    for (const mem of allMems) {
+      const triples = extractTriplesFromMemory(mem.text, mem.id, scope);
+      for (const t of triples) {
+        try {
+          knowledgeStore(db, { ...t, source_memory_id: mem.id, scope });
+          tripleCount++;
+        } catch { /* skip duplicates */ }
+      }
+    }
+    console.log(`    Extracted ${tripleCount} knowledge triples from ${allMems.length} memories`);
   }
 
   const globalStart = Date.now();
@@ -367,13 +450,29 @@ async function main() {
     for (let i = 0; i < qaList.length; i++) {
       const qa = qaList[i]!;
 
-      // --- RECALL ---
+      // --- RECALL (memories + knowledge graph) ---
       const t0 = Date.now();
       let memories: Array<{ text: string; score: number }> = [];
       try {
         const recalled = await memoryRecall(db, { query: qa.question, limit: 10, scope });
         memories = recalled.map((m: any) => ({ text: m.text, score: m.score }));
       } catch { /* empty */ }
+
+      // Knowledge graph: extract entity names from question, query for facts
+      try {
+        const entities = qa.question.match(/\b[A-Z][a-z]+\b/g) || [];
+        for (const entity of entities) {
+          const facts = knowledgeAbout(db, entity);
+          for (const f of facts.slice(0, 5)) {
+            const factText = `[Knowledge] ${f.subject} ${f.predicate} ${f.object}`;
+            // Add as high-priority memory if not already present
+            if (!memories.some(m => m.text.includes(f.object))) {
+              memories.unshift({ text: factText, score: 10 });
+            }
+          }
+        }
+      } catch { /* knowledge table may not exist */ }
+
       const searchMs = Date.now() - t0;
 
       // --- ANSWER ---
