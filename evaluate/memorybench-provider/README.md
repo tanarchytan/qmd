@@ -1,67 +1,39 @@
 # QMD Provider for MemoryBench
 
-Adapter that lets [MemoryBench](https://github.com/supermemoryai/memorybench) benchmark QMD's memory system against Mem0, Zep, Supermemory, etc.
+Adapter for [MemoryBench](https://github.com/supermemoryai/memorybench). Benchmarks QMD memory against Mem0, Zep, Supermemory.
+
+**Note:** For standalone evaluation, use `evaluate/locomo/eval.mts` instead — it's simpler and doesn't require MemoryBench.
 
 ## Prerequisites
 
-```bash
-npm install -g @tanarchy/qmd@dev
-qmd --help  # verify install
-```
-
-## Setup
-
-```bash
-# 1. Clone memorybench
-git clone https://github.com/supermemoryai/memorybench
-cd memorybench
-npm install
-
-# 2. Copy provider
-cp -r /path/to/qmd/evaluate/memorybench-provider src/providers/qmd
-```
-
-**3. Register provider** — edit `src/providers/index.ts`:
-
-```typescript
-import { QmdProvider } from "./qmd"
-
-const providers: Record<string, new () => Provider> = {
-  // ... existing providers
-  qmd: QmdProvider,
-}
-```
-
-**4. Add type** — edit `src/types/provider.ts`:
-
-```typescript
-export type ProviderName = "supermemory" | "mem0" | "zep" | "filesystem" | "rag" | "qmd"
-```
-
-## Run
-
-```bash
-npx memorybench run --provider qmd --benchmark locomo
-npx memorybench run --provider qmd --benchmark longmemeval
-npx memorybench run --provider qmd --benchmark convomem
-```
+- Node.js 22+ with `@tanarchy/qmd` source available
+- `QMD_PROJECT_DIR` env var pointing to QMD repo root
+- `~/.config/qmd/.env` with embed/rerank provider config
 
 ## How It Works
 
-| MemoryBench Phase | QMD Command |
+Uses a batch worker process (Node via tsx) for each operation. Single cold-start per batch, all memory ops run in one process.
+
+| Phase | QMD Function |
 |---|---|
-| `ingest` | `qmd memory extract <conversation>` per session |
-| `awaitIndexing` | No-op (QMD indexes synchronously) |
-| `search` | `qmd memory recall <query>` |
-| `clear` | Delete temp SQLite database |
+| `ingest` | `extractAndStore()` per session, fallback `memoryStore()` per message |
+| `awaitIndexing` | No-op (synchronous) |
+| `search` | `memoryRecall()` with FTS + vector + rerank |
+| `clear` | Delete temp SQLite DB |
 
-Each `containerTag` gets its own isolated SQLite database via `INDEX_PATH`.
+## Standalone LoCoMo Eval (Recommended)
 
-## MemScore
+Skip MemoryBench entirely. Direct QMD + LLM evaluation:
 
-MemoryBench produces a composite score: `accuracy% / latencyMs / contextTokens`.
+```bash
+# From QMD repo root, in WSL (sqlite-vec needs Linux):
+npx tsx evaluate/locomo/eval.mts --conv conv-26 --llm gemini
 
-QMD advantages:
-- **Hybrid search** (FTS5 + vector + Weibull decay) should produce high accuracy
-- **Synchronous indexing** means zero indexing latency
-- **Compact memories** (extracted, not raw conversation) keep token counts low
+# Ingest only (cached for reruns)
+npx tsx evaluate/locomo/eval.mts --conv conv-26 --ingest-only
+
+# Quick test
+npx tsx evaluate/locomo/eval.mts --conv conv-26 --limit 20 --llm gemini
+```
+
+Current score: **F1=27.7%** on conv-26 (199 questions), up from 8.2% baseline.
