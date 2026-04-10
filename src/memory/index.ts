@@ -83,6 +83,7 @@ export type MemoryRecallOptions = {
   scope?: string;
   category?: MemoryCategory;
   limit?: number;
+  rerank?: boolean;
 };
 
 export type MemoryRecallResult = {
@@ -428,10 +429,38 @@ export async function memoryRecall(
 
   // FTS search (synchronous, runs while embedding request is in flight)
   try {
-    const safeFtsQuery = `"${query.replace(/"/g, '""')}"`;
+    // Stop words that poison AND queries (common question/filler words)
+    const STOP_WORDS = new Set([
+      "the", "is", "at", "which", "on", "a", "an", "and", "or", "but", "in",
+      "with", "to", "for", "of", "not", "no", "can", "had", "has", "have",
+      "was", "were", "been", "be", "do", "did", "does", "done", "will",
+      "would", "could", "should", "may", "might", "shall", "this", "that",
+      "these", "those", "am", "are", "its", "it", "i", "we", "you", "he",
+      "she", "they", "me", "him", "her", "us", "them", "my", "your", "his",
+      "our", "their", "what", "when", "where", "who", "how", "why", "from",
+      "about", "into", "through", "during", "before", "after", "above",
+      "below", "between", "up", "down", "out", "off", "over", "under",
+      "again", "further", "then", "once", "here", "there", "all", "each",
+      "every", "both", "few", "more", "most", "other", "some", "such",
+      "only", "own", "same", "so", "than", "too", "very", "just", "because",
+      "as", "if", "while", "although", "though", "until", "unless",
+      "also", "still", "already", "yet", "even", "much", "many",
+      "go", "going", "went", "gone", "get", "got", "getting",
+      "like", "likely", "ago", "long", "how",
+    ]);
+
+    const terms = query
+      .replace(/[^\p{L}\p{N}\s'_-]/gu, '')
+      .split(/\s+/)
+      .map(t => t.toLowerCase().replace(/[^\p{L}\p{N}'_]/gu, ''))
+      .filter(t => t.length >= 2 && !STOP_WORDS.has(t));
+    if (terms.length === 0) throw new Error("no terms");
+
+    // Use OR for broad recall, FTS5 ranks by relevance (more term matches = higher rank)
+    const safeFtsQuery = terms.map(t => `"${t}"*`).join(' OR ');
     const ftsResults = db.prepare(
-      `SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ?`
-    ).all(safeFtsQuery) as { rowid: number; rank: number }[];
+      `SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?`
+    ).all(safeFtsQuery, limit * 3) as { rowid: number; rank: number }[];
 
     for (const r of ftsResults) {
       const mem = getByRowid.get(r.rowid) as Memory | null;
@@ -505,8 +534,36 @@ export async function memoryRecall(
     }
   }
 
-  // 5. Sort by score, limit, update access counts
-  const sorted = [...results.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+  // 5. Sort by score, take candidates for reranking
+  let sorted = [...results.values()].sort((a, b) => b.score - a.score);
+
+  // 5b. Optional: rerank top candidates with LLM/dedicated reranker
+  if (options.rerank !== false && sorted.length > 1) {
+    const rerankCandidates = sorted.slice(0, Math.min(sorted.length, limit * 3));
+    try {
+      const remoteConfig = getRemoteConfig();
+      if (remoteConfig?.rerank) {
+        const remote = getRemoteLLM()!;
+        const docs = rerankCandidates.map(r => ({ file: r.id, text: r.text }));
+        const result = await remote.rerank(query, docs, {});
+        // Merge rerank scores: blend original score with rerank score
+        const rerankMap = new Map(result.results.map(r => [r.file, r.score]));
+        for (const r of rerankCandidates) {
+          const rerankScore = rerankMap.get(r.id);
+          if (rerankScore !== undefined) {
+            // Blend: 40% original + 60% rerank (reranker is more precise)
+            r.score = 0.4 * r.score + 0.6 * rerankScore;
+          }
+        }
+        sorted = rerankCandidates.sort((a, b) => b.score - a.score);
+      }
+    } catch (err) {
+      // Rerank failed — fall back to original ranking
+      process.stderr.write(`Memory rerank failed: ${err instanceof Error ? err.message : err}\n`);
+    }
+  }
+
+  sorted = sorted.slice(0, limit);
 
   // Touch access counts for recalled memories (batched in transaction for performance)
   const now = Date.now();

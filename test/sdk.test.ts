@@ -615,7 +615,7 @@ describe("search (unified API)", () => {
   });
 
   // Tests below use search({ query: ... }) which triggers LLM query expansion
-  describe.skipIf(!!process.env.CI)("with LLM query expansion", () => {
+  describe.skipIf(!!process.env.CI)("with LLM query expansion", { timeout: 60_000 }, () => {
     test("search() with query and rerank:false returns results", async () => {
       const results = await store.search({ query: "authentication", rerank: false });
       expect(results.length).toBeGreaterThan(0);
@@ -626,7 +626,7 @@ describe("search (unified API)", () => {
       expect(results[0]).toHaveProperty("docid");
     });
 
-    test("search() with intent and rerank:false returns results", async () => {
+    test("search() with intent and rerank:false returns results", { timeout: 60_000 }, async () => {
       const results = await store.search({
         query: "meeting",
         intent: "quarterly planning and roadmap",

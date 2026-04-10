@@ -1439,7 +1439,7 @@ async function collectionAdd(pwd: string, globPattern: string, name?: string): P
   // If name not provided, generate from pwd basename
   let collName = name;
   if (!collName) {
-    const parts = pwd.split('/').filter(Boolean);
+    const parts = pwd.split(/[/\\]/).filter(Boolean);
     collName = parts[parts.length - 1] || 'root';
   }
 

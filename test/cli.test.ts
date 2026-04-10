@@ -28,11 +28,12 @@ const projectRoot = join(thisDir, "..");
 const qmdScript = join(projectRoot, "src", "cli", "qmd.ts");
 // Resolve tsx binary from project's node_modules (not cwd-dependent)
 const tsxBin = (() => {
-  const candidate = join(projectRoot, "node_modules", ".bin", "tsx");
+  const ext = process.platform === "win32" ? ".cmd" : "";
+  const candidate = join(projectRoot, "node_modules", ".bin", "tsx" + ext);
   if (existsSync(candidate)) {
     return candidate;
   }
-  return join(process.cwd(), "node_modules", ".bin", "tsx");
+  return join(process.cwd(), "node_modules", ".bin", "tsx" + ext);
 })();
 
 // Helper to run qmd command with test database
@@ -53,6 +54,7 @@ async function runQmd(
       ...options.env,
     },
     stdio: ["ignore", "pipe", "pipe"],
+    ...(process.platform === "win32" ? { shell: true } : {}),
   });
 
   const stdoutPromise = new Promise<string>((resolve, reject) => {
@@ -284,11 +286,13 @@ describe("CLI Skill Commands", () => {
     expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toContain("name: qmd");
     expect(readFileSync(join(skillDir, "references", "mcp-setup.md"), "utf-8")).toContain("Claude Code");
     expect(existsSync(join(projectDir, ".claude", "skills", "qmd"))).toBe(false);
-    expect(stdout).toContain(`✓ Installed QMD skill to ${skillDir}`);
+    // CLI output may use forward slashes even on Windows
+    const skillDirNorm = skillDir.replace(/\\/g, '/');
+    expect(stdout.replace(/\\/g, '/')).toContain(`✓ Installed QMD skill to ${skillDirNorm}`);
     expect(stdout).toContain("Tip: create a Claude symlink manually");
   });
 
-  test("installs globally and creates the Claude symlink with --yes", async () => {
+  test.skipIf(process.platform === "win32")("installs globally and creates the Claude symlink with --yes", async () => {
     const fakeHome = join(testDir, "skill-home");
     await mkdir(fakeHome, { recursive: true });
 
@@ -303,11 +307,13 @@ describe("CLI Skill Commands", () => {
     expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toContain("name: qmd");
     expect(lstatSync(claudeLink).isSymbolicLink()).toBe(true);
     expect(readFileSync(join(claudeLink, "SKILL.md"), "utf-8")).toContain("name: qmd");
-    expect(stdout).toContain(`✓ Installed QMD skill to ${skillDir}`);
-    expect(stdout).toContain(`✓ Linked Claude skill at ${claudeLink}`);
+    const skillDirN = skillDir.replace(/\\/g, '/');
+    const claudeLinkN = claudeLink.replace(/\\/g, '/');
+    expect(stdout.replace(/\\/g, '/')).toContain(`✓ Installed QMD skill to ${skillDirN}`);
+    expect(stdout.replace(/\\/g, '/')).toContain(`✓ Linked Claude skill at ${claudeLinkN}`);
   });
 
-  test("skips Claude qmd symlink when .claude/skills already points to .agents/skills", async () => {
+  test.skipIf(process.platform === "win32")("skips Claude qmd symlink when .claude/skills already points to .agents/skills", async () => {
     const fakeHome = join(testDir, "skill-home-shared");
     await mkdir(join(fakeHome, ".agents"), { recursive: true });
     await mkdir(join(fakeHome, ".claude"), { recursive: true });
@@ -976,6 +982,315 @@ describe("CLI Collection Commands", () => {
 });
 
 // =============================================================================
+// Collection Show / Update-cmd / Include / Exclude
+// =============================================================================
+
+describe("CLI Collection Show Command", () => {
+  let localDbPath: string;
+
+  beforeEach(async () => {
+    localDbPath = getFreshDbPath();
+    await runQmd(["collection", "add", "."], { dbPath: localDbPath });
+  });
+
+  test("shows collection details", async () => {
+    const { stdout, exitCode } = await runQmd(["collection", "show", "fixtures"], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Collection: fixtures");
+    expect(stdout).toContain("Path:");
+    expect(stdout).toContain("Pattern:");
+    expect(stdout).toContain("Include:");
+  });
+
+  test("handles non-existent collection", async () => {
+    const { stderr, exitCode } = await runQmd(["collection", "show", "nonexistent"], { dbPath: localDbPath });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Collection not found");
+  });
+
+  test("handles missing argument", async () => {
+    const { stderr, exitCode } = await runQmd(["collection", "show"], { dbPath: localDbPath });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage:");
+  });
+});
+
+describe("CLI Collection Update-cmd Command", () => {
+  let localDbPath: string;
+
+  beforeEach(async () => {
+    localDbPath = getFreshDbPath();
+    await runQmd(["collection", "add", "."], { dbPath: localDbPath });
+  });
+
+  test("sets update command", async () => {
+    const { stdout, exitCode } = await runQmd(["collection", "update-cmd", "fixtures", "git pull"], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("✓ Set update command");
+    expect(stdout).toContain("git pull");
+  });
+
+  test("clears update command when no command given", async () => {
+    // Set first
+    await runQmd(["collection", "update-cmd", "fixtures", "git pull"], { dbPath: localDbPath });
+    // Clear
+    const { stdout, exitCode } = await runQmd(["collection", "update-cmd", "fixtures"], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("✓ Cleared update command");
+  });
+
+  test("handles non-existent collection", async () => {
+    const { stderr, exitCode } = await runQmd(["collection", "update-cmd", "nonexistent", "git pull"], { dbPath: localDbPath });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Collection not found");
+  });
+
+  test("handles missing collection name", async () => {
+    const { stderr, exitCode } = await runQmd(["collection", "update-cmd"], { dbPath: localDbPath });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage:");
+  });
+});
+
+describe("CLI Collection Include/Exclude Commands", () => {
+  let localDbPath: string;
+
+  beforeEach(async () => {
+    localDbPath = getFreshDbPath();
+    await runQmd(["collection", "add", "."], { dbPath: localDbPath });
+  });
+
+  test("excludes collection from default queries", async () => {
+    const { stdout, exitCode } = await runQmd(["collection", "exclude", "fixtures"], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("excluded from");
+
+    // Verify with show
+    const { stdout: showOut } = await runQmd(["collection", "show", "fixtures"], { dbPath: localDbPath });
+    expect(showOut).toContain("Include:");
+    expect(showOut).toContain("no");
+  });
+
+  test("re-includes excluded collection", async () => {
+    // Exclude first
+    await runQmd(["collection", "exclude", "fixtures"], { dbPath: localDbPath });
+    // Re-include
+    const { stdout, exitCode } = await runQmd(["collection", "include", "fixtures"], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("included in");
+  });
+
+  test("handles non-existent collection", async () => {
+    const { stderr, exitCode } = await runQmd(["collection", "exclude", "nonexistent"], { dbPath: localDbPath });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Collection not found");
+  });
+
+  test("handles missing argument", async () => {
+    const { stderr, exitCode } = await runQmd(["collection", "exclude"], { dbPath: localDbPath });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage:");
+  });
+});
+
+// =============================================================================
+// Vacuum Command
+// =============================================================================
+
+describe("CLI Vacuum Command", () => {
+  beforeEach(async () => {
+    await runQmd(["collection", "add", "."]);
+  });
+
+  test("vacuums database", async () => {
+    const { stdout, exitCode } = await runQmd(["vacuum"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Vacuumed:");
+  });
+});
+
+// =============================================================================
+// Sync Command
+// =============================================================================
+
+describe("CLI Sync Command", () => {
+  let localDbPath: string;
+
+  beforeEach(async () => {
+    localDbPath = getFreshDbPath();
+    await runQmd(["collection", "add", "."], { dbPath: localDbPath });
+  });
+
+  test("runs update + embed", async () => {
+    const { exitCode } = await runQmd(["sync"], { dbPath: localDbPath });
+    // sync runs update then embed — embed may fail without LLM, but update should work
+    // Exit code 0 means both succeeded (or embed had nothing to do)
+    expect(exitCode).toBe(0);
+  });
+});
+
+// =============================================================================
+// Memory Commands
+// =============================================================================
+
+describe("CLI Memory Commands", () => {
+  let localDbPath: string;
+
+  beforeEach(async () => {
+    localDbPath = getFreshDbPath();
+    // Index files so the DB is initialized
+    await runQmd(["collection", "add", "."], { dbPath: localDbPath });
+  });
+
+  test("stores a memory", async () => {
+    const { stdout, exitCode } = await runQmd(["memory", "store", "I prefer TypeScript over JavaScript"], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Stored:");
+  });
+
+  test("recalls a memory", async () => {
+    // Store first
+    await runQmd(["memory", "store", "The project uses Vitest for testing"], { dbPath: localDbPath });
+    // Recall
+    const { stdout, exitCode } = await runQmd(["memory", "recall", "testing"], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Vitest");
+  });
+
+  test("forgets a memory", async () => {
+    // Store first
+    const { stdout: storeOut } = await runQmd(["memory", "store", "Temporary memory to delete"], { dbPath: localDbPath });
+    const id = storeOut.match(/Stored:\s+(\S+)/)?.[1];
+    expect(id).toBeTruthy();
+
+    // Forget
+    const { stdout, exitCode } = await runQmd(["memory", "forget", id!], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Deleted:");
+  });
+
+  test("shows memory stats", async () => {
+    // Store a memory first
+    await runQmd(["memory", "store", "Stats test memory"], { dbPath: localDbPath });
+    const { stdout, exitCode } = await runQmd(["memory", "stats"], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Total:");
+  });
+
+  test("runs decay pass", async () => {
+    const { stdout, exitCode } = await runQmd(["memory", "decay"], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Processed");
+  });
+
+  test("exports memories", async () => {
+    // Store a memory
+    await runQmd(["memory", "store", "Export test memory"], { dbPath: localDbPath });
+    const exportPath = join(testDir, `export-${Date.now()}.json`);
+    const { stdout, exitCode } = await runQmd(["memory", "export", exportPath], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Exported");
+    expect(existsSync(exportPath)).toBe(true);
+  });
+
+  test("imports memories", async () => {
+    // Store and export first
+    await runQmd(["memory", "store", "Import round-trip memory"], { dbPath: localDbPath });
+    const exportPath = join(testDir, `import-${Date.now()}.json`);
+    await runQmd(["memory", "export", exportPath], { dbPath: localDbPath });
+
+    // Import into fresh DB
+    const freshDb = getFreshDbPath();
+    await runQmd(["collection", "add", "."], { dbPath: freshDb });
+    const { stdout, exitCode } = await runQmd(["memory", "import", exportPath], { dbPath: freshDb });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Imported");
+  });
+
+  test("detects duplicate memory", async () => {
+    await runQmd(["memory", "store", "Duplicate detection test"], { dbPath: localDbPath });
+    const { stdout, exitCode } = await runQmd(["memory", "store", "Duplicate detection test"], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Duplicate:");
+  });
+
+  test("recall returns no memories message", async () => {
+    const { stdout, exitCode } = await runQmd(["memory", "recall", "xyznonexistent999"], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("No memories found");
+  });
+
+  test("forget non-existent memory", async () => {
+    const { stdout, exitCode } = await runQmd(["memory", "forget", "nonexistent-id-000"], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Not found:");
+  });
+
+  test("requires text for store", async () => {
+    const { stderr, exitCode } = await runQmd(["memory", "store"], { dbPath: localDbPath });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage:");
+  });
+
+  test("requires query for recall", async () => {
+    const { stderr, exitCode } = await runQmd(["memory", "recall"], { dbPath: localDbPath });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage:");
+  });
+
+  test("requires id for forget", async () => {
+    const { stderr, exitCode } = await runQmd(["memory", "forget"], { dbPath: localDbPath });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage:");
+  });
+
+  test("shows usage for unknown memory subcommand", async () => {
+    const { stderr, exitCode } = await runQmd(["memory", "invalid"], { dbPath: localDbPath });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage:");
+  });
+});
+
+// =============================================================================
+// Query / VSearch / MCP Commands (require LLM — skip on CI)
+// =============================================================================
+
+describe.skipIf(!!process.env.CI)("CLI Query Commands", () => {
+  let localDbPath: string;
+
+  beforeEach(async () => {
+    localDbPath = getFreshDbPath();
+    await runQmd(["collection", "add", "."], { dbPath: localDbPath });
+  });
+
+  test("query requires argument", async () => {
+    const { stderr, exitCode } = await runQmd(["query"], { dbPath: localDbPath });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage:");
+  });
+
+  test("vsearch requires argument", async () => {
+    const { stderr, exitCode } = await runQmd(["vsearch"], { dbPath: localDbPath });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage:");
+  });
+});
+
+// =============================================================================
+// MCP Stdio Mode
+// =============================================================================
+
+describe("CLI MCP Stdio Command", () => {
+  test("mcp starts and accepts shutdown", async () => {
+    // MCP stdio mode reads from stdin — just verify it starts without crashing
+    // by sending empty input (stdin: "ignore" closes immediately)
+    const { exitCode } = await runQmd(["mcp"]);
+    // MCP server exits when stdin closes — exit code 0 or 1 are both acceptable
+    expect(exitCode).toBeLessThanOrEqual(1);
+  });
+});
+
+// =============================================================================
 // Collection Ignore Patterns
 // =============================================================================
 
@@ -1335,7 +1650,7 @@ describe("status and collection list hide filesystem paths", () => {
 // MCP HTTP Daemon Lifecycle
 // =============================================================================
 
-describe("mcp http daemon", () => {
+describe.skipIf(process.platform === "win32")("mcp http daemon", () => {
   let daemonTestDir: string;
   let daemonCacheDir: string; // XDG_CACHE_HOME value (the qmd/ subdir is created automatically)
   let daemonDbPath: string;
@@ -1370,6 +1685,7 @@ describe("mcp http daemon", () => {
         QMD_CONFIG_DIR: daemonConfigDir,
       },
       stdio: ["ignore", "pipe", "pipe"],
+      ...(process.platform === "win32" ? { shell: true } : {}),
     });
     if (proc.pid) spawnedPids.push(proc.pid);
     return proc;

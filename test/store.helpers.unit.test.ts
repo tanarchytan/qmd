@@ -80,7 +80,7 @@ describe("Path Utilities", () => {
     expect(typeof pwd).toBe("string");
   });
 
-  test("getRealPath resolves symlinks", () => {
+  test.skipIf(process.platform === "win32")("getRealPath resolves symlinks", () => {
     const result = getRealPath("/tmp");
     expect(result).toBeTruthy();
     expect(result === "/tmp" || result === "/private/tmp").toBe(true);

@@ -48,7 +48,7 @@ When the user triggers `/release <version>`:
 
 7. **Check dependency updates** — before cutting the release, check for
    updates to `sqlite-vec` (and platform packages), `node-llama-cpp`,
-   and `better-sqlite3`. Run `pnpm outdated` and report any available
+   and `better-sqlite3`. Run `npm outdated` and report any available
    updates for these packages. If updates exist, bump them (pinned, no
    `^` ranges) and re-run tests before proceeding.
 
@@ -136,4 +136,4 @@ The pre-push hook (`scripts/pre-push`) blocks `v*` tag pushes unless:
 
 Hooks are installed silently by the context script. They can also be installed
 manually via `skills/release/scripts/install-hooks.sh` or automatically via
-`bun install` (prepare script).
+`npm install` (prepare script).
