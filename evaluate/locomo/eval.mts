@@ -150,7 +150,12 @@ Question: ${question} Short answer:`;
 
 Based on the above context, write an answer in the form of a short phrase for the following question. Answer with exact words from the context whenever possible.
 
-IMPORTANT: Each memory has a timestamp in [brackets]. If a memory says "yesterday" or "last week", compute the actual date from the timestamp. For example, if a memory dated [3 July 2023] says "I signed up yesterday", the answer is "2 July 2023".
+Rules:
+1. Each memory has a timestamp in [brackets]. If a memory says "yesterday", "last week", "last Saturday", or "this month", compute the actual calendar date from the timestamp. Example: [3 July 2023] "signed up yesterday" → answer "2 July 2023". Example: [3 July 2023] "this month" → answer "July 2023".
+2. For identity/status questions, extract the specific attribute (e.g. "single", "transgender", "Swedish").
+3. For "what does X like" questions, list specific items mentioned across all memories.
+4. Answer with the most specific information available. Prefer proper nouns, dates, and concrete details.
+5. NEVER answer with relative terms like "yesterday", "this month", "last week" — always convert to actual dates.
 
 Question: ${question} Short answer:`;
 }
@@ -267,12 +272,15 @@ function extractTriplesFromMemory(text: string, memId: string, scope: string): A
     { re: /\bmoved (?:from|to)\s+(.+?)(?:\.|!|$)/i, pred: "moved" },
     { re: /\bpainted\s+(?:a\s+|that\s+)?(.+?)(?:\.|!|$)/i, pred: "painted" },
     { re: /\b(?:love|like|enjoy)s?\s+(.+?)(?:\.|!|$)/i, pred: "enjoys" },
+    { re: /\bfrom\s+(?:my\s+)?(?:home\s+country\s+)?([A-Z]\w+)\b.*?(?:grandma|family|heritage|roots|necklace)/i, pred: "origin_country" },
+    { re: /\b(single|divorced|married|widowed)\s+(?:parent|mother|father|mom|dad)\b/i, pred: "relationship_status" },
+    { re: /\b(?:stoked for|excited about|loved)\s+the\s+(.+?)(?:\.|!|$)/i, pred: "kids_enjoyed" },
   ];
 
   for (const { re, pred } of actionPatterns) {
     const m = content.match(re);
-    if (m && speaker) {
-      triples.push({ subject: speaker, predicate: pred, object: m[1]!.slice(0, 100).trim(), valid_from: ts });
+    if (m && m[1] && speaker) {
+      triples.push({ subject: speaker, predicate: pred, object: m[1].slice(0, 100).trim(), valid_from: ts });
     }
   }
 
@@ -458,16 +466,29 @@ async function main() {
         memories = recalled.map((m: any) => ({ text: m.text, score: m.score }));
       } catch { /* empty */ }
 
-      // Knowledge graph: extract entity names from question, query for facts
+      // Knowledge graph: query by entity names AND by keyword search across facts
       try {
+        // By entity name
         const entities = qa.question.match(/\b[A-Z][a-z]+\b/g) || [];
         for (const entity of entities) {
           const facts = knowledgeAbout(db, entity);
           for (const f of facts.slice(0, 5)) {
-            const factText = `[Knowledge] ${f.subject} ${f.predicate} ${f.object}`;
-            // Add as high-priority memory if not already present
-            if (!memories.some(m => m.text.includes(f.object))) {
+            const factText = `[Knowledge] ${f.subject} ${f.predicate}: ${f.object}`;
+            if (!memories.some(m => m.text.includes(f.object.slice(0, 20)))) {
               memories.unshift({ text: factText, score: 10 });
+            }
+          }
+        }
+        // By keyword search across all facts
+        const qWords = qa.question.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        for (const w of qWords.slice(0, 3)) {
+          const kResults = db.prepare(
+            `SELECT * FROM knowledge WHERE LOWER(object) LIKE ? OR LOWER(predicate) LIKE ? LIMIT 3`
+          ).all(`%${w}%`, `%${w}%`) as any[];
+          for (const f of kResults) {
+            const factText = `[Knowledge] ${f.subject} ${f.predicate}: ${f.object}`;
+            if (!memories.some(m => m.text === factText)) {
+              memories.push({ text: factText, score: 5 });
             }
           }
         }
