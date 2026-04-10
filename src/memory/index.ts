@@ -132,8 +132,16 @@ const STOP_WORDS = new Set([
 ]);
 
 function extractKeywords(text: string): string[] {
+  // MemPalace hybrid_v5 finding: remove speaker/person names from keyword boost.
+  // Names match too many memories, drowning predicate-level signal.
+  // Filter: skip capitalized words from original text (likely names/entities).
+  const nameWords = new Set(
+    text.split(/\s+/)
+      .filter(w => /^[A-Z][a-z]+$/.test(w))
+      .map(w => w.toLowerCase())
+  );
   return text.toLowerCase().split(/\s+/)
-    .filter(w => w.length > 2 && !STOP_WORDS.has(w));
+    .filter(w => w.length > 2 && !STOP_WORDS.has(w) && !nameWords.has(w));
 }
 
 // =============================================================================
@@ -531,6 +539,16 @@ export async function memoryRecall(
     }
     if (keywords.length > 0) {
       result.score *= 1 + 0.3 * (hits / keywords.length);
+    }
+  }
+
+  // 3b. Quoted phrase boost (MemPalace v4: 60% boost for exact quoted phrases)
+  const quotedPhrases = query.match(/"([^"]+)"/g)?.map(p => p.slice(1, -1).toLowerCase()) || [];
+  for (const phrase of quotedPhrases) {
+    for (const result of results.values()) {
+      if (result.text.toLowerCase().includes(phrase)) {
+        result.score *= 1.6;
+      }
     }
   }
 

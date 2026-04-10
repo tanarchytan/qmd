@@ -30,7 +30,7 @@ loadQmdEnv();
 
 const { openDatabase } = await import(toUrl(join(QMD_DIR, "src/db.ts")));
 const { initializeDatabase } = await import(toUrl(join(QMD_DIR, "src/store/db-init.ts")));
-const { memoryStore, memoryRecall } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
+const { memoryStore, memoryRecall, extractAndStore } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
 const { knowledgeStore, knowledgeQuery, knowledgeAbout } = await import(toUrl(join(QMD_DIR, "src/memory/knowledge.ts")));
 
 type Database = ReturnType<typeof openDatabase>;
@@ -376,6 +376,7 @@ async function main() {
       if (!turns || !Array.isArray(turns) || turns.length === 0) continue;
       sessionCount++;
 
+      // Store raw dialog turns (preserves exact text + timestamps)
       for (const turn of turns) {
         let text = dateTime ? `[${dateTime}] ${turn.speaker}: ${turn.text}` : `${turn.speaker}: ${turn.text}`;
         if (turn.share_photo && turn.blip_caption) text += ` [shared photo: ${turn.blip_caption}]`;
@@ -385,6 +386,15 @@ async function main() {
           if (r.status === "created") memoryCount++;
         } catch { /* skip */ }
       }
+
+      // Also run extractAndStore on full session text (MemPalace: preference bridging)
+      // Creates synthetic entries like "User mentioned: camping" that bridge vocabulary gaps
+      const sessionLines = turns.map(t => `${t.speaker}: ${t.text}`);
+      if (dateTime) sessionLines.unshift(`[${dateTime}]`);
+      try {
+        const eResult = await extractAndStore(db, sessionLines.join("\n"), scope);
+        memoryCount += eResult.stored;
+      } catch { /* extraction optional */ }
 
       process.stdout.write(`\r    ${progressBar(sessionCount, 35)} | ${memoryCount} memories | ${elapsed(ingestStart)}`);
     }
