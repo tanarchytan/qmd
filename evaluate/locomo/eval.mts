@@ -407,10 +407,23 @@ async function main() {
         } catch { /* skip */ }
       }
 
-      // Also run extractAndStore on full session text (MemPalace: preference bridging)
-      // Creates synthetic entries like "User mentioned: camping" that bridge vocabulary gaps
-      const sessionLines = turns.map(t => `${t.speaker}: ${t.text}`);
+      // Store full session as single memory (MemPalace: larger chunks = more context per hit)
+      // Individual turns miss cross-turn facts ("Sweden" in one turn, "moved" in another)
+      const sessionLines = turns.map(t => {
+        let line = `${t.speaker}: ${t.text}`;
+        if (t.share_photo && t.blip_caption) line += ` [photo: ${t.blip_caption}]`;
+        return line;
+      });
       if (dateTime) sessionLines.unshift(`[${dateTime}]`);
+      const sessionText = sessionLines.join("\n");
+      if (sessionText.length > 100) { // skip tiny sessions
+        try {
+          const r = await memoryStore(db, { text: sessionText, scope, importance: 0.7 });
+          if (r.status === "created") memoryCount++;
+        } catch { /* skip duplicates */ }
+      }
+
+      // Also run extractAndStore for preference bridging
       try {
         const eResult = await extractAndStore(db, sessionLines.join("\n"), scope);
         memoryCount += eResult.stored;
@@ -421,19 +434,12 @@ async function main() {
     console.log(`\n    Done: ${sessionCount} sessions, ${memoryCount} memories in ${elapsed(ingestStart)}`);
 
     // Extract knowledge triples from stored memories
-    console.log(`    Extracting knowledge triples...`);
-    let tripleCount = 0;
-    const allMems = db.prepare(`SELECT id, text, category FROM memories WHERE scope = ?`).all(scope) as Array<{ id: string; text: string; category: string }>;
-    for (const mem of allMems) {
-      const triples = extractTriplesFromMemory(mem.text, mem.id, scope);
-      for (const t of triples) {
-        try {
-          knowledgeStore(db, { ...t, source_memory_id: mem.id, scope });
-          tripleCount++;
-        } catch { /* skip duplicates */ }
-      }
-    }
-    console.log(`    Extracted ${tripleCount} knowledge triples from ${allMems.length} memories`);
+    // Knowledge triples now auto-extracted by extractAndStore (Mem0-style LLM extraction)
+    // Regex extraction removed — LLM produces cleaner, more accurate triples
+    try {
+      const kgCount = (db.prepare(`SELECT COUNT(*) as n FROM knowledge`).get() as any)?.n || 0;
+      console.log(`    Knowledge graph: ${kgCount} triples (auto-extracted by LLM)`);
+    } catch { /* table may not exist */ }
 
     // Run decay pass to promote important memories (MemPalace: dream consolidation)
     const decay = runDecayPass(db);

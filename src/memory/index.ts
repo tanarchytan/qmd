@@ -41,9 +41,9 @@ export { runDecayPass, type DecayResult } from "./decay.js";
 import { extractAndStore as _extractAndStore, type ExtractionResult } from "./extractor.js";
 export type { ExtractionResult } from "./extractor.js";
 
-/** Wrapper that injects memoryStore to break circular import */
+/** Wrapper that injects memoryStore + knowledgeStore to break circular import */
 export async function extractAndStore(db: Database, text: string, scope?: string): Promise<ExtractionResult> {
-  return _extractAndStore(db, text, scope, memoryStore);
+  return _extractAndStore(db, text, scope, memoryStore, knowledgeStore);
 }
 export { classifyMemory, extractPreferences, hasMemorySignal } from "./patterns.js";
 export { knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeAbout, knowledgeTimeline, knowledgeStats, toSlug } from "./knowledge.js";
