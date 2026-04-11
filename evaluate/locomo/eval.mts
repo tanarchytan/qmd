@@ -218,6 +218,24 @@ function computeExactMatch(prediction: string, groundTruth: string): number {
   return tokenize(prediction).join(" ") === tokenize(groundTruth).join(" ") ? 1 : 0;
 }
 
+/** R@K: do any of the top K memories contain the ground truth answer tokens? */
+function computeRecallAtK(memories: Array<{ text: string }>, groundTruth: string, k: number): number {
+  const truthTokens = tokenize(groundTruth);
+  if (truthTokens.length === 0) return 1;
+  const topK = memories.slice(0, k);
+  // Check if majority of answer tokens appear in any single memory
+  for (const mem of topK) {
+    const memTokens = new Set(tokenize(mem.text));
+    const hits = truthTokens.filter(t => memTokens.has(t)).length;
+    if (hits / truthTokens.length >= 0.5) return 1; // 50% token overlap = hit
+  }
+  // Also check across all top-K combined
+  const allTokens = new Set(topK.flatMap(m => tokenize(m.text)));
+  const totalHits = truthTokens.filter(t => allTokens.has(t)).length;
+  if (totalHits / truthTokens.length >= 0.7) return 1; // 70% across all = hit
+  return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Progress display
 // ---------------------------------------------------------------------------
@@ -358,6 +376,8 @@ async function main() {
     memoriesFound: number;
     f1: number;
     em: number;
+    r5: number;
+    r10: number;
     category: number;
     categoryName: string;
     searchMs: number;
@@ -526,6 +546,8 @@ async function main() {
 
       const f1 = computeF1(prediction, qa.answer);
       const em = computeExactMatch(prediction, qa.answer);
+      const r5 = computeRecallAtK(memories, String(qa.answer), 5);
+      const r10 = computeRecallAtK(memories, String(qa.answer), 10);
       runningF1 += f1;
       runningEM += em;
 
@@ -536,7 +558,7 @@ async function main() {
         prediction: prediction.slice(0, 300),
         memories: memories.map(m => m.text.slice(0, 120)),
         memoriesFound: memories.length,
-        f1, em,
+        f1, em, r5, r10,
         category: qa.category,
         categoryName: CATEGORY_NAMES[qa.category] || "unknown",
         searchMs, answerMs,
@@ -571,6 +593,8 @@ async function main() {
 
   const avgF1 = allResults.reduce((s, r) => s + r.f1, 0) / n;
   const avgEM = allResults.reduce((s, r) => s + r.em, 0) / n;
+  const avgR5 = allResults.reduce((s, r) => s + r.r5, 0) / n;
+  const avgR10 = allResults.reduce((s, r) => s + r.r10, 0) / n;
   const avgSearch = allResults.reduce((s, r) => s + r.searchMs, 0) / n;
   const avgAnswer = allResults.reduce((s, r) => s + r.answerMs, 0) / n;
   const avgMemories = allResults.reduce((s, r) => s + r.memoriesFound, 0) / n;
@@ -579,7 +603,9 @@ async function main() {
   console.log(`  FINAL RESULTS`);
   console.log(`${"=".repeat(64)}`);
   console.log(`  Questions:    ${n}`);
-  console.log(`  F1:           ${(avgF1 * 100).toFixed(1)}%`);
+  console.log(`  R@5:          ${(avgR5 * 100).toFixed(1)}%  (retrieval: answer in top 5 memories)`);
+  console.log(`  R@10:         ${(avgR10 * 100).toFixed(1)}%  (retrieval: answer in top 10 memories)`);
+  console.log(`  F1:           ${(avgF1 * 100).toFixed(1)}%  (LLM answer quality)`);
   console.log(`  Exact Match:  ${(avgEM * 100).toFixed(1)}%`);
   console.log(`  Avg memories: ${avgMemories.toFixed(1)} per question`);
   console.log(`  Avg search:   ${avgSearch.toFixed(0)}ms`);
@@ -592,7 +618,9 @@ async function main() {
     const cr = allResults.filter(r => r.category === cat);
     const cf1 = cr.reduce((s, r) => s + r.f1, 0) / cr.length;
     const cem = cr.reduce((s, r) => s + r.em, 0) / cr.length;
-    console.log(`    ${(CATEGORY_NAMES[cat] || String(cat)).padEnd(12)} (n=${String(cr.length).padStart(4)}): F1=${(cf1 * 100).toFixed(1).padStart(5)}%  EM=${(cem * 100).toFixed(1).padStart(5)}%`);
+    const cr5 = cr.reduce((s, r) => s + r.r5, 0) / cr.length;
+    const cr10 = cr.reduce((s, r) => s + r.r10, 0) / cr.length;
+    console.log(`    ${(CATEGORY_NAMES[cat] || String(cat)).padEnd(12)} (n=${String(cr.length).padStart(4)}): R@5=${(cr5 * 100).toFixed(0).padStart(3)}%  R@10=${(cr10 * 100).toFixed(0).padStart(3)}%  F1=${(cf1 * 100).toFixed(1).padStart(5)}%  EM=${(cem * 100).toFixed(1).padStart(5)}%`);
   }
 
   if (conversations.length > 1) {
@@ -621,7 +649,7 @@ async function main() {
   const outPath = join(QMD_DIR, "evaluate/locomo/results.json");
   writeFileSync(outPath, JSON.stringify({
     config: { useLLM, model: useLLM ? LLM_CONFIG[activeLLM].model : "none", llm: activeLLM, limit, convFilter },
-    summary: { avgF1, avgEM, avgSearch, avgAnswer, avgMemories, total: n },
+    summary: { avgR5, avgR10, avgF1, avgEM, avgSearch, avgAnswer, avgMemories, total: n },
     results: allResults,
   }, null, 2));
   console.log(`\n  Results saved: ${outPath}`);
