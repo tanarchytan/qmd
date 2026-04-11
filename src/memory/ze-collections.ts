@@ -22,6 +22,7 @@ const EU_BASE = "https://eu-api.zeroentropy.dev/v1";
 const US_BASE = "https://api.zeroentropy.dev/v1";
 
 function getApiKey(): string | null {
+  if (process.env.QMD_ZE_COLLECTIONS === "off") return null;
   return process.env.QMD_EMBED_API_KEY || process.env.ZEROENTROPY_API_KEY || null;
 }
 

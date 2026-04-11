@@ -544,17 +544,19 @@ async function main() {
         prediction = memories.map(m => m.text).join(" ");
       }
 
-      const f1 = computeF1(prediction, qa.answer);
-      const em = computeExactMatch(prediction, qa.answer);
-      const r5 = computeRecallAtK(memories, String(qa.answer), 5);
-      const r10 = computeRecallAtK(memories, String(qa.answer), 10);
+      // Normalize answer: LoCoMo adversarial questions have answer=undefined (missing field)
+      const answer = qa.answer != null ? String(qa.answer) : "undefined";
+      const f1 = computeF1(prediction, answer);
+      const em = computeExactMatch(prediction, answer);
+      const r5 = computeRecallAtK(memories, answer, 5);
+      const r10 = computeRecallAtK(memories, answer, 10);
       runningF1 += f1;
       runningEM += em;
 
       allResults.push({
         sample_id: conv.sample_id,
         question: qa.question,
-        answer: qa.answer,
+        answer,
         prediction: prediction.slice(0, 300),
         memories: memories.map(m => m.text.slice(0, 120)),
         memoriesFound: memories.length,
