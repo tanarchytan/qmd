@@ -529,7 +529,8 @@ export async function memoryRecall(
     }
   }
 
-  // 3. Apply keyword boost
+  // 3. Keyword boost (MemPalace: multiplicative, not additive)
+  // fused = base_score × (1 + 0.4 × keyword_overlap_ratio)
   const keywords = extractKeywords(query);
   for (const result of results.values()) {
     const textLower = result.text.toLowerCase();
@@ -538,7 +539,7 @@ export async function memoryRecall(
       if (textLower.includes(kw)) hits++;
     }
     if (keywords.length > 0) {
-      result.score *= 1 + 0.3 * (hits / keywords.length);
+      result.score *= 1 + 0.4 * (hits / keywords.length);
     }
   }
 
