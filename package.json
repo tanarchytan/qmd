@@ -1,6 +1,6 @@
 {
   "name": "@tanarchy/qmd",
-  "version": "2.1.0-dev.20",
+  "version": "2.1.0-dev.23",
   "description": "Search + memory + knowledge graph for AI agents. BM25, vector, RRF fusion, LLM reranking, Weibull decay, temporal knowledge. Local or cloud.",
   "type": "module",
   "main": "dist/index.js",
@@ -15,9 +15,13 @@
     "qmd": "bin/qmd"
   },
   "files": [
+    "index.ts",
     "bin/",
     "dist/",
+    "src/",
     "hooks/",
+    "skills/",
+    "setup/",
     "openclaw.plugin.json",
     "README.md",
     "LICENSE",
@@ -57,6 +61,7 @@
     "sqlite-vec": "0.1.9",
     "web-tree-sitter": "0.26.7",
     "yaml": "2.8.3",
+    "zeroentropy": "^0.1.0-alpha.10",
     "zod": "4.2.1"
   },
   "optionalDependencies": {
@@ -90,14 +95,18 @@
     ]
   },
   "peerDependencies": {
-    "typescript": "^5.9.3",
-    "openclaw": ">=2026.4.0"
+    "openclaw": ">=2026.4.0",
+    "typescript": "^5.9.3"
   },
   "peerDependenciesMeta": {
-    "openclaw": { "optional": true }
+    "openclaw": {
+      "optional": true
+    }
   },
   "openclaw": {
-    "extensions": ["./dist/openclaw/plugin.js"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "engines": {
     "node": ">=22.0.0"
