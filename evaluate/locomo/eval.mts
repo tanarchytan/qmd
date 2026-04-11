@@ -500,33 +500,9 @@ async function main() {
         memories = recalled.map((m: any) => ({ text: m.text, score: m.score }));
       } catch { /* empty */ }
 
-      // Knowledge graph: query by entity names AND by keyword search across facts
-      try {
-        // By entity name
-        const entities = qa.question.match(/\b[A-Z][a-z]+\b/g) || [];
-        for (const entity of entities) {
-          const facts = knowledgeAbout(db, entity);
-          for (const f of facts.slice(0, 5)) {
-            const factText = `[Knowledge] ${f.subject} ${f.predicate}: ${f.object}`;
-            if (!memories.some(m => m.text.includes(f.object.slice(0, 20)))) {
-              memories.unshift({ text: factText, score: 10 });
-            }
-          }
-        }
-        // By keyword search across all facts
-        const qWords = qa.question.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-        for (const w of qWords.slice(0, 3)) {
-          const kResults = db.prepare(
-            `SELECT * FROM knowledge WHERE LOWER(object) LIKE ? OR LOWER(predicate) LIKE ? LIMIT 3`
-          ).all(`%${w}%`, `%${w}%`) as any[];
-          for (const f of kResults) {
-            const factText = `[Knowledge] ${f.subject} ${f.predicate}: ${f.object}`;
-            if (!memories.some(m => m.text === factText)) {
-              memories.push({ text: factText, score: 5 });
-            }
-          }
-        }
-      } catch { /* knowledge table may not exist */ }
+      // Knowledge graph injection removed — generic KG entries dominated top results
+      // and pushed relevant memories down, hurting single-hop F1 (12/32 failures)
+      // KG triples still extracted during ingest for future use
 
       const searchMs = Date.now() - t0;
 
