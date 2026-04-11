@@ -30,7 +30,7 @@ loadQmdEnv();
 
 const { openDatabase } = await import(toUrl(join(QMD_DIR, "src/db.ts")));
 const { initializeDatabase } = await import(toUrl(join(QMD_DIR, "src/store/db-init.ts")));
-const { memoryStore, memoryRecall, extractAndStore } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
+const { memoryStore, memoryRecall, extractAndStore, runDecayPass } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
 const { knowledgeStore, knowledgeQuery, knowledgeAbout } = await import(toUrl(join(QMD_DIR, "src/memory/knowledge.ts")));
 
 type Database = ReturnType<typeof openDatabase>;
@@ -434,6 +434,10 @@ async function main() {
       }
     }
     console.log(`    Extracted ${tripleCount} knowledge triples from ${allMems.length} memories`);
+
+    // Run decay pass to promote important memories (MemPalace: dream consolidation)
+    const decay = runDecayPass(db);
+    console.log(`    Decay pass: ${decay.processed} processed, ${decay.promoted} promoted, ${decay.demoted} demoted`);
   }
 
   const globalStart = Date.now();

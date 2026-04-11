@@ -119,18 +119,35 @@ function contentHash(text: string): string {
 // =============================================================================
 
 const STOP_WORDS = new Set([
-  "what", "when", "where", "who", "how", "which", "did", "do",
-  "was", "were", "have", "has", "had", "is", "are", "the", "a",
-  "an", "my", "me", "i", "you", "your", "their", "it", "its",
+  // Question words
+  "what", "when", "where", "who", "how", "which", "why",
+  // Copulas + auxiliaries
+  "is", "am", "are", "was", "were", "be", "been", "being",
+  "do", "did", "does", "done", "have", "has", "had",
+  "will", "would", "could", "should", "can", "may", "might", "shall",
+  // Pronouns
+  "i", "me", "my", "you", "your", "he", "him", "his", "she", "her",
+  "it", "its", "we", "us", "our", "they", "them", "their",
+  "these", "those", "this", "that",
+  // Prepositions
   "in", "on", "at", "to", "for", "of", "with", "by", "from",
-  "ago", "last", "that", "this", "there", "about", "get", "got",
-  "give", "gave", "buy", "bought", "made", "make", "can", "could",
-  "would", "should", "will", "shall", "may", "might", "been",
-  "being", "does", "done", "not", "no", "nor", "but", "and",
-  "or", "so", "than", "too", "very", "just", "also", "some",
-  "any", "all", "each", "every", "both", "few", "more", "most",
-  "other", "such", "only", "same", "into", "over", "after",
-  "before", "between", "through", "during", "above", "below",
+  "into", "over", "after", "before", "between", "through", "during",
+  "above", "below", "up", "down", "out", "off", "under",
+  // Articles + conjunctions
+  "the", "a", "an", "and", "or", "but", "nor", "so", "as", "if",
+  "while", "although", "though", "until", "unless", "because",
+  // Common verbs (too generic)
+  "go", "going", "went", "gone", "get", "got", "getting",
+  "give", "gave", "buy", "bought", "made", "make",
+  "like", "likely",
+  // Adverbs + quantifiers
+  "not", "no", "very", "just", "also", "too", "than",
+  "some", "any", "all", "each", "every", "both", "few",
+  "more", "most", "other", "such", "only", "same",
+  "again", "further", "then", "once", "here", "there", "about",
+  "still", "already", "yet", "even", "much", "many",
+  // Temporal (handled by temporal boost instead)
+  "ago", "last", "long",
 ]);
 
 function extractKeywords(text: string): string[] {
@@ -436,46 +453,12 @@ export async function memoryRecall(
     }
   };
 
-  // 0. Query expansion — generate additional search terms via LLM (if configured)
-  let expandedTerms: string[] = [];
-  if (options.rerank !== false) { // reuse rerank flag as "use advanced features"
-    try {
-      const remoteConfig = getRemoteConfig();
-      if (remoteConfig?.queryExpansion) {
-        const remote = getRemoteLLM()!;
-        const expanded = await remote.expandQuery(query, { includeLexical: true });
-        expandedTerms = expanded
-          .filter(r => r.type === "lex" && r.text !== query)
-          .map(r => r.text);
-      }
-    } catch { /* expansion optional */ }
-  }
-
   // 1+2. FTS and embedding run in parallel (embedding is the slow part)
   const embeddingPromise = embedQuery(query);
 
   // FTS search (synchronous, runs while embedding request is in flight)
   try {
-    // Stop words that poison AND queries (common question/filler words)
-    const STOP_WORDS = new Set([
-      "the", "is", "at", "which", "on", "a", "an", "and", "or", "but", "in",
-      "with", "to", "for", "of", "not", "no", "can", "had", "has", "have",
-      "was", "were", "been", "be", "do", "did", "does", "done", "will",
-      "would", "could", "should", "may", "might", "shall", "this", "that",
-      "these", "those", "am", "are", "its", "it", "i", "we", "you", "he",
-      "she", "they", "me", "him", "her", "us", "them", "my", "your", "his",
-      "our", "their", "what", "when", "where", "who", "how", "why", "from",
-      "about", "into", "through", "during", "before", "after", "above",
-      "below", "between", "up", "down", "out", "off", "over", "under",
-      "again", "further", "then", "once", "here", "there", "all", "each",
-      "every", "both", "few", "more", "most", "other", "some", "such",
-      "only", "own", "same", "so", "than", "too", "very", "just", "because",
-      "as", "if", "while", "although", "though", "until", "unless",
-      "also", "still", "already", "yet", "even", "much", "many",
-      "go", "going", "went", "gone", "get", "got", "getting",
-      "like", "likely", "ago", "long", "how",
-    ]);
-
+    // Reuse module-level STOP_WORDS (single source of truth)
     const terms = query
       .replace(/[^\p{L}\p{N}\s'_-]/gu, '')
       .split(/\s+/)
@@ -494,22 +477,46 @@ export async function memoryRecall(
       if (mem) addResult(mem, Math.abs(r.rank));
     }
 
-    // Run expanded queries through FTS (lower weight — 0.5x)
-    for (const eq of expandedTerms) {
-      const eqTerms = eq.replace(/[^\p{L}\p{N}\s'_-]/gu, '').split(/\s+/)
-        .map(t => t.toLowerCase().replace(/[^\p{L}\p{N}'_]/gu, ''))
-        .filter(t => t.length >= 2 && !STOP_WORDS.has(t));
-      if (eqTerms.length === 0) continue;
-      const eqFts = eqTerms.map(t => `"${t}"*`).join(' OR ');
+    // Strong signal detection (from store/search.ts hybridQuery pattern):
+    // If top FTS result is high-confidence with clear gap, skip query expansion
+    const STRONG_MIN = 0.85;
+    const STRONG_GAP = 0.15;
+    const topScore = ftsResults[0] ? Math.abs(ftsResults[0].rank) : 0;
+    const secondScore = ftsResults[1] ? Math.abs(ftsResults[1].rank) : 0;
+    const maxPossible = ftsResults.length > 0 ? Math.max(...ftsResults.map(r => Math.abs(r.rank))) : 1;
+    const normalizedTop = topScore / (maxPossible || 1);
+    const normalizedGap = (topScore - secondScore) / (maxPossible || 1);
+    const hasStrongSignal = normalizedTop >= STRONG_MIN && normalizedGap >= STRONG_GAP;
+
+    // Query expansion only when no strong FTS signal (saves API call + reduces noise)
+    if (!hasStrongSignal && options.rerank !== false) {
       try {
-        const eqResults = db.prepare(
-          `SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?`
-        ).all(eqFts, limit) as { rowid: number; rank: number }[];
-        for (const r of eqResults) {
-          const mem = getByRowid.get(r.rowid) as Memory | null;
-          if (mem) addResult(mem, Math.abs(r.rank) * 0.5);
+        const remoteConfig = getRemoteConfig();
+        if (remoteConfig?.queryExpansion) {
+          const remote = getRemoteLLM()!;
+          const expanded = await remote.expandQuery(query, { includeLexical: true });
+          const expandedTerms = expanded
+            .filter(r => r.type === "lex" && r.text !== query)
+            .map(r => r.text);
+
+          for (const eq of expandedTerms) {
+            const eqTerms = eq.replace(/[^\p{L}\p{N}\s'_-]/gu, '').split(/\s+/)
+              .map(t => t.toLowerCase().replace(/[^\p{L}\p{N}'_]/gu, ''))
+              .filter(t => t.length >= 2 && !STOP_WORDS.has(t));
+            if (eqTerms.length === 0) continue;
+            const eqFts = eqTerms.map(t => `"${t}"*`).join(' OR ');
+            try {
+              const eqResults = db.prepare(
+                `SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?`
+              ).all(eqFts, limit) as { rowid: number; rank: number }[];
+              for (const r of eqResults) {
+                const mem = getByRowid.get(r.rowid) as Memory | null;
+                if (mem) addResult(mem, Math.abs(r.rank) * 0.5);
+              }
+            } catch { /* skip */ }
+          }
         }
-      } catch { /* skip */ }
+      } catch { /* expansion optional */ }
     }
   } catch {
     // FTS may fail on complex queries
