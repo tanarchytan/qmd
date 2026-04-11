@@ -12,7 +12,8 @@ import { getDefaultLlamaCpp } from "../llm.js";
 import { isLocalEnabled } from "../remote-config.js";
 import { getDecayScore } from "./decay.js";
 import { classifyMemory } from "./patterns.js";
-import { zeMemoryStore, zeMemorySearch, zeMemoryDelete, zeIsAvailable } from "./ze-collections.js";
+// ZE collections removed — no meaningful improvement on full 199Q benchmark (+0.5% R@10, -0.6% F1)
+// import { zeMemoryStore, zeMemorySearch, zeMemoryDelete, zeIsAvailable } from "./ze-collections.js";
 
 // =============================================================================
 // Embedding LRU cache — avoids redundant API calls for repeated text
@@ -47,7 +48,8 @@ export async function extractAndStore(db: Database, text: string, scope?: string
 export { classifyMemory, extractPreferences, hasMemorySignal } from "./patterns.js";
 export { knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeAbout, knowledgeTimeline, knowledgeStats, toSlug } from "./knowledge.js";
 export { importConversation, exportMemories, importMemories } from "./import.js";
-export { zeMemoryStore, zeMemorySearch, zeMemoryDelete, zeIsAvailable, zeDatacenter } from "./ze-collections.js";
+// ZE collections exports kept for optional use but not called by default
+// export { zeMemoryStore, zeMemorySearch, zeMemoryDelete, zeIsAvailable, zeDatacenter } from "./ze-collections.js";
 
 // =============================================================================
 // Types
@@ -416,8 +418,7 @@ export async function memoryStore(
   // Changelog
   db.prepare(`INSERT INTO memory_history (memory_id, action, new_value, timestamp) VALUES (?, 'ADD', ?, ?)`).run(id, text, now);
 
-  // Dual-write to ZeroEntropy collection (async, non-blocking)
-  zeMemoryStore(id, text, scope, { category }).catch(() => {});
+  // ZE collections dual-write removed (no meaningful benchmark improvement)
 
   return { id, status: "created" };
 }
@@ -541,24 +542,6 @@ export async function memoryRecall(
     }
   }
 
-  // 2b. ZeroEntropy collection search (hybrid retrieval + built-in reranker)
-  // Runs in parallel with FTS+vec above, merges results with high weight
-  try {
-    const zeResults = await zeMemorySearch(query, scope ?? "global", limit, {
-      reranker: "zerank-2",
-    });
-    for (const zr of zeResults) {
-      // Look up full memory from SQLite (ZE only returns snippet text)
-      const mem = getById.get(zr.id) as Memory | null;
-      if (mem) {
-        // ZE scores 0-1, give them 2x weight (reranked = high precision)
-        addResult(mem, zr.score * 2);
-      }
-    }
-  } catch {
-    // ZE unavailable — FTS+vec still works
-  }
-
   // 3. Keyword boost (MemPalace: multiplicative, not additive)
   // fused = base_score × (1 + 0.4 × keyword_overlap_ratio)
   const keywords = extractKeywords(query);
@@ -670,8 +653,7 @@ export function memoryForget(
   db.prepare(`DELETE FROM memories WHERE id = ?`).run(id);
   try { db.prepare(`DELETE FROM memories_vec WHERE id = ?`).run(id); } catch {}
 
-  // Also delete from ZeroEntropy collection
-  zeMemoryDelete(id, mem.scope).catch(() => {});
+  // ZE collection delete removed
 
   return { deleted: true };
 }
