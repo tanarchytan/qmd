@@ -65,6 +65,65 @@ function splitIntoChunks(text: string): string[] {
  * Decay scoring uses importance × frequency × recency. Higher importance →
  * slower decay → memory survives in working/core tier longer.
  */
+/**
+ * Approximate entity density: ratio of capitalized tokens (proper-noun
+ * proxy) to total alphanumeric tokens. Higher values suggest the text
+ * names specific people / places / things and is more recall-worthy.
+ * Cheap and zero-dependency — no NER runtime.
+ */
+function entityDensity(text: string): number {
+  const tokens = text.match(/[A-Za-z][\w'-]+/g) || [];
+  if (tokens.length === 0) return 0;
+  // Skip sentence-initial caps by only counting non-first tokens
+  // (catches "John" but not "The" at the start of a sentence).
+  let proper = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    if (/^[A-Z][a-z]+/.test(t) && !STOP_CAPS.has(t.toLowerCase())) {
+      // First-word penalty: only count if not immediately after . ! ? or at start
+      if (i === 0) continue;
+      proper++;
+    }
+  }
+  return Math.min(1, proper / Math.max(1, tokens.length));
+}
+
+// Common sentence-initial words that tokenize as capitalized but aren't
+// proper nouns. Keeps entityDensity from treating "The/That/This/…" as entities.
+const STOP_CAPS = new Set([
+  "the", "that", "this", "these", "those", "there", "then", "than",
+  "what", "when", "where", "which", "who", "whom", "whose", "why", "how",
+  "if", "unless", "although", "while", "since", "because",
+  "yes", "no", "maybe", "okay", "ok",
+]);
+
+/**
+ * Look for markers that the text is making a decision or commitment.
+ * Decisions are long-lived signal and deserve a small importance bump
+ * on top of the category score.
+ */
+const DECISION_PATTERNS = [
+  /\b(?:decided|decide|chose|choose|picked|going to|will|plan(?:ned|ning)? to)\b/i,
+  /\b(?:committed to|agreed to|settled on|opted for)\b/i,
+];
+
+function hasDecisionSignal(text: string): boolean {
+  return DECISION_PATTERNS.some(re => re.test(text));
+}
+
+/**
+ * 4-component importance estimator.
+ *
+ * Category (primary) + length (modest bump) stay as before. Added:
+ *   - entityDensity bump: up to +0.10 when text is packed with proper nouns
+ *   - decisionSignal bump: +0.05 when commitment language is present
+ *
+ * Bumps are capped so the function always returns values in [0, 1].
+ * Approach inspired by Tinkerclaw Instant Recall's 4-component score
+ * (entity_density + decision + engagement + recency) — we skip the
+ * engagement signal because it duplicates the length component and
+ * recency is handled by the decay engine, not at ingest time.
+ */
 function estimateImportance(text: string, category: PatternCategory): number {
   let importance = 0.5;
 
@@ -74,9 +133,16 @@ function estimateImportance(text: string, category: PatternCategory): number {
   else if (category === "preference") importance = 0.6;
   else if (category === "reflection") importance = 0.6;
 
-  if (text.length > 200) importance = Math.min(1, importance + 0.1);
+  if (text.length > 200) importance += 0.1;
 
-  return importance;
+  const density = entityDensity(text);
+  if (density >= 0.1) importance += Math.min(0.1, density * 0.5);
+
+  if (hasDecisionSignal(text) && category !== "decision") {
+    importance += 0.05;
+  }
+
+  return Math.max(0, Math.min(1, importance));
 }
 
 // =============================================================================
