@@ -142,6 +142,14 @@ export type EvictionOptions = {
   minImportance?: number;
   /** Memories with at least this access count are spared. Default 2. */
   minAccessCount?: number;
+  /**
+   * Backward-K window for the LRU-K sparing check: memories whose
+   * last_accessed falls within this window are treated as hot and
+   * exempted from eviction, regardless of creation age. Default 7 days.
+   * (True LRU-K would track the K-th most recent access; a single-field
+   * window is the best we can do without a per-memory access history.)
+   */
+  lruWindowDays?: number;
   /** Don't actually delete, just report. */
   dryRun?: boolean;
 };
@@ -174,6 +182,12 @@ export function runEvictionPass(db: Database, options: EvictionOptions = {}): Ev
   const now = Date.now();
   const cutoff = now - maxAge;
 
+  // Backward-K heuristic cutoff: even candidates that pass the creation-age
+  // gate are spared if they were accessed recently (closer to LRU-K semantics
+  // than pure created_at scoring). Default: 7 days since last access.
+  const lruWindowMs = (options.lruWindowDays ?? 7) * 86400000;
+  const lruCutoff = now - lruWindowMs;
+
   // Find candidates: old, low importance, low access, not core, not protected category
   const candidates = db.prepare(`
     SELECT id, text, importance, access_count, last_accessed, created_at, tier, category
@@ -205,9 +219,23 @@ export function runEvictionPass(db: Database, options: EvictionOptions = {}): Ev
   // Use better-sqlite3 nestable transaction API (item #11) — safer than raw BEGIN/COMMIT
   const txn = db.transaction((cs: typeof candidates) => {
     for (const c of cs) {
-      // Working tier needs an extra check — only evict if very stale
+      // Backward-K sparing: an item accessed within lruWindowDays is
+      // considered hot and exempted from eviction even if creation-old.
+      // Closer to LRU-K semantics than scoring purely on creation age,
+      // without requiring a per-memory access-timestamp history table.
+      if (c.last_accessed !== null && c.last_accessed >= lruCutoff) {
+        continue;
+      }
+
+      // Working tier needs an extra check — only evict if very stale.
+      // Uses last-access age when available (true recency), falling back
+      // to creation age for never-accessed memories. This is the
+      // behavioral change from pre-LRU-K: a memory created 60 days ago
+      // but accessed last week is no longer eligible for eviction on the
+      // "60 days stale" grounds.
       if (c.tier === "working") {
-        const days = (now - c.created_at) / 86400000;
+        const referenceMs = c.last_accessed ?? c.created_at;
+        const days = (now - referenceMs) / 86400000;
         const score = compositeScore(days, c.access_count, c.importance, c.tier);
         if (score >= 0.1) continue;
       }
