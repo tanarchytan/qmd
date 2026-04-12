@@ -1130,6 +1130,94 @@ Reflections:`;
   return { reflections: created, skipped: false };
 }
 
+/**
+ * Push Pack — proactive "hot state" bundle for session priming (roadmap cat 16).
+ *
+ * Tinkerclaw Total Recall's pattern: before the agent does anything,
+ * push a small pack of Task State + hot tail + time markers into the
+ * context so relevant long-term memory is immediately present without
+ * needing an explicit recall call. This is the Push side of the
+ * push/pull symmetry — memoryRecall is the pull side.
+ *
+ * Zero-LLM, deterministic SQL — cheap to call from session_start /
+ * before_prompt_build hooks. Returns an ordered list that callers can
+ * format into a prompt prefix or system message.
+ *
+ * Selection logic:
+ *   - Core-tier memories (promoted — the long-term backbone)
+ *   - High-importance working-tier memories in the last windowDays
+ *   - Most recently accessed memories (hot tail)
+ * Deduped by id, truncated to maxEntries (default 10).
+ */
+export function memoryPushPack(
+  db: Database,
+  options: {
+    scope?: string;
+    /** Window in days for hot-tail selection. Default 14. */
+    windowDays?: number;
+    /** Max memories in the pack. Default 10. */
+    maxEntries?: number;
+    /** Importance floor for working-tier pulls. Default 0.7. */
+    minImportance?: number;
+  } = {}
+): Array<{ id: string; text: string; tier: string; importance: number; reason: string }> {
+  const scope = options.scope;
+  const windowDays = options.windowDays ?? 14;
+  const maxEntries = options.maxEntries ?? 10;
+  const minImp = options.minImportance ?? 0.7;
+  const since = Date.now() - windowDays * 86400000;
+
+  const scopeClause = scope ? `AND (scope = ? OR scope = 'global')` : "";
+  const scopeParams = scope ? [scope] : [];
+
+  // Core tier — always included
+  const coreRows = db.prepare(`
+    SELECT id, text, tier, importance FROM memories
+    WHERE tier = 'core' ${scopeClause}
+    ORDER BY importance DESC, last_accessed DESC NULLS LAST
+    LIMIT ?
+  `).all(...scopeParams, maxEntries) as Array<{ id: string; text: string; tier: string; importance: number }>;
+
+  // High-importance recent — working / peripheral but important and fresh
+  const importantRows = db.prepare(`
+    SELECT id, text, tier, importance FROM memories
+    WHERE tier != 'core'
+      AND importance >= ?
+      AND created_at >= ?
+      ${scopeClause}
+    ORDER BY importance DESC, created_at DESC
+    LIMIT ?
+  `).all(minImp, since, ...scopeParams, maxEntries) as Array<{ id: string; text: string; tier: string; importance: number }>;
+
+  // Hot tail — most recently accessed
+  const hotRows = db.prepare(`
+    SELECT id, text, tier, importance FROM memories
+    WHERE last_accessed IS NOT NULL
+      AND last_accessed >= ?
+      ${scopeClause}
+    ORDER BY last_accessed DESC
+    LIMIT ?
+  `).all(since, ...scopeParams, maxEntries) as Array<{ id: string; text: string; tier: string; importance: number }>;
+
+  const seen = new Set<string>();
+  const pack: Array<{ id: string; text: string; tier: string; importance: number; reason: string }> = [];
+
+  const pushReason = (rows: typeof coreRows, reason: string) => {
+    for (const r of rows) {
+      if (pack.length >= maxEntries) return;
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      pack.push({ ...r, reason });
+    }
+  };
+
+  pushReason(coreRows, "core");
+  pushReason(importantRows, "important-recent");
+  pushReason(hotRows, "hot-tail");
+
+  return pack;
+}
+
 export function memoryForget(
   db: Database,
   id: string
