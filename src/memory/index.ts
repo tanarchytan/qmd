@@ -104,6 +104,8 @@ export type MemoryRecallResult = {
   importance: number;
   score: number;
   created_at: number;
+  /** JSON-serialized metadata as stored. Use parseMemoryMetadata() to read structured fields. */
+  metadata?: string | null;
 };
 
 export type MemoryUpdateOptions = {
@@ -577,6 +579,12 @@ export async function memoryRecall(
 
   const results = new Map<string, MemoryRecallResult & { _access_count: number; _tier: string }>();
 
+  // Raw mode disables every post-RRF boost so we can fairly compare against
+  // bare-vector baselines like MemPalace's 96.6% LongMemEval recipe.
+  // BM25 + vector are still combined; everything else (decay, temporal,
+  // keyword boost, quoted phrase, query expansion, rerank) is skipped.
+  const RAW = process.env.QMD_RECALL_RAW === "on";
+
   const addResult = (mem: Memory, score: number) => {
     if (scope && mem.scope !== scope && mem.scope !== "global") return;
     if (category && mem.category !== category) return;
@@ -588,6 +596,7 @@ export async function memoryRecall(
         id: mem.id, text: mem.text, category: mem.category, scope: mem.scope,
         importance: mem.importance, score, created_at: mem.created_at,
         _access_count: mem.access_count, _tier: mem.tier,
+        metadata: mem.metadata,
       });
     }
   };
@@ -628,7 +637,8 @@ export async function memoryRecall(
     const hasStrongSignal = normalizedTop >= STRONG_MIN && normalizedGap >= STRONG_GAP;
 
     // Query expansion only when no strong FTS signal (saves API call + reduces noise)
-    if (!hasStrongSignal && options.rerank !== false) {
+    // Skipped entirely in RAW mode.
+    if (!RAW && !hasStrongSignal && options.rerank !== false) {
       try {
         const remoteConfig = getRemoteConfig();
         if (remoteConfig?.queryExpansion) {
@@ -680,98 +690,71 @@ export async function memoryRecall(
     }
   }
 
-  // 3. Keyword boost (MemPalace: multiplicative, not additive)
-  // fused = base_score × (1 + 0.4 × keyword_overlap_ratio)
-  const keywords = extractKeywords(query);
-  for (const result of results.values()) {
-    const textLower = result.text.toLowerCase();
-    let hits = 0;
-    for (const kw of keywords) {
-      if (textLower.includes(kw)) hits++;
-    }
-    if (keywords.length > 0) {
-      result.score *= 1 + 0.4 * (hits / keywords.length);
-    }
-  }
-
-  // 3b. Quoted phrase boost (MemPalace v4: 60% boost for exact quoted phrases)
-  const quotedPhrases = query.match(/"([^"]+)"/g)?.map(p => p.slice(1, -1).toLowerCase()) || [];
-  for (const phrase of quotedPhrases) {
+  // 3-4. Post-RRF score adjustments — all skipped in RAW mode for fair
+  // baseline comparison.
+  if (!RAW) {
+    // 3. Keyword boost (MemPalace: multiplicative, not additive)
+    // fused = base_score × (1 + 0.4 × keyword_overlap_ratio)
+    const keywords = extractKeywords(query);
     for (const result of results.values()) {
-      if (result.text.toLowerCase().includes(phrase)) {
-        result.score *= 1.6;
+      const textLower = result.text.toLowerCase();
+      let hits = 0;
+      for (const kw of keywords) {
+        if (textLower.includes(kw)) hits++;
+      }
+      if (keywords.length > 0) {
+        result.score *= 1 + 0.4 * (hits / keywords.length);
+      }
+    }
+
+    // 3b. Quoted phrase boost (MemPalace v4: 60% boost for exact quoted phrases)
+    const quotedPhrases = query.match(/"([^"]+)"/g)?.map(p => p.slice(1, -1).toLowerCase()) || [];
+    for (const phrase of quotedPhrases) {
+      for (const result of results.values()) {
+        if (result.text.toLowerCase().includes(phrase)) {
+          result.score *= 1.6;
+        }
+      }
+    }
+
+    // 4. Apply decay weighting — uses data already fetched (no extra query)
+    for (const result of results.values()) {
+      const decay = getDecayScore(result.created_at, result._access_count, result.importance, result._tier);
+      result.score *= decay;
+    }
+
+    // 4b. Temporal boost — memories near a time reference in the query score higher
+    // From MemPalace HYBRID_MODE.md: up to 40% boost for time-proximate memories
+    const timeRef = parseTimeReference(query);
+    if (timeRef) {
+      const MS_PER_DAY = 86400000;
+
+      // Also inject recent memories by timestamp (temporal queries often don't match FTS/vec)
+      const windowMs = timeRef.windowDays * MS_PER_DAY;
+      const recentRows = db.prepare(
+        `SELECT * FROM memories WHERE created_at > ? AND created_at < ? ORDER BY created_at DESC LIMIT ?`
+      ).all(timeRef.targetMs - windowMs, timeRef.targetMs + windowMs, limit) as Memory[];
+      for (const mem of recentRows) {
+        if (scope && mem.scope !== scope) continue;
+        if (category && mem.category !== category) continue;
+        if (!results.has(mem.id)) {
+          addResult(mem, 0.5); // base score for time-matched memories
+        }
+      }
+
+      for (const result of results.values()) {
+        const daysDiff = Math.abs(result.created_at - timeRef.targetMs) / MS_PER_DAY;
+        const boost = Math.max(0, 0.40 * (1 - daysDiff / timeRef.windowDays));
+        if (boost > 0) result.score *= 1 + boost;
       }
     }
   }
 
-  // 4. Apply decay weighting — uses data already fetched (no extra query)
-  for (const result of results.values()) {
-    const decay = getDecayScore(result.created_at, result._access_count, result.importance, result._tier);
-    result.score *= decay;
-  }
+  // 5. Sort by combined score (single pool — dual-pass tested + lost in v15)
+  let sorted = [...results.values()].sort((a, b) => b.score - a.score);
 
-  // 4b. Temporal boost — memories near a time reference in the query score higher
-  // From MemPalace HYBRID_MODE.md: up to 40% boost for time-proximate memories
-  const timeRef = parseTimeReference(query);
-  if (timeRef) {
-    const MS_PER_DAY = 86400000;
-
-    // Also inject recent memories by timestamp (temporal queries often don't match FTS/vec)
-    const windowMs = timeRef.windowDays * MS_PER_DAY;
-    const recentRows = db.prepare(
-      `SELECT * FROM memories WHERE created_at > ? AND created_at < ? ORDER BY created_at DESC LIMIT ?`
-    ).all(timeRef.targetMs - windowMs, timeRef.targetMs + windowMs, limit) as Memory[];
-    for (const mem of recentRows) {
-      if (scope && mem.scope !== scope) continue;
-      if (category && mem.category !== category) continue;
-      if (!results.has(mem.id)) {
-        addResult(mem, 0.5); // base score for time-matched memories
-      }
-    }
-
-    for (const result of results.values()) {
-      const daysDiff = Math.abs(result.created_at - timeRef.targetMs) / MS_PER_DAY;
-      const boost = Math.max(0, 0.40 * (1 - daysDiff / timeRef.windowDays));
-      if (boost > 0) result.score *= 1 + boost;
-    }
-  }
-
-  // 4c. OPTIONAL: Importance log-modulation (Tinkerclaw Instant Recall, α=0.15)
-  // Enabled via QMD_RECALL_LOG_MOD=on. Off by default (v14 baseline).
-  if (process.env.QMD_RECALL_LOG_MOD === "on") {
-    for (const result of results.values()) {
-      result.score *= 1 + 0.15 * Math.log(1 + result.importance * 10);
-    }
-  }
-
-  // 5. Build sorted candidate pool
-  // Default: single ranking (v10 baseline)
-  // QMD_RECALL_DUAL_PASS=on: split into atomic vs chunk tiers, merge top from each
-  type ResultEntry = ReturnType<typeof results.values> extends IterableIterator<infer T> ? T : never;
-  let sorted: ResultEntry[];
-  if (process.env.QMD_RECALL_DUAL_PASS === "on") {
-    const ATOMIC_MAX_LEN = 200;
-    const ATOMIC_MIN_IMPORTANCE = 0.65;
-    const all = [...results.values()];
-    const atomic = all.filter(r => r.text.length < ATOMIC_MAX_LEN || r.importance >= ATOMIC_MIN_IMPORTANCE);
-    const chunks = all.filter(r => r.text.length >= ATOMIC_MAX_LEN && r.importance < ATOMIC_MIN_IMPORTANCE);
-    atomic.sort((a, b) => b.score - a.score);
-    chunks.sort((a, b) => b.score - a.score);
-    const candidatePoolSize = limit * 3;
-    const merged = new Map<string, typeof all[number]>();
-    const atomicReserve = Math.ceil(candidatePoolSize / 2);
-    const chunkReserve = candidatePoolSize - atomicReserve;
-    for (let i = 0; i < atomicReserve && i < atomic.length; i++) merged.set(atomic[i]!.id, atomic[i]!);
-    for (let i = 0; i < chunkReserve && i < chunks.length; i++) merged.set(chunks[i]!.id, chunks[i]!);
-    for (let i = atomicReserve; merged.size < candidatePoolSize && i < atomic.length; i++) merged.set(atomic[i]!.id, atomic[i]!);
-    for (let i = chunkReserve; merged.size < candidatePoolSize && i < chunks.length; i++) merged.set(chunks[i]!.id, chunks[i]!);
-    sorted = [...merged.values()].sort((a, b) => b.score - a.score);
-  } else {
-    sorted = [...results.values()].sort((a, b) => b.score - a.score);
-  }
-
-  // 5b. Optional: rerank top candidates with LLM/dedicated reranker
-  if (options.rerank !== false && sorted.length > 1) {
+  // 5b. Optional: rerank top candidates with LLM/dedicated reranker (skip in RAW)
+  if (!RAW && options.rerank !== false && sorted.length > 1) {
     const rerankCandidates = sorted.slice(0, Math.min(sorted.length, limit * 3));
     try {
       const remoteConfig = getRemoteConfig();
@@ -796,51 +779,7 @@ export async function memoryRecall(
     }
   }
 
-  // 5c. OPTIONAL: MMR diversity filter (Tinkerclaw Total Recall, λ configurable)
-  // Enabled via QMD_RECALL_MMR=on. λ via QMD_RECALL_MMR_LAMBDA (default 0.85).
-  // Quality fix #5: use token bigrams instead of single-token Jaccard so short
-  // atomic facts don't false-positive on stop-equivalent overlap.
-  if (process.env.QMD_RECALL_MMR === "on" && sorted.length > limit) {
-    const _lam = parseFloat(process.env.QMD_RECALL_MMR_LAMBDA || "0.85");
-    const lambda = Number.isFinite(_lam) ? Math.max(0, Math.min(1, _lam)) : 0.85;
-    const candidates = sorted.slice(0, Math.min(sorted.length, limit * 2));
-    // Build bigram sets — captures two-word phrases, less prone to false matches
-    const bigramSet = (text: string): Set<string> => {
-      const tokens = (text.toLowerCase().match(/\w+/g) || []);
-      const grams = new Set<string>();
-      for (let i = 0; i < tokens.length - 1; i++) grams.add(tokens[i] + " " + tokens[i + 1]);
-      // Fallback for very short texts: also include unigrams
-      if (grams.size < 3) for (const t of tokens) grams.add(t);
-      return grams;
-    };
-    const grams = candidates.map(r => bigramSet(r.text));
-    const maxScore = candidates[0]?.score || 1;
-    const selectedIdx: number[] = [0];
-    while (selectedIdx.length < limit && selectedIdx.length < candidates.length) {
-      let bestIdx = -1;
-      let bestMmr = -Infinity;
-      for (let i = 0; i < candidates.length; i++) {
-        if (selectedIdx.includes(i)) continue;
-        let maxSim = 0;
-        for (const j of selectedIdx) {
-          const a = grams[i]!; const b = grams[j]!;
-          let inter = 0;
-          for (const t of a) if (b.has(t)) inter++;
-          const union = a.size + b.size - inter;
-          const sim = union === 0 ? 0 : inter / union;
-          if (sim > maxSim) maxSim = sim;
-        }
-        const normScore = (candidates[i]!.score) / maxScore;
-        const mmr = lambda * normScore - (1 - lambda) * maxSim;
-        if (mmr > bestMmr) { bestMmr = mmr; bestIdx = i; }
-      }
-      if (bestIdx >= 0) selectedIdx.push(bestIdx);
-      else break;
-    }
-    sorted = selectedIdx.map(i => candidates[i]!);
-  } else {
-    sorted = sorted.slice(0, limit);
-  }
+  sorted = sorted.slice(0, limit);
 
   // Touch access counts for recalled memories (batched in transaction for performance)
   const now = Date.now();

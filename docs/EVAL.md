@@ -84,10 +84,7 @@ All toggles default to the v15-final configuration. Override to ablate.
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `QMD_RECALL_DUAL_PASS` | off | Atomic vs chunk tier split-rank |
-| `QMD_RECALL_LOG_MOD` | off | Tinkerclaw importance log-modulation (×(1+α·log(imp·10))) |
-| `QMD_RECALL_MMR` | off | MMR diversity filter (Carbonell & Goldstein) |
-| `QMD_RECALL_MMR_LAMBDA` | 0.85 | MMR balance: 1.0 = relevance only, 0.0 = diversity only |
+| `QMD_RECALL_RAW` | off | Disable ALL post-RRF logic — no keyword/quoted/temporal boost, no decay weighting, no query expansion, no rerank. Pure BM25 + vector RRF. Used for apples-to-apples baseline comparisons (e.g. matching MemPalace's raw ChromaDB recipe). |
 
 ### Answer-prompt
 
@@ -203,10 +200,12 @@ Single-conversation scores are unreliable. The LoCoMo audit ([github.com/dial481
 
 | Metric | Meaning | What it tests |
 |--------|---------|---------------|
-| **R@5** | Did the answer's tokens appear in top-5 retrieved memories? | Retrieval precision at small K |
-| **R@10** | Same for top-10 | Retrieval precision at moderate K |
+| **R@5 / R@10** | (LoCoMo + LME) Do the answer's tokens appear in top-K retrieved memories? | Token-overlap recall — QMD's original metric |
+| **SR@5 / SR@10** | (LME only) Did any retrieved memory come from a session listed in `answer_session_ids`? | Session-id recall — **apples-to-apples with MemPalace's `recall_any`** |
 | **F1** | Token overlap between LLM answer and ground truth | Answer quality |
 | **EM** | Exact tokenized match | Answer precision |
+
+**R@K vs SR@K matters for cross-system comparison.** MemPalace's published 96.6% LongMemEval R@5 is `recall_any` based on session id intersection. To compare fairly with their numbers, use the SR@K columns.
 
 **R@K rewards retrieval; F1/EM reward synthesis.** Both matter — high R@K with low F1 means retrieval is finding the answer but the LLM can't use it. High F1 with low R@K means the LLM is reasoning from indirect context (synthesis is doing real work).
 

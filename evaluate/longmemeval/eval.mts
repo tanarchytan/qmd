@@ -157,6 +157,35 @@ function computeRecallAtK(memories: { text: string }[], groundTruth: string, k: 
   return totalHits / truthTokens.length >= 0.7 ? 1 : 0;
 }
 
+/**
+ * Session-id-based recall — apples-to-apples with MemPalace's `recall_any`.
+ * Returns 1 if any retrieved memory came from a session in answer_session_ids.
+ *
+ * Each memory carries a JSON metadata blob with source_session_id (set at
+ * ingest time). We extract it, check intersection with the question's
+ * answer_session_ids, and report binary hit/miss.
+ *
+ * MemPalace's longmemeval_bench.py uses this exact metric. Comparing this
+ * number to their 96.6% R@5 gives a fair side-by-side.
+ */
+function computeSessionRecallAtK(
+  memories: Array<{ metadata?: string | null }>,
+  answerSessionIds: string[],
+  k: number,
+): number {
+  if (answerSessionIds.length === 0) return 1;
+  const correct = new Set(answerSessionIds);
+  const topK = memories.slice(0, k);
+  for (const m of topK) {
+    if (!m.metadata) continue;
+    try {
+      const meta = JSON.parse(m.metadata) as { source_session_id?: string };
+      if (meta.source_session_id && correct.has(meta.source_session_id)) return 1;
+    } catch { /* skip malformed metadata */ }
+  }
+  return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -297,20 +326,22 @@ async function main() {
       const batchExtract = process.env.QMD_INGEST_BATCH_EXTRACT !== "off";
 
       const sessionTexts: string[] = [];
-      const turnBatch: Array<{ text: string; scope: string; importance?: number }> = [];
+      const turnBatch: Array<{ text: string; scope: string; importance?: number; metadata?: Record<string, unknown> }> = [];
 
       for (let s = 0; s < inst.haystack_sessions.length; s++) {
         const turns = inst.haystack_sessions[s]!;
         const date = inst.haystack_dates[s] || "";
+        const sessionId = inst.haystack_session_ids[s] || `session_${s}`;
         if (storeTurns) {
-          for (const t of turns) {
-            const text = date ? `[${date}] ${t.role}: ${t.content}` : `${t.role}: ${t.content}`;
-            turnBatch.push({ text, scope });
+          for (let t = 0; t < turns.length; t++) {
+            const turn = turns[t]!;
+            const text = date ? `[${date}] ${turn.role}: ${turn.content}` : `${turn.role}: ${turn.content}`;
+            turnBatch.push({ text, scope, metadata: { source_session_id: sessionId, turn_index: t } });
           }
         }
         const sessionText = turns.map(t => `${t.role}: ${t.content}`).join("\n");
         if (storeSessions && date) {
-          turnBatch.push({ text: `[${date}]\n${sessionText}`, scope, importance: 0.7 });
+          turnBatch.push({ text: `[${date}]\n${sessionText}`, scope, importance: 0.7, metadata: { source_session_id: sessionId } });
         }
         sessionTexts.push(date ? `[${date}]\n${sessionText}` : sessionText);
         // Per-session extraction (legacy path)
@@ -344,10 +375,10 @@ async function main() {
 
     // --- RECALL ---
     const t0 = Date.now();
-    let memories: { text: string; score: number }[] = [];
+    let memories: { text: string; score: number; metadata?: string | null }[] = [];
     try {
       const recalled = await memoryRecall(db, { query: inst.question, limit: 10, scope });
-      memories = recalled.map((m: any) => ({ text: m.text, score: m.score }));
+      memories = recalled.map((m: any) => ({ text: m.text, score: m.score, metadata: m.metadata }));
     } catch { /* empty */ }
     const searchMs = Date.now() - t0;
 
@@ -371,8 +402,12 @@ async function main() {
     const gt = String(inst.answer || "");
     const f1 = computeF1(prediction, gt);
     const em = computeEM(prediction, gt);
+    // Token-overlap recall (QMD's original metric)
     const r5 = computeRecallAtK(memories, gt, 5);
     const r10 = computeRecallAtK(memories, gt, 10);
+    // Session-id recall (apples-to-apples with MemPalace's `recall_any`)
+    const sr5 = computeSessionRecallAtK(memories, inst.answer_session_ids || [], 5);
+    const sr10 = computeSessionRecallAtK(memories, inst.answer_session_ids || [], 10);
     runningF1 += f1;
 
     allResults.push({
@@ -382,7 +417,7 @@ async function main() {
       answer: gt,
       prediction: prediction.slice(0, 300),
       memoriesFound: memories.length,
-      f1, em, r5, r10,
+      f1, em, r5, r10, sr5, sr10,
       searchMs, answerMs,
     });
 
@@ -397,14 +432,21 @@ async function main() {
   const avgEM = allResults.reduce((s, r) => s + r.em, 0) / n;
   const avgR5 = allResults.reduce((s, r) => s + r.r5, 0) / n;
   const avgR10 = allResults.reduce((s, r) => s + r.r10, 0) / n;
+  const avgSR5 = allResults.reduce((s, r) => s + r.sr5, 0) / n;
+  const avgSR10 = allResults.reduce((s, r) => s + r.sr10, 0) / n;
 
   console.log(`${"=".repeat(64)}`);
   console.log(`  LONGMEMEVAL FINAL  (ds=${dsName}, n=${n})`);
   console.log(`${"=".repeat(64)}`);
-  console.log(`  R@5:  ${(avgR5 * 100).toFixed(1)}%`);
-  console.log(`  R@10: ${(avgR10 * 100).toFixed(1)}%`);
-  console.log(`  F1:   ${(avgF1 * 100).toFixed(1)}%`);
-  console.log(`  EM:   ${(avgEM * 100).toFixed(1)}%`);
+  console.log(`  Token-overlap recall (QMD metric):`);
+  console.log(`    R@5:  ${(avgR5 * 100).toFixed(1)}%`);
+  console.log(`    R@10: ${(avgR10 * 100).toFixed(1)}%`);
+  console.log(`  Session-id recall (MemPalace metric — apples-to-apples):`);
+  console.log(`    SR@5:  ${(avgSR5 * 100).toFixed(1)}%`);
+  console.log(`    SR@10: ${(avgSR10 * 100).toFixed(1)}%`);
+  console.log(`  Answer quality:`);
+  console.log(`    F1:   ${(avgF1 * 100).toFixed(1)}%`);
+  console.log(`    EM:   ${(avgEM * 100).toFixed(1)}%`);
   console.log(`  Time: ${elapsed(globalStart)}`);
 
   console.log(`\n  By question type:`);
@@ -413,9 +455,9 @@ async function main() {
     const qrs = allResults.filter(r => r.question_type === qt);
     const f1 = qrs.reduce((s, r) => s + r.f1, 0) / qrs.length;
     const em = qrs.reduce((s, r) => s + r.em, 0) / qrs.length;
-    const r5 = qrs.reduce((s, r) => s + r.r5, 0) / qrs.length;
-    const r10 = qrs.reduce((s, r) => s + r.r10, 0) / qrs.length;
-    console.log(`    ${qt.padEnd(30)} (n=${String(qrs.length).padStart(4)}): R@5=${(r5 * 100).toFixed(0).padStart(3)}%  R@10=${(r10 * 100).toFixed(0).padStart(3)}%  F1=${(f1 * 100).toFixed(1).padStart(5)}%  EM=${(em * 100).toFixed(1).padStart(5)}%`);
+    const sr5 = qrs.reduce((s, r) => s + r.sr5, 0) / qrs.length;
+    const sr10 = qrs.reduce((s, r) => s + r.sr10, 0) / qrs.length;
+    console.log(`    ${qt.padEnd(30)} (n=${String(qrs.length).padStart(4)}): SR@5=${(sr5 * 100).toFixed(0).padStart(3)}%  SR@10=${(sr10 * 100).toFixed(0).padStart(3)}%  F1=${(f1 * 100).toFixed(1).padStart(5)}%  EM=${(em * 100).toFixed(1).padStart(5)}%`);
   }
 
   // Save
@@ -423,7 +465,7 @@ async function main() {
   const outPath = join(QMD_DIR, "evaluate/longmemeval", outName);
   writeFileSync(outPath, JSON.stringify({
     config: { ds: dsName, useLLM, model: useLLM ? LLM_CONFIG[activeLLM].model : "none", llm: activeLLM, limit, questionTypeFilter, ablation },
-    summary: { avgR5, avgR10, avgF1, avgEM, total: n },
+    summary: { avgR5, avgR10, avgSR5, avgSR10, avgF1, avgEM, total: n },
     results: allResults,
   }, null, 2));
   console.log(`\n  Saved: ${outPath}`);
