@@ -176,6 +176,9 @@ export interface LLM {
   /** Get embeddings for text */
   embed(text: string, options?: EmbedOptions): Promise<EmbeddingResult | null>;
 
+  /** Get embeddings for a batch of texts (some impls parallelize) */
+  embedBatch(texts: string[], options?: EmbedOptions): Promise<(EmbeddingResult | null)[]>;
+
   /** Generate text completion */
   generate(prompt: string, options?: GenerateOptions): Promise<GenerateResult | null>;
 
