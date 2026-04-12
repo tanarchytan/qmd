@@ -93,6 +93,7 @@ async function askLLM(prompt: string): Promise<string> {
 function buildAnswerPrompt(question: string, memories: string[], questionType: string): string {
   const context = memories.map((m, i) => `[${i + 1}] ${m}`).join("\n");
   const isAbstention = questionType.endsWith("_abs");
+  const useV111 = (process.env.QMD_PROMPT_RULES || "v11") === "v11.1";
 
   if (isAbstention) {
     return `${context}
@@ -102,6 +103,11 @@ If the context does NOT contain information to answer this question, respond wit
 
 Question: ${question} Short answer:`;
   }
+
+  const extraRules = useV111 ? `
+7. For ORDERING questions ("which came first", "which did I X first/earlier"), compare the dates/timestamps in the context and pick the item with the earlier date. If both dates are present, NEVER refuse.
+8. For DURATION questions ("how long", "how many days/weeks/months between X and Y"), if both anchor dates are present in context, compute the difference and answer with number + unit (e.g. "7 days", "two months"). NEVER respond with "context does not provide" when both dates are visible.
+9. For COUNTING questions ("how many X"), enumerate every matching item from the context first, then count them. Do not estimate.` : "";
 
   return `${context}
 
@@ -113,7 +119,7 @@ Rules:
 3. For Yes/No questions, answer with bare "Yes" or "No".
 4. For DURATION questions ("how long"), compute the time span between two dates.
 5. NEVER answer with relative terms — always convert to absolute dates.
-6. Output the answer ONLY — no explanation, no preamble.
+6. Output the answer ONLY — no explanation, no preamble.${extraRules}
 
 Question: ${question} Short answer:`;
 }
@@ -255,10 +261,10 @@ async function main() {
       LLM_CONFIG.gemini.model = m;
       LLM_CONFIG.gemini.url = geminiUrl(m);
     }
-    // --extract-model: override only the extraction LLM model (cheaper/faster model for ingest)
-    if (args[i] === "--extract-model" && args[i + 1]) {
-      process.env.QMD_QUERY_EXPANSION_MODEL = args[i + 1]!;
-    }
+    // --extract-model was here historically but it pointed at QMD_QUERY_EXPANSION_MODEL
+    // which is read by the query-expansion path, not the memory extractor. That caused
+    // queryExpansion to 404 when passed a Gemini model name. Removed until a proper
+    // per-call extractor model override is implemented in src/memory/extractor.ts.
     // cat E: parallel sharding — --shard 1/4 means shard index 1 of 4 total
     if (args[i] === "--shard" && args[i + 1]) {
       const m = args[i + 1]!.match(/^(\d+)\/(\d+)$/);
@@ -378,7 +384,8 @@ async function main() {
     const t0 = Date.now();
     let memories: { text: string; score: number; metadata?: string | null }[] = [];
     try {
-      const recalled = await memoryRecall(db, { query: inst.question, limit: 10, scope });
+      // Pull top-50 to match MemPalace default top_k; slice locally for SR@5/@10/@15/@50.
+      const recalled = await memoryRecall(db, { query: inst.question, limit: 50, scope });
       memories = recalled.map((m: any) => ({ text: m.text, score: m.score, metadata: m.metadata }));
     } catch { /* empty */ }
     const searchMs = Date.now() - t0;
@@ -407,6 +414,8 @@ async function main() {
     const r10 = computeRecallAtK(memories, gt, 10);
     const sr5 = computeSessionRecallAtK(memories, inst.answer_session_ids || [], 5);
     const sr10 = computeSessionRecallAtK(memories, inst.answer_session_ids || [], 10);
+    const sr15 = computeSessionRecallAtK(memories, inst.answer_session_ids || [], 15);
+    const sr50 = computeSessionRecallAtK(memories, inst.answer_session_ids || [], 50);
     runningF1 += f1;
     completed++;
 
@@ -417,7 +426,7 @@ async function main() {
       answer: gt,
       prediction: prediction.slice(0, 300),
       memoriesFound: memories.length,
-      f1, em, r5, r10, sr5, sr10,
+      f1, em, r5, r10, sr5, sr10, sr15, sr50,
       searchMs, answerMs,
     });
 
@@ -451,16 +460,20 @@ async function main() {
   const avgR10 = allResults.reduce((s, r) => s + r.r10, 0) / n;
   const avgSR5 = allResults.reduce((s, r) => s + r.sr5, 0) / n;
   const avgSR10 = allResults.reduce((s, r) => s + r.sr10, 0) / n;
+  const avgSR15 = allResults.reduce((s, r) => s + r.sr15, 0) / n;
+  const avgSR50 = allResults.reduce((s, r) => s + r.sr50, 0) / n;
 
   console.log(`${"=".repeat(64)}`);
   console.log(`  LONGMEMEVAL FINAL  (ds=${dsName}, n=${n})`);
   console.log(`${"=".repeat(64)}`);
-  console.log(`  Token-overlap recall (QMD metric):`);
-  console.log(`    R@5:  ${(avgR5 * 100).toFixed(1)}%`);
-  console.log(`    R@10: ${(avgR10 * 100).toFixed(1)}%`);
-  console.log(`  Session-id recall (MemPalace metric — apples-to-apples):`);
+  console.log(`  APPLES-TO-APPLES — Session-id recall (MemPalace recall_any, primary metric):`);
   console.log(`    SR@5:  ${(avgSR5 * 100).toFixed(1)}%`);
   console.log(`    SR@10: ${(avgSR10 * 100).toFixed(1)}%`);
+  console.log(`    SR@15: ${(avgSR15 * 100).toFixed(1)}%`);
+  console.log(`    SR@50: ${(avgSR50 * 100).toFixed(1)}%  ← MemPalace default top_k`);
+  console.log(`  Legacy token-overlap recall (QMD metric):`);
+  console.log(`    R@5:  ${(avgR5 * 100).toFixed(1)}%`);
+  console.log(`    R@10: ${(avgR10 * 100).toFixed(1)}%`);
   console.log(`  Answer quality:`);
   console.log(`    F1:   ${(avgF1 * 100).toFixed(1)}%`);
   console.log(`    EM:   ${(avgEM * 100).toFixed(1)}%`);
@@ -482,7 +495,7 @@ async function main() {
   const outPath = join(QMD_DIR, "evaluate/longmemeval", outName);
   writeFileSync(outPath, JSON.stringify({
     config: { ds: dsName, useLLM, model: useLLM ? LLM_CONFIG[activeLLM].model : "none", llm: activeLLM, limit, questionTypeFilter, ablation },
-    summary: { avgR5, avgR10, avgSR5, avgSR10, avgF1, avgEM, total: n },
+    summary: { avgSR5, avgSR10, avgSR15, avgSR50, avgR5, avgR10, avgF1, avgEM, total: n },
     results: allResults,
   }, null, 2));
   console.log(`\n  Saved: ${outPath}`);

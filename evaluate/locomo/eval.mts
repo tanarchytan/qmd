@@ -264,6 +264,72 @@ function computeExactMatch(prediction: string, groundTruth: string): number {
   return tokenize(prediction).join(" ") === tokenize(groundTruth).join(" ") ? 1 : 0;
 }
 
+/**
+ * Collect the set of source IDs present in the top-K memories.
+ * Returns both dialog IDs ("D1:3") and session IDs ("D1") extracted from metadata.
+ */
+function collectTopKSourceIds(
+  memories: Array<{ metadata?: string | null }>,
+  k: number
+): { dialogIds: Set<string>; sessionIds: Set<string> } {
+  const dialogIds = new Set<string>();
+  const sessionIds = new Set<string>();
+  for (const m of memories.slice(0, k)) {
+    if (!m.metadata) continue;
+    try {
+      const meta = JSON.parse(m.metadata) as {
+        source_dialog_id?: string;
+        source_session_id?: string;
+      };
+      if (meta.source_dialog_id) {
+        dialogIds.add(meta.source_dialog_id);
+        // Also infer the session ID from the dialog prefix
+        const sess = meta.source_dialog_id.split(":")[0];
+        if (sess) sessionIds.add(sess);
+      }
+      if (meta.source_session_id) sessionIds.add(meta.source_session_id);
+    } catch { /* ignore malformed metadata */ }
+  }
+  return { dialogIds, sessionIds };
+}
+
+/**
+ * SR@K (fractional dialog-level recall) — APPLES-TO-APPLES with MemPalace's
+ * compute_retrieval_recall in benchmarks/locomo_bench.py: `found / len(evidence)`.
+ * Evidence is a list of dialog IDs ("D1:3"); we check what fraction of them appear
+ * in the top-K memories' source_dialog_id metadata.
+ */
+function computeDialogRecallAtK(
+  memories: Array<{ metadata?: string | null }>,
+  evidence: string[] | undefined,
+  k: number
+): number {
+  if (!evidence || evidence.length === 0) return 1;
+  const { dialogIds } = collectTopKSourceIds(memories, k);
+  const found = evidence.filter(e => dialogIds.has(e)).length;
+  return found / evidence.length;
+}
+
+/**
+ * Session-level any-match variant (coarser than dialog-level). Session ID is
+ * extracted from evidence via the "D<n>:" prefix. Returns 1 if ANY evidence
+ * session shows up in top-K; matches MemPalace's recall_any-style session mode.
+ */
+function computeSessionRecallAtK(
+  memories: Array<{ metadata?: string | null }>,
+  evidence: string[] | undefined,
+  k: number
+): number {
+  if (!evidence || evidence.length === 0) return 1;
+  const correct = new Set(
+    evidence.map(e => (e.split(":")[0] || "").trim()).filter(Boolean)
+  );
+  if (correct.size === 0) return 1;
+  const { sessionIds } = collectTopKSourceIds(memories, k);
+  for (const s of sessionIds) if (correct.has(s)) return 1;
+  return 0;
+}
+
 /** R@K: do any of the top K memories contain the ground truth answer tokens? */
 function computeRecallAtK(memories: Array<{ text: string }>, groundTruth: string, k: number): number {
   const truthTokens = tokenize(groundTruth);
@@ -404,10 +470,9 @@ async function main() {
       LLM_CONFIG.gemini.model = m;
       LLM_CONFIG.gemini.url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
     }
-    // Split: only override the extraction model (cheaper/faster for ingest)
-    if (args[i] === "--extract-model" && args[i + 1]) {
-      process.env.QMD_QUERY_EXPANSION_MODEL = args[i + 1]!;
-    }
+    // --extract-model was pointing at QMD_QUERY_EXPANSION_MODEL (wrong variable —
+    // the extractor ignores it, and queryExpansion then 404s). Removed pending a
+    // real per-call override in src/memory/extractor.ts.
   }
 
   // Ablation toggles via env vars (read once for logging)
@@ -459,6 +524,14 @@ async function main() {
     em: number;
     r5: number;
     r10: number;
+    sr5: number;
+    sr10: number;
+    sr15: number;
+    sr50: number;
+    dr5: number;   // dialog-level fractional recall (MemPalace compute_retrieval_recall)
+    dr10: number;
+    dr15: number;
+    dr50: number;
     category: number;
     categoryName: string;
     searchMs: number;
@@ -475,20 +548,33 @@ async function main() {
     const storeTurns = process.env.QMD_INGEST_PER_TURN !== "off";
     const storeSessions = process.env.QMD_INGEST_SESSION_AS_MEMORY !== "off";
     // Collect everything to ingest in one batch per conversation, then send.
-    const allItems: Array<{ text: string; scope: string; importance?: number }> = [];
+    // metadata.source_session_id is the LoCoMo session ID ("D<n>") — matches QA.evidence prefix.
+    const allItems: Array<{ text: string; scope: string; importance?: number; metadata?: Record<string, any> }> = [];
 
     for (let s = 1; s <= 35; s++) {
       const turns: DialogTurn[] | undefined = c[`session_${s}`];
       const dateTime: string | undefined = c[`session_${s}_date_time`];
       if (!turns || !Array.isArray(turns) || turns.length === 0) continue;
       sessionCount++;
+      const sessionId = `D${s}`;
 
-      // Store raw dialog turns (preserves exact text + timestamps)
+      // Store raw dialog turns (preserves exact text + timestamps).
+      // source_dialog_id uses the LoCoMo dataset's native `dia_id` field (e.g. "D1:3") —
+      // matches the QA.evidence format exactly for apples-to-apples dialog-level recall.
       if (storeTurns) {
-        for (const turn of turns) {
+        for (let t = 0; t < turns.length; t++) {
+          const turn = turns[t]!;
           let text = dateTime ? `[${dateTime}] ${turn.speaker}: ${turn.text}` : `${turn.speaker}: ${turn.text}`;
           if (turn.share_photo && turn.blip_caption) text += ` [shared photo: ${turn.blip_caption}]`;
-          allItems.push({ text, scope });
+          allItems.push({
+            text,
+            scope,
+            metadata: {
+              source_session_id: sessionId,
+              source_dialog_id: turn.dia_id || `${sessionId}:${t + 1}`,
+              turn_index: t,
+            },
+          });
         }
       }
 
@@ -501,7 +587,7 @@ async function main() {
       if (dateTime) sessionLines.unshift(`[${dateTime}]`);
       const sessionText = sessionLines.join("\n");
       if (storeSessions && sessionText.length > 100) {
-        allItems.push({ text: sessionText, scope, importance: 0.7 });
+        allItems.push({ text: sessionText, scope, importance: 0.7, metadata: { source_session_id: sessionId } });
       }
 
       // Also run extractAndStore for preference bridging — toggleable (cat C)
@@ -528,7 +614,7 @@ async function main() {
     if (allItems.length > 0) {
       try {
         const r = await memoryStoreBatch(db, allItems);
-        memoryCount += r.filter(x => x.status === "created").length;
+        memoryCount += r.filter((x: any) => x.status === "created").length;
       } catch (e) {
         process.stderr.write(`memoryStoreBatch failed: ${e}\n`);
         for (const item of allItems) {
@@ -624,10 +710,11 @@ async function main() {
 
       // --- RECALL (memories + knowledge graph) ---
       const t0 = Date.now();
-      let memories: Array<{ text: string; score: number }> = [];
+      let memories: Array<{ text: string; score: number; metadata?: string | null }> = [];
       try {
-        const recalled = await memoryRecall(db, { query: qa.question, limit: 10, scope });
-        memories = recalled.map((m: any) => ({ text: m.text, score: m.score }));
+        // Pull top-50 for MemPalace-aligned SR@50; slice for SR@5/@10/@K locally.
+        const recalled = await memoryRecall(db, { query: qa.question, limit: 50, scope });
+        memories = recalled.map((m: any) => ({ text: m.text, score: m.score, metadata: m.metadata }));
       } catch { /* empty */ }
 
       // Knowledge graph injection removed — generic KG entries dominated top results
@@ -660,6 +747,17 @@ async function main() {
       const em = computeExactMatch(prediction, answer);
       const r5 = computeRecallAtK(memories, answer, 5);
       const r10 = computeRecallAtK(memories, answer, 10);
+      // Session-level any-match (coarse, MemPalace "session" granularity)
+      const evidenceIds = (qa as any).evidence as string[] | undefined;
+      const sr5 = computeSessionRecallAtK(memories, evidenceIds, 5);
+      const sr10 = computeSessionRecallAtK(memories, evidenceIds, 10);
+      const sr15 = computeSessionRecallAtK(memories, evidenceIds, 15);
+      const sr50 = computeSessionRecallAtK(memories, evidenceIds, 50);
+      // Dialog-level fractional recall (MemPalace compute_retrieval_recall) — PRIMARY apples-to-apples metric
+      const dr5 = computeDialogRecallAtK(memories, evidenceIds, 5);
+      const dr10 = computeDialogRecallAtK(memories, evidenceIds, 10);
+      const dr15 = computeDialogRecallAtK(memories, evidenceIds, 15);
+      const dr50 = computeDialogRecallAtK(memories, evidenceIds, 50);
       runningF1 += f1;
       runningEM += em;
 
@@ -670,7 +768,7 @@ async function main() {
         prediction: prediction.slice(0, 300),
         memories: memories.map(m => m.text.slice(0, 120)),
         memoriesFound: memories.length,
-        f1, em, r5, r10,
+        f1, em, r5, r10, sr5, sr10, sr15, sr50, dr5, dr10, dr15, dr50,
         category: qa.category,
         categoryName: CATEGORY_NAMES[qa.category] || "unknown",
         searchMs, answerMs,
@@ -707,6 +805,14 @@ async function main() {
   const avgEM = allResults.reduce((s, r) => s + r.em, 0) / n;
   const avgR5 = allResults.reduce((s, r) => s + r.r5, 0) / n;
   const avgR10 = allResults.reduce((s, r) => s + r.r10, 0) / n;
+  const avgSR5 = allResults.reduce((s, r) => s + r.sr5, 0) / n;
+  const avgSR10 = allResults.reduce((s, r) => s + r.sr10, 0) / n;
+  const avgSR15 = allResults.reduce((s, r) => s + r.sr15, 0) / n;
+  const avgSR50 = allResults.reduce((s, r) => s + r.sr50, 0) / n;
+  const avgDR5 = allResults.reduce((s, r) => s + r.dr5, 0) / n;
+  const avgDR10 = allResults.reduce((s, r) => s + r.dr10, 0) / n;
+  const avgDR15 = allResults.reduce((s, r) => s + r.dr15, 0) / n;
+  const avgDR50 = allResults.reduce((s, r) => s + r.dr50, 0) / n;
   const avgSearch = allResults.reduce((s, r) => s + r.searchMs, 0) / n;
   const avgAnswer = allResults.reduce((s, r) => s + r.answerMs, 0) / n;
   const avgMemories = allResults.reduce((s, r) => s + r.memoriesFound, 0) / n;
@@ -715,8 +821,19 @@ async function main() {
   console.log(`  FINAL RESULTS`);
   console.log(`${"=".repeat(64)}`);
   console.log(`  Questions:    ${n}`);
-  console.log(`  R@5:          ${(avgR5 * 100).toFixed(1)}%  (retrieval: answer in top 5 memories)`);
-  console.log(`  R@10:         ${(avgR10 * 100).toFixed(1)}%  (retrieval: answer in top 10 memories)`);
+  console.log(`  APPLES-TO-APPLES — MemPalace compute_retrieval_recall (dialog-level fractional):`);
+  console.log(`    DR@5:       ${(avgDR5 * 100).toFixed(1)}%`);
+  console.log(`    DR@10:      ${(avgDR10 * 100).toFixed(1)}%`);
+  console.log(`    DR@15:      ${(avgDR15 * 100).toFixed(1)}%`);
+  console.log(`    DR@50:      ${(avgDR50 * 100).toFixed(1)}%  ← MemPalace default top_k`);
+  console.log(`  Session-level any-match (coarse):`);
+  console.log(`    SR@5:       ${(avgSR5 * 100).toFixed(1)}%`);
+  console.log(`    SR@10:      ${(avgSR10 * 100).toFixed(1)}%`);
+  console.log(`    SR@15:      ${(avgSR15 * 100).toFixed(1)}%`);
+  console.log(`    SR@50:      ${(avgSR50 * 100).toFixed(1)}%`);
+  console.log(`  Legacy token-overlap:`);
+  console.log(`    R@5:        ${(avgR5 * 100).toFixed(1)}%`);
+  console.log(`    R@10:       ${(avgR10 * 100).toFixed(1)}%`);
   console.log(`  F1:           ${(avgF1 * 100).toFixed(1)}%  (LLM answer quality)`);
   console.log(`  Exact Match:  ${(avgEM * 100).toFixed(1)}%`);
   console.log(`  Avg memories: ${avgMemories.toFixed(1)} per question`);
@@ -769,7 +886,7 @@ async function main() {
   const outPath = join(QMD_DIR, "evaluate/locomo", resultsName);
   writeFileSync(outPath, JSON.stringify({
     config: { useLLM, model: useLLM ? LLM_CONFIG[activeLLM].model : "none", llm: activeLLM, limit, convFilter },
-    summary: { avgR5, avgR10, avgF1, avgEM, avgSearch, avgAnswer, avgMemories, total: n },
+    summary: { avgDR5, avgDR10, avgDR15, avgDR50, avgSR5, avgSR10, avgSR15, avgSR50, avgR5, avgR10, avgF1, avgEM, avgSearch, avgAnswer, avgMemories, total: n },
     results: allResults,
   }, null, 2));
   console.log(`\n  Results saved: ${outPath}`);
