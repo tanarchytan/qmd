@@ -1019,6 +1019,117 @@ Relevant facts:`;
   }
 }
 
+/**
+ * Periodic reflection pass (roadmap cat 18 — Generative Agents pattern).
+ *
+ * Walks the most recent N memories within the given scope, asks the
+ * remote LLM to identify 3-5 high-level themes / decisions / patterns
+ * across them, and stores each as a new memory with category=reflection.
+ *
+ * Intended for cron-like calls (session_end, daily tick, dream
+ * consolidation). Differs from memoryReflect (which is question-driven)
+ * in that this runs unprompted over the raw memory stream to generate
+ * long-term context. Stored reflections show up in future recall via
+ * the normal FTS + vector paths.
+ *
+ * No-ops when:
+ *   - fewer than minMemories candidates exist (default 5)
+ *   - no remote LLM is configured
+ *   - the LLM call fails or returns unparseable output
+ */
+export async function runReflectionPass(
+  db: Database,
+  options: {
+    scope?: string;
+    /** Look at memories created within the last N days. Default 7. */
+    windowDays?: number;
+    /** Minimum memory count to trigger a reflection pass. Default 5. */
+    minMemories?: number;
+    /** Max memories to include in the prompt. Default 30. */
+    maxMemories?: number;
+    /** Max reflections to generate. Default 5. */
+    maxReflections?: number;
+  } = {}
+): Promise<{ reflections: number; skipped: boolean; reason?: string }> {
+  const scope = options.scope;
+  const windowDays = options.windowDays ?? 7;
+  const minMemories = options.minMemories ?? 5;
+  const maxMemories = options.maxMemories ?? 30;
+  const maxReflections = options.maxReflections ?? 5;
+
+  const remote = getRemoteLLM();
+  if (!remote) return { reflections: 0, skipped: true, reason: "no remote LLM" };
+
+  const since = Date.now() - windowDays * 86400000;
+  const where = scope
+    ? `WHERE created_at >= ? AND (scope = ? OR scope = 'global') AND category != 'reflection'`
+    : `WHERE created_at >= ? AND category != 'reflection'`;
+  const params: unknown[] = scope ? [since, scope] : [since];
+  const rows = db.prepare(`
+    SELECT id, text, category, created_at FROM memories
+    ${where}
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(...params, maxMemories) as Array<{ id: string; text: string; category: string; created_at: number }>;
+
+  if (rows.length < minMemories) {
+    return { reflections: 0, skipped: true, reason: `only ${rows.length} candidates (need ${minMemories})` };
+  }
+
+  const memoryBlock = rows
+    .map((m, i) => `[${i + 1}] ${m.text}`)
+    .join("\n");
+
+  const prompt = `You are summarising recent agent memories for long-term recall. Below are the last ${rows.length} memories from the session. Produce at most ${maxReflections} high-level reflections that capture recurring themes, decisions, preferences, or open questions across them. Each reflection must be:
+  - a standalone fact or observation (one sentence)
+  - grounded in the memories (do not invent)
+  - numbered, one per line
+  - without explanation or preamble
+
+If no reflections are warranted, output the single line: NONE.
+
+Memories:
+${memoryBlock}
+
+Reflections:`;
+
+  let reply: string | null = null;
+  try {
+    reply = await remote.chatComplete(prompt);
+  } catch {
+    return { reflections: 0, skipped: true, reason: "LLM call failed" };
+  }
+  if (!reply) return { reflections: 0, skipped: true, reason: "empty LLM reply" };
+  const trimmed = reply.trim();
+  if (!trimmed || trimmed === "NONE") {
+    return { reflections: 0, skipped: false };
+  }
+
+  // Parse numbered lines into individual reflections.
+  const reflections: string[] = [];
+  for (const line of trimmed.split(/\r?\n/)) {
+    const match = line.match(/^\s*\d+[.)\-]?\s*(.+?)\s*$/);
+    if (!match) continue;
+    const text = match[1]!.trim();
+    if (text.length >= 5) reflections.push(text);
+    if (reflections.length >= maxReflections) break;
+  }
+
+  if (reflections.length === 0) {
+    return { reflections: 0, skipped: false };
+  }
+
+  // Store each as a reflection memory. Reuses memoryStoreBatch for dedup.
+  const items = reflections.map(text => ({
+    text,
+    scope: scope || "global",
+    importance: 0.75,
+  }));
+  const stored = await memoryStoreBatch(db, items);
+  const created = stored.filter(r => r.status === "created").length;
+  return { reflections: created, skipped: false };
+}
+
 export function memoryForget(
   db: Database,
   id: string
