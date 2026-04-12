@@ -76,10 +76,21 @@ results land separately.
   FTS/vector paths. Wired into the OpenClaw dream-consolidation
   gate alongside `runCleanupPass`.
 
-Still open: cat 1 (tiered storage — reserved as largest rewrite),
-cat 19 (multi-agent identity tier hierarchy), cat 20 (cross-session
-routing). 19 + 20 require schema / architecture changes too large
-for this pass.
+- **Cat 1 — Tier-aware recall API**
+  (`src/memory/index.ts:memoryRecall(tier)` + `memoryRecallTiered`).
+  Final closeout. `MemoryRecallOptions.tier` accepts a single tier
+  or an array; when set the `addResult` guard filters all retrieval
+  paths (FTS, vector, KG injection, temporal backfill). New helper
+  `memoryRecallTiered(db, opts)` runs three parallel recalls
+  (core / working / peripheral) with per-tier limits and returns
+  them as a structured object for Zep-style subgraph callers. This
+  is the behavioral closeout; a physical storage split (separate
+  tables per tier with background promotion) remains parked as
+  the largest rewrite.
+
+Still open: cat 19 (multi-agent identity tier hierarchy), cat 20
+(cross-session routing). Both require schema / architecture changes
+too large for this pass.
 
 ### Refactor — src/llm.ts split
 

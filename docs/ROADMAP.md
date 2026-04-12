@@ -120,6 +120,7 @@ Closed as part of the v16 cycle (all opt-in or additive, no baseline regression)
 
 | Cat | Closeout | Entry point |
 |-----|----------|-------------|
+| 1 | Tier-aware recall API | `memoryRecall({tier})` + `memoryRecallTiered(db, opts)` — behavioral closeout; full per-tier table rewrite parked |
 | 2 (partial) | Dialog-aware diversity in top-K recall | `QMD_RECALL_DIVERSIFY=on` → `applyDialogDiversity` in `memoryRecall` |
 | 6 | Scheduled cleanup hook | `runCleanupPass(db, opts)` → wired into OpenClaw dream gate |
 | 7 | 4-component importance scoring | `estimateImportance` now adds entityDensity + decisionSignal |
@@ -129,7 +130,7 @@ Closed as part of the v16 cycle (all opt-in or additive, no baseline regression)
 | 17 | Backward-K LRU sparing in eviction | `runEvictionPass` + `lruWindowDays` option |
 | 18 | Periodic reflection over memory streams | `runReflectionPass(db, opts)` → wired into OpenClaw dream gate |
 
-Remaining partial: **cat 1** (tiered storage — reserved as largest rewrite), **cat 19** (multi-agent identity), **cat 20** (cross-session routing). 19 + 20 require schema / architecture changes too large for the v16 pass.
+Remaining open: **cat 19** (multi-agent identity tier hierarchy) and **cat 20** (cross-session routing). Both require schema / architecture changes too large for this pass.
 
 ### 1. Tiered / Hierarchical Storage — **~ partial**
 
