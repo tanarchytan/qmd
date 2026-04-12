@@ -17,6 +17,11 @@ async function getMemoryStore() {
   return mod.memoryStore;
 }
 
+async function getMemoryStoreBatch() {
+  const mod = await import("./index.js");
+  return mod.memoryStoreBatch;
+}
+
 async function extractAndStore(db: Database, text: string, scope?: string) {
   const store = await getMemoryStore();
   return _rawExtractAndStore(db, text, scope, store);
@@ -212,20 +217,39 @@ export async function importMemories(
   const content = readFileSync(filePath, "utf-8");
   const memories = JSON.parse(content) as ExportedMemory[];
 
-  let imported = 0;
-  let duplicates = 0;
+  if (memories.length === 0) return { imported: 0, duplicates: 0 };
 
-  for (const mem of memories) {
+  // Use batched store for bulk import — single embedding round-trip + transaction.
+  // ~3-5x faster than per-memory store loop.
+  const storeBatch = await getMemoryStoreBatch();
+  const items = memories.map(mem => ({
+    text: mem.text,
+    category: mem.category as any,
+    scope: mem.scope,
+    importance: mem.importance,
+  }));
+
+  try {
+    const results = await storeBatch(db, items);
+    const imported = results.filter(r => r.status === "created").length;
+    const duplicates = results.filter(r => r.status === "duplicate").length;
+    return { imported, duplicates };
+  } catch (err) {
+    // Fallback: per-memory store if batch fails (e.g. embed provider down)
+    process.stderr.write(`importMemories batch failed, falling back: ${err instanceof Error ? err.message : err}\n`);
     const store = await getMemoryStore();
-    const result = await store(db, {
-      text: mem.text,
-      category: mem.category as any,
-      scope: mem.scope,
-      importance: mem.importance,
-    });
-    if (result.status === "created") imported++;
-    else duplicates++;
+    let imported = 0;
+    let duplicates = 0;
+    for (const mem of memories) {
+      const result = await store(db, {
+        text: mem.text,
+        category: mem.category as any,
+        scope: mem.scope,
+        importance: mem.importance,
+      });
+      if (result.status === "created") imported++;
+      else duplicates++;
+    }
+    return { imported, duplicates };
   }
-
-  return { imported, duplicates };
 }

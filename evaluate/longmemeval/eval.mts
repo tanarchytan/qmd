@@ -29,7 +29,7 @@ loadQmdEnv();
 
 const { openDatabase } = await import(toUrl(join(QMD_DIR, "src/db.ts")));
 const { initializeDatabase } = await import(toUrl(join(QMD_DIR, "src/store/db-init.ts")));
-const { memoryStore, memoryRecall, extractAndStore, extractReflections, consolidateEntityFacts, runDecayPass } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
+const { memoryStore, memoryStoreBatch, memoryRecall, extractAndStore, extractReflections, consolidateEntityFacts, runDecayPass } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
 
 type Database = ReturnType<typeof openDatabase>;
 
@@ -38,7 +38,6 @@ type Database = ReturnType<typeof openDatabase>;
 // ---------------------------------------------------------------------------
 
 type LLMProvider = "gemini" | "minimax";
-// Pinned model versions for reproducibility (quality fix B)
 const LLM_CONFIG: Record<LLMProvider, { url: string; model: string; keyEnv: string }> = {
   gemini: {
     url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
@@ -53,6 +52,11 @@ const LLM_CONFIG: Record<LLMProvider, { url: string; model: string; keyEnv: stri
 };
 const LLM_SEED = 42;
 let activeLLM: LLMProvider = "gemini";
+
+// Build a Gemini URL for arbitrary model name (used by --extract-model split)
+function geminiUrl(model: string): string {
+  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+}
 
 async function askGemini(prompt: string, apiKey: string): Promise<string> {
   const cacheKey = { model: LLM_CONFIG.gemini.model, temperature: 0, seed: LLM_SEED, prompt };
@@ -208,11 +212,23 @@ async function main() {
     if (args[i] === "--tag" && args[i + 1]) resultsTag = args[i + 1]!;
     if (args[i] === "--db-suffix" && args[i + 1]) dbSuffix = "-" + args[i + 1];
     if (args[i] === "--no-llm") useLLM = false;
-    // cat D: override LLM model for A-B testing
+    // cat D: override LLM model for A-B testing — sets BOTH extract and answer model
     if (args[i] === "--model" && args[i + 1]) {
       const m = args[i + 1]!;
       LLM_CONFIG.gemini.model = m;
-      LLM_CONFIG.gemini.url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
+      LLM_CONFIG.gemini.url = geminiUrl(m);
+      // Also override the extraction model used by chatComplete in src/llm.ts
+      process.env.QMD_QUERY_EXPANSION_MODEL = m;
+    }
+    // --answer-model: override only the answer-generation model (cat D split)
+    if (args[i] === "--answer-model" && args[i + 1]) {
+      const m = args[i + 1]!;
+      LLM_CONFIG.gemini.model = m;
+      LLM_CONFIG.gemini.url = geminiUrl(m);
+    }
+    // --extract-model: override only the extraction LLM model (cheaper/faster model for ingest)
+    if (args[i] === "--extract-model" && args[i + 1]) {
+      process.env.QMD_QUERY_EXPANSION_MODEL = args[i + 1]!;
     }
     // cat E: parallel sharding — --shard 1/4 means shard index 1 of 4 total
     if (args[i] === "--shard" && args[i + 1]) {
@@ -274,23 +290,27 @@ async function main() {
     // --- INGEST sessions for this question (skip if already ingested under this scope) ---
     const existingCount = (db.prepare(`SELECT COUNT(*) as n FROM memories WHERE scope = ?`).get(scope) as any)?.n || 0;
     if (existingCount === 0) {
+      // Storage mode toggles (default = both on; turn off to save embed/insert cost)
+      const storeTurns = process.env.QMD_INGEST_PER_TURN !== "off";
+      const storeSessions = process.env.QMD_INGEST_SESSION_AS_MEMORY !== "off";
       // cat B: batch extraction = one LLM call per question instead of per session.
-      // Concat all session texts with date headers, run a single extractAndStore.
-      // Default ON to save LLM calls. QMD_INGEST_BATCH_EXTRACT=off → per-session (legacy).
       const batchExtract = process.env.QMD_INGEST_BATCH_EXTRACT !== "off";
+
       const sessionTexts: string[] = [];
+      const turnBatch: Array<{ text: string; scope: string; importance?: number }> = [];
+
       for (let s = 0; s < inst.haystack_sessions.length; s++) {
         const turns = inst.haystack_sessions[s]!;
         const date = inst.haystack_dates[s] || "";
-        // Store each turn as a memory
-        for (const t of turns) {
-          const text = date ? `[${date}] ${t.role}: ${t.content}` : `${t.role}: ${t.content}`;
-          try { await memoryStore(db, { text, scope }); } catch { /* skip */ }
+        if (storeTurns) {
+          for (const t of turns) {
+            const text = date ? `[${date}] ${t.role}: ${t.content}` : `${t.role}: ${t.content}`;
+            turnBatch.push({ text, scope });
+          }
         }
-        // Store full session as one memory (larger context)
         const sessionText = turns.map(t => `${t.role}: ${t.content}`).join("\n");
-        if (date) {
-          try { await memoryStore(db, { text: `[${date}]\n${sessionText}`, scope, importance: 0.7 }); } catch { /* skip */ }
+        if (storeSessions && date) {
+          turnBatch.push({ text: `[${date}]\n${sessionText}`, scope, importance: 0.7 });
         }
         sessionTexts.push(date ? `[${date}]\n${sessionText}` : sessionText);
         // Per-session extraction (legacy path)
@@ -298,6 +318,15 @@ async function main() {
           try { await extractAndStore(db, sessionText, scope); } catch { /* skip */ }
         }
       }
+
+      // Batched insert + batched embedding round-trip (system-wide optimization)
+      if (turnBatch.length > 0) {
+        try { await memoryStoreBatch(db, turnBatch); } catch (e) {
+          // Fall back to per-item if batch fails
+          for (const item of turnBatch) { try { await memoryStore(db, item); } catch {} }
+        }
+      }
+
       // Batch extraction: one LLM call per question (cat B)
       if (batchExtract && process.env.QMD_INGEST_EXTRACTION !== "off") {
         try { await extractAndStore(db, sessionTexts.join("\n\n---\n\n"), scope); } catch { /* skip */ }

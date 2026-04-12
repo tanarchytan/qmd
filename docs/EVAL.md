@@ -51,7 +51,9 @@ npx tsx evaluate/longmemeval/eval.mts --ds s --limit 100 --llm gemini --tag full
 | Flag | Both | LoCoMo | LME | Notes |
 |------|------|--------|-----|-------|
 | `--llm gemini\|minimax` | ✓ | ✓ | ✓ | LLM provider for answer generation |
-| `--model <name>` | ✓ | ✓ | ✓ | Override model name (e.g. `--model gemini-2.5-flash-lite` for A-B testing) |
+| `--model <name>` | ✓ | ✓ | ✓ | Override BOTH extract and answer model (e.g. `--model gemini-2.5-flash-lite`) |
+| `--extract-model <name>` | ✓ | ✓ | ✓ | Override only the extraction model (use cheaper model for ingest) |
+| `--answer-model <name>` | ✓ | ✓ | ✓ | Override only the answer model (keep full model for final answers) |
 | `--limit N` | ✓ | ✓ | ✓ | First N questions only |
 | `--tag <name>` | ✓ | ✓ | ✓ | Output filename: `results-<tag>.json` |
 | `--db-suffix <name>` | ✓ | ✓ | ✓ | Cached DB filename: `conv-30-<suffix>.sqlite` |
@@ -75,6 +77,8 @@ All toggles default to the v15-final configuration. Override to ablate.
 | `QMD_INGEST_REFLECTIONS` | off | Standalone reflection extraction (now no-op; merged into extractAndStore) |
 | `QMD_INGEST_SYNTHESIS` | on | Run consolidateEntityFacts (entity profiles + timelines) per scope |
 | `QMD_INGEST_BATCH_EXTRACT` | on (LME only) | Single extraction call per question instead of per session |
+| `QMD_INGEST_PER_TURN` | on | Store each conversation turn as its own memory |
+| `QMD_INGEST_SESSION_AS_MEMORY` | on | Also store full session as one memory (larger context) |
 
 ### Recall-side (memory/index.ts)
 

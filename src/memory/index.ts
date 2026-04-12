@@ -248,6 +248,44 @@ async function embedText(text: string): Promise<number[] | null> {
   return null;
 }
 
+/**
+ * Batch embed N texts in one round trip when the provider supports it.
+ * Falls back to per-text embedText() if no batch API is available.
+ * Cache hits short-circuit before the network call.
+ */
+async function embedTextBatch(texts: string[]): Promise<(number[] | null)[]> {
+  const out: (number[] | null)[] = new Array(texts.length).fill(null);
+  const missingIdx: number[] = [];
+  const missingTexts: string[] = [];
+  for (let i = 0; i < texts.length; i++) {
+    const cached = getCachedEmbedding(texts[i]!);
+    if (cached) out[i] = cached;
+    else { missingIdx.push(i); missingTexts.push(texts[i]!); }
+  }
+  if (missingTexts.length === 0) return out;
+
+  const remoteConfig = getRemoteConfig();
+  if (remoteConfig?.embed) {
+    try {
+      const remote = getRemoteLLM()!;
+      const results = await remote.embedBatch(missingTexts);
+      for (let j = 0; j < missingTexts.length; j++) {
+        const emb = results[j]?.embedding || null;
+        out[missingIdx[j]!] = emb;
+        if (emb) setCachedEmbedding(missingTexts[j]!, emb);
+      }
+      return out;
+    } catch (err) {
+      process.stderr.write(`Memory embedBatch failed, falling back to per-item: ${err instanceof Error ? err.message : err}\n`);
+    }
+  }
+  // Fallback: per-text (handles local LLM and embed-batch failures)
+  for (let j = 0; j < missingTexts.length; j++) {
+    out[missingIdx[j]!] = await embedText(missingTexts[j]!);
+  }
+  return out;
+}
+
 async function embedQuery(text: string): Promise<number[] | null> {
   const cached = getCachedEmbedding(text);
   if (cached) return cached;
@@ -425,6 +463,102 @@ export async function memoryStore(
   db.prepare(`INSERT INTO memory_history (memory_id, action, new_value, timestamp) VALUES (?, 'ADD', ?, ?)`).run(id, text, now);
 
   return { id, status: "created" };
+}
+
+/**
+ * Batch insert memories with shared embedding round-trip.
+ *
+ * Optimization for ingest pipelines (eval, OpenClaw bulk import) that
+ * need to store many memories without paying per-memory LLM round-trips.
+ *
+ * Skips cosine dedup (per-item LLM conflict resolution) for speed —
+ * still does hash dedup. For richer dedup use single memoryStore() in a
+ * loop. Most bulk ingests don't need cosine dedup because the source is
+ * already deduplicated (raw conversation turns, extracted facts, etc.).
+ *
+ * Returns one result per input in the same order. created/duplicate status
+ * is reported per-item.
+ */
+export async function memoryStoreBatch(
+  db: Database,
+  items: MemoryStoreOptions[]
+): Promise<{ id: string; status: "created" | "duplicate" }[]> {
+  if (items.length === 0) return [];
+  const now = Date.now();
+  const results: { id: string; status: "created" | "duplicate" }[] = new Array(items.length);
+
+  // Phase 1: hash dedup (single round-trip)
+  const hashes = items.map(it => contentHash(it.text.trim()));
+  const placeholders = hashes.map(() => "?").join(",");
+  const existingRows = db.prepare(
+    `SELECT id, content_hash FROM memories WHERE content_hash IN (${placeholders})`
+  ).all(...hashes) as { id: string; content_hash: string }[];
+  const existingByHash = new Map(existingRows.map(r => [r.content_hash, r.id]));
+
+  // Phase 2: collect texts that need embedding
+  const toEmbed: { idx: number; text: string }[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const text = items[i]!.text.trim();
+    if (!text) {
+      results[i] = { id: "", status: "duplicate" };
+      continue;
+    }
+    const existingId = existingByHash.get(hashes[i]!);
+    if (existingId) {
+      results[i] = { id: existingId, status: "duplicate" };
+      continue;
+    }
+    toEmbed.push({ idx: i, text });
+  }
+
+  // Phase 3: batched embedding (one provider call when supported)
+  const embeddings: (number[] | null)[] = toEmbed.length > 0
+    ? await embedTextBatch(toEmbed.map(t => t.text))
+    : [];
+
+  // Phase 4: insert in a single SQLite transaction
+  const insertMem = db.prepare(`
+    INSERT INTO memories (id, text, content_hash, category, scope, importance, tier, access_count, created_at, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, 'peripheral', 0, ?, ?)
+  `);
+  const insertVecRef: { stmt: ReturnType<typeof db.prepare> | null } = { stmt: null };
+  const insertHistory = db.prepare(`INSERT INTO memory_history (memory_id, action, new_value, timestamp) VALUES (?, 'ADD', ?, ?)`);
+  const touch = db.prepare(`UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?`);
+
+  const txn = db.transaction(() => {
+    for (let j = 0; j < toEmbed.length; j++) {
+      const { idx, text } = toEmbed[j]!;
+      const opts = items[idx]!;
+      const id = randomUUID();
+      const category = opts.category || classifyMemory(text);
+      const scope = opts.scope || "global";
+      const importance = Math.max(0, Math.min(1, opts.importance ?? 0.5));
+      insertMem.run(id, text, hashes[idx]!, category, scope, importance, now, opts.metadata ? JSON.stringify(opts.metadata) : null);
+      insertHistory.run(id, text, now);
+
+      const emb = embeddings[j];
+      if (emb) {
+        try {
+          if (!insertVecRef.stmt) {
+            ensureMemoriesVecTable(db, emb.length);
+            insertVecRef.stmt = db.prepare(`INSERT INTO memories_vec (id, embedding) VALUES (?, ?)`);
+          }
+          insertVecRef.stmt.run(id, new Float32Array(emb));
+        } catch { /* dimension mismatch / table failure — memory still stored */ }
+      }
+
+      results[idx] = { id, status: "created" };
+    }
+    // Touch access counts for hash duplicates
+    for (let i = 0; i < items.length; i++) {
+      if (results[i] && results[i]!.status === "duplicate" && results[i]!.id) {
+        touch.run(now, results[i]!.id);
+      }
+    }
+  });
+  txn();
+
+  return results;
 }
 
 export async function memoryRecall(

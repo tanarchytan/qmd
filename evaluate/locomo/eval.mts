@@ -37,7 +37,7 @@ loadQmdEnv();
 
 const { openDatabase } = await import(toUrl(join(QMD_DIR, "src/db.ts")));
 const { initializeDatabase } = await import(toUrl(join(QMD_DIR, "src/store/db-init.ts")));
-const { memoryStore, memoryRecall, extractAndStore, extractReflections, consolidateEntityFacts, runDecayPass } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
+const { memoryStore, memoryStoreBatch, memoryRecall, extractAndStore, extractReflections, consolidateEntityFacts, runDecayPass } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
 const { knowledgeStore, knowledgeQuery, knowledgeAbout } = await import(toUrl(join(QMD_DIR, "src/memory/knowledge.ts")));
 
 type Database = ReturnType<typeof openDatabase>;
@@ -391,11 +391,22 @@ async function main() {
     if (args[i] === "--llm" && args[i + 1]) { activeLLM = args[i + 1] as LLMProvider; }
     if (args[i] === "--db-suffix" && args[i + 1]) dbSuffix = "-" + args[i + 1];
     if (args[i] === "--tag" && args[i + 1]) resultsTag = args[i + 1]!;
-    // cat D: override LLM model for A-B testing (e.g. --model gemini-2.5-flash-lite)
+    // cat D: override LLM model for A-B testing — sets BOTH extract and answer model
     if (args[i] === "--model" && args[i + 1]) {
       const m = args[i + 1]!;
       LLM_CONFIG.gemini.model = m;
       LLM_CONFIG.gemini.url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
+      process.env.QMD_QUERY_EXPANSION_MODEL = m;
+    }
+    // Split: only override the answer model (keeps extract model on default/lite)
+    if (args[i] === "--answer-model" && args[i + 1]) {
+      const m = args[i + 1]!;
+      LLM_CONFIG.gemini.model = m;
+      LLM_CONFIG.gemini.url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
+    }
+    // Split: only override the extraction model (cheaper/faster for ingest)
+    if (args[i] === "--extract-model" && args[i + 1]) {
+      process.env.QMD_QUERY_EXPANSION_MODEL = args[i + 1]!;
     }
   }
 
@@ -460,6 +471,12 @@ async function main() {
     let memoryCount = 0;
     const ingestStart = Date.now();
 
+    // Storage mode toggles (cheap optimization knobs)
+    const storeTurns = process.env.QMD_INGEST_PER_TURN !== "off";
+    const storeSessions = process.env.QMD_INGEST_SESSION_AS_MEMORY !== "off";
+    // Collect everything to ingest in one batch per conversation, then send.
+    const allItems: Array<{ text: string; scope: string; importance?: number }> = [];
+
     for (let s = 1; s <= 35; s++) {
       const turns: DialogTurn[] | undefined = c[`session_${s}`];
       const dateTime: string | undefined = c[`session_${s}_date_time`];
@@ -467,18 +484,15 @@ async function main() {
       sessionCount++;
 
       // Store raw dialog turns (preserves exact text + timestamps)
-      for (const turn of turns) {
-        let text = dateTime ? `[${dateTime}] ${turn.speaker}: ${turn.text}` : `${turn.speaker}: ${turn.text}`;
-        if (turn.share_photo && turn.blip_caption) text += ` [shared photo: ${turn.blip_caption}]`;
-
-        try {
-          const r = await memoryStore(db, { text, scope });
-          if (r.status === "created") memoryCount++;
-        } catch { /* skip */ }
+      if (storeTurns) {
+        for (const turn of turns) {
+          let text = dateTime ? `[${dateTime}] ${turn.speaker}: ${turn.text}` : `${turn.speaker}: ${turn.text}`;
+          if (turn.share_photo && turn.blip_caption) text += ` [shared photo: ${turn.blip_caption}]`;
+          allItems.push({ text, scope });
+        }
       }
 
       // Store full session as single memory (MemPalace: larger chunks = more context per hit)
-      // Individual turns miss cross-turn facts ("Sweden" in one turn, "moved" in another)
       const sessionLines = turns.map(t => {
         let line = `${t.speaker}: ${t.text}`;
         if (t.share_photo && t.blip_caption) line += ` [photo: ${t.blip_caption}]`;
@@ -486,11 +500,8 @@ async function main() {
       });
       if (dateTime) sessionLines.unshift(`[${dateTime}]`);
       const sessionText = sessionLines.join("\n");
-      if (sessionText.length > 100) { // skip tiny sessions
-        try {
-          const r = await memoryStore(db, { text: sessionText, scope, importance: 0.7 });
-          if (r.status === "created") memoryCount++;
-        } catch { /* skip duplicates */ }
+      if (storeSessions && sessionText.length > 100) {
+        allItems.push({ text: sessionText, scope, importance: 0.7 });
       }
 
       // Also run extractAndStore for preference bridging — toggleable (cat C)
@@ -509,7 +520,24 @@ async function main() {
         } catch { /* reflection optional */ }
       }
 
-      process.stdout.write(`\r    ${progressBar(sessionCount, 35)} | ${memoryCount} memories | ${elapsed(ingestStart)}`);
+      process.stdout.write(`\r    ${progressBar(sessionCount, 35)} | extracted | ${elapsed(ingestStart)}`);
+    }
+
+    // Batched insert + batched embedding round-trip (system-wide optimization)
+    // Replaces 2N sequential per-turn embed calls with batched embedBatch().
+    if (allItems.length > 0) {
+      try {
+        const r = await memoryStoreBatch(db, allItems);
+        memoryCount += r.filter(x => x.status === "created").length;
+      } catch (e) {
+        process.stderr.write(`memoryStoreBatch failed: ${e}\n`);
+        for (const item of allItems) {
+          try {
+            const r = await memoryStore(db, item);
+            if (r.status === "created") memoryCount++;
+          } catch { /* skip */ }
+        }
+      }
     }
     console.log(`\n    Done: ${sessionCount} sessions, ${memoryCount} memories in ${elapsed(ingestStart)}`);
 
