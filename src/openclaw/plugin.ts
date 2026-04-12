@@ -35,7 +35,7 @@ import { loadQmdEnv } from "../env.js";
 import { openDatabase, loadSqliteVec } from "../db.js";
 import {
   memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats,
-  extractAndStore, runDecayPass, knowledgeStore, knowledgeQuery,
+  extractAndStore, runDecayPass, runCleanupPass, runReflectionPass, knowledgeStore, knowledgeQuery,
   knowledgeInvalidate, knowledgeEntities,
 } from "../memory/index.js";
 
@@ -296,12 +296,49 @@ const qmdPlugin = definePluginEntry({
             // No corpus dir yet — that's fine
           }
 
-          // 2. Run decay pass
-          const result = runDecayPass(_db);
+          // 2. Run cleanup (decay + optional eviction — roadmap cat 6).
+          //    minMemoriesForEviction=1000 prevents eviction churn on
+          //    small installs; at high memory counts this keeps the
+          //    database size bounded as part of each dream cycle.
+          const cleanup = runCleanupPass(_db, {
+            minMemoriesForEviction: 1000,
+            maxAgeDays: 30,
+            minImportance: 0.4,
+            minAccessCount: 2,
+            lruWindowDays: 7,
+          });
+          const decayLog = cleanup.decay
+            ? `decay ${cleanup.decay.processed}→${cleanup.decay.promoted}p/${cleanup.decay.demoted}d`
+            : "decay skipped";
+          const evictLog = cleanup.eviction
+            ? `eviction ${cleanup.eviction.evicted}/${cleanup.eviction.evaluated}`
+            : "eviction skipped";
           api.logger.info(
-            `tanarchy-qmd: consolidation complete — ${result.processed} memories, ` +
-            `${result.promoted} promoted, ${result.demoted} demoted`,
+            `tanarchy-qmd: cleanup — ${decayLog}, ${evictLog}, ` +
+            `${cleanup.totalMemoriesBefore} → ${cleanup.totalMemoriesAfter} memories`,
           );
+
+          // 3. Periodic reflection over recent memory streams (cat 18).
+          //    Walks the last 7 days of memories in the active scope and
+          //    asks the remote LLM for high-level themes / decisions /
+          //    patterns. Each reflection is stored as a new memory so
+          //    future recall picks it up via the normal FTS/vector paths.
+          //    Gracefully no-ops when no remote LLM is configured.
+          try {
+            const reflect = await runReflectionPass(_db, {
+              scope: defaultScope,
+              windowDays: 7,
+              minMemories: 5,
+              maxReflections: 5,
+            });
+            if (!reflect.skipped) {
+              api.logger.info(
+                `tanarchy-qmd: reflections generated — ${reflect.reflections}`,
+              );
+            }
+          } catch (err) {
+            api.logger.warn(`tanarchy-qmd reflection failed: ${err}`);
+          }
 
           lastDreamAt = Date.now();
           sessionCount = 0;

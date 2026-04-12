@@ -36,7 +36,7 @@ function setCachedEmbedding(text: string, embedding: number[]): void {
   }
   embedCache.set(key, embedding);
 }
-export { runDecayPass, runEvictionPass, type DecayResult, type EvictionResult, type EvictionOptions } from "./decay.js";
+export { runDecayPass, runEvictionPass, runCleanupPass, type DecayResult, type EvictionResult, type EvictionOptions, type CleanupOptions, type CleanupResult } from "./decay.js";
 import { extractAndStore as _extractAndStore, extractReflections as _extractReflections, type ExtractionResult } from "./extractor.js";
 export type { ExtractionResult } from "./extractor.js";
 
