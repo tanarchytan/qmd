@@ -2121,7 +2121,10 @@ export class RemoteLLM implements LLM {
     const apiKey = cfg.apiKey;
     const model = options?.model || cfg.model;
     const timeoutMs = options?.timeoutMs ?? this.config.timeoutsMs?.embed;
-    const BATCH_SIZE = 32;
+    // BATCH_SIZE bumped from 32 → 64. ZeroEntropy and OpenAI-compatible
+    // embed APIs accept up to 100-256 per request; 64 halves the round-trips
+    // for large ingests without risking provider limits.
+    const BATCH_SIZE = 64;
     const allResults: (EmbeddingResult | null)[] = new Array(texts.length).fill(null);
 
     for (let i = 0; i < texts.length; i += BATCH_SIZE) {

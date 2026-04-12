@@ -217,14 +217,14 @@ type SynthesisStoreFn = (db: Database, opts: {
 }) => Promise<{ id: string; status: "created" | "duplicate"; duplicate_id?: string }>;
 
 /**
- * Per-entity fact consolidation (v13: temporal-anchored, predicate-grouped).
+ * Per-entity fact consolidation — temporal-anchored, predicate-grouped.
  *
  * Generates two types of synthesis memory per entity:
  *  1. PROFILE — all facts joined as a self-contained dossier ("[entity-summary:slug] ...")
  *  2. TIMELINE — date-anchored facts in chronological order ("[entity-timeline:slug] ...")
  *
- * Both stored as high-importance entity-category memories so dual-pass retrieval
- * surfaces them for multi-hop ("what does X do") and temporal ("when did X") queries.
+ * Both stored as high-importance entity-category memories so they rank
+ * highly for multi-hop ("what does X do") and temporal ("when did X") queries.
  *
  * From: Sleep Consolidation (level promotion), Zep (community subgraph),
  * GraphRAG (community summarization), Tinkerclaw Total Recall (timeline preservation).

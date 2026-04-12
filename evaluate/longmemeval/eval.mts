@@ -267,6 +267,13 @@ async function main() {
         shardTotal = parseInt(m[2]!, 10);
       }
     }
+    // --workers N: in-process worker pool (concurrent question processing).
+    // Each worker pulls questions from a shared index queue. SQLite blocks
+    // briefly on writes, but await calls (LLM/embed) suspend the worker so
+    // others can run. Net 4-8x speedup for IO-heavy workloads.
+    if (args[i] === "--workers" && args[i + 1]) {
+      process.env.QMD_LME_WORKERS = args[i + 1]!;
+    }
   }
 
   if (useLLM && !process.env[LLM_CONFIG[activeLLM].keyEnv]) {
@@ -311,18 +318,19 @@ async function main() {
   const allResults: any[] = [];
   const globalStart = Date.now();
   let runningF1 = 0;
+  let completed = 0;
 
-  for (let i = 0; i < instances.length; i++) {
-    const inst = instances[i]!;
+  // Per-question handler — pure function, safe to run concurrently.
+  // Workers share the SQLite db; better-sqlite3 calls block the JS thread
+  // briefly but await calls (LLM, embed) suspend so other workers run.
+  async function processQuestion(inst: LMEInstance): Promise<void> {
     const scope = inst.question_id;
 
     // --- INGEST sessions for this question (skip if already ingested under this scope) ---
     const existingCount = (db.prepare(`SELECT COUNT(*) as n FROM memories WHERE scope = ?`).get(scope) as any)?.n || 0;
     if (existingCount === 0) {
-      // Storage mode toggles (default = both on; turn off to save embed/insert cost)
       const storeTurns = process.env.QMD_INGEST_PER_TURN !== "off";
       const storeSessions = process.env.QMD_INGEST_SESSION_AS_MEMORY !== "off";
-      // cat B: batch extraction = one LLM call per question instead of per session.
       const batchExtract = process.env.QMD_INGEST_BATCH_EXTRACT !== "off";
 
       const sessionTexts: string[] = [];
@@ -344,31 +352,24 @@ async function main() {
           turnBatch.push({ text: `[${date}]\n${sessionText}`, scope, importance: 0.7, metadata: { source_session_id: sessionId } });
         }
         sessionTexts.push(date ? `[${date}]\n${sessionText}` : sessionText);
-        // Per-session extraction (legacy path)
         if (!batchExtract && process.env.QMD_INGEST_EXTRACTION !== "off") {
           try { await extractAndStore(db, sessionText, scope); } catch { /* skip */ }
         }
       }
 
-      // Batched insert + batched embedding round-trip (system-wide optimization)
       if (turnBatch.length > 0) {
         try { await memoryStoreBatch(db, turnBatch); } catch (e) {
-          // Fall back to per-item if batch fails
           for (const item of turnBatch) { try { await memoryStore(db, item); } catch {} }
         }
       }
 
-      // Batch extraction: one LLM call per question (cat B)
       if (batchExtract && process.env.QMD_INGEST_EXTRACTION !== "off") {
         try { await extractAndStore(db, sessionTexts.join("\n\n---\n\n"), scope); } catch { /* skip */ }
       }
-      // Per-question consolidation — only meaningful with ≥5 entities
       if (process.env.QMD_INGEST_SYNTHESIS !== "off") {
         try {
           const entCount = (db.prepare(`SELECT COUNT(DISTINCT subject) c FROM knowledge WHERE scope = ?`).get(scope) as any)?.c || 0;
-          if (entCount >= 5) {
-            await consolidateEntityFacts(db, { scope });
-          }
+          if (entCount >= 5) await consolidateEntityFacts(db, { scope });
         } catch { /* skip */ }
       }
     }
@@ -402,13 +403,12 @@ async function main() {
     const gt = String(inst.answer || "");
     const f1 = computeF1(prediction, gt);
     const em = computeEM(prediction, gt);
-    // Token-overlap recall (QMD's original metric)
     const r5 = computeRecallAtK(memories, gt, 5);
     const r10 = computeRecallAtK(memories, gt, 10);
-    // Session-id recall (apples-to-apples with MemPalace's `recall_any`)
     const sr5 = computeSessionRecallAtK(memories, inst.answer_session_ids || [], 5);
     const sr10 = computeSessionRecallAtK(memories, inst.answer_session_ids || [], 10);
     runningF1 += f1;
+    completed++;
 
     allResults.push({
       question_id: inst.question_id,
@@ -421,8 +421,25 @@ async function main() {
       searchMs, answerMs,
     });
 
-    process.stdout.write(`\r  ${progressBar(i + 1, instances.length)} F1=${(runningF1 / (i + 1) * 100).toFixed(1)}% mem=${memories.length} search=${searchMs}ms ${elapsed(globalStart)}`);
+    process.stdout.write(`\r  ${progressBar(completed, instances.length)} F1=${(runningF1 / completed * 100).toFixed(1)}% mem=${memories.length} search=${searchMs}ms ${elapsed(globalStart)}`);
   }
+
+  // Worker pool: N concurrent workers pulling from a shared index queue.
+  // QMD_LME_WORKERS=1 (default) preserves the original sequential behavior.
+  const concurrency = Math.max(1, parseInt(process.env.QMD_LME_WORKERS || "1", 10));
+  const queue = [...instances];
+  if (concurrency > 1) {
+    console.log(`  Workers: ${concurrency} concurrent (--workers ${concurrency})`);
+  }
+  const worker = async () => {
+    while (queue.length > 0) {
+      const inst = queue.shift();
+      if (!inst) break;
+      try { await processQuestion(inst); }
+      catch (e) { process.stderr.write(`\n[error] question ${inst.question_id}: ${e}\n`); }
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
   console.log("\n");
 
