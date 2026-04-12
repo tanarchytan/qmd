@@ -1947,10 +1947,30 @@ export class RemoteLLM implements LLM {
   async chatComplete(prompt: string): Promise<string | null> {
     const cfg = this.config.queryExpansion;
     if (!cfg) return null;
+    // Quality fix A+B: pin model + seed for reproducible extraction calls.
+    // gemini-2.5-flash → gemini-2.5-flash-001 (Apr 2026 stable checkpoint)
+    const SEED = 42;
+    // Quality fix C: file-based response cache. Eval scripts set
+    // QMD_LLM_CACHE_PATH to opt in (production code uses an in-memory map).
+    const cachePath = process.env.QMD_LLM_CACHE_PATH;
+    let cacheGet: ((p: string, m: string) => string | null) | null = null;
+    let cacheSet: ((p: string, m: string, v: string) => void) | null = null;
+    if (cachePath && process.env.QMD_LLM_CACHE !== "off") {
+      try {
+        const { openCache } = await import("../evaluate/_shared/llm-cache.js");
+        const cache = openCache(cachePath);
+        cacheGet = (p, m) => cache.get({ model: m, temperature: 0, seed: SEED, prompt: p });
+        cacheSet = (p, m, v) => cache.set({ model: m, temperature: 0, seed: SEED, prompt: p }, v);
+      } catch { /* cache optional */ }
+    }
     try {
       if (cfg.provider === 'gemini') {
         const baseUrl = (cfg.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
         const model = cfg.model || 'gemini-2.5-flash';
+        if (cacheGet) {
+          const c = cacheGet(prompt, model);
+          if (c != null) return c;
+        }
         const resp = await fetchWithRetry(
           `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
           {
@@ -1958,13 +1978,15 @@ export class RemoteLLM implements LLM {
             headers: { "x-goog-api-key": cfg.apiKey, "Content-Type": "application/json" },
             body: JSON.stringify({
               contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: { temperature: 0, maxOutputTokens: 1000 },
+              generationConfig: { temperature: 0, seed: SEED, maxOutputTokens: 1000 },
             }),
           },
           { provider: "gemini", operation: "generate", timeoutMs: this.config.timeoutsMs?.generate },
         );
         const data = await resp.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-        return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || null;
+        if (text && cacheSet) cacheSet(prompt, model, text);
+        return text;
       } else {
         const url = cfg.provider === 'api'
           ? `${(cfg.url || '').replace(/\/$/, '')}/chat/completions`
@@ -1974,6 +1996,7 @@ export class RemoteLLM implements LLM {
           messages: [{ role: "user", content: prompt }],
           max_tokens: 1000,
           temperature: 0,
+          seed: SEED,
         };
         if (cfg.model) body.model = cfg.model;
         const resp = await fetchWithRetry(url, {

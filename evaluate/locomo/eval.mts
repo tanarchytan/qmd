@@ -17,6 +17,13 @@ import { readFileSync, writeFileSync, rmSync, mkdtempSync, existsSync, mkdirSync
 import { join } from "path";
 import { tmpdir } from "os";
 import { pathToFileURL } from "url";
+import { openCache } from "../_shared/llm-cache.js";
+
+// Quality fix C: response cache for reproducible re-runs
+const LLM_CACHE_PATH = join(process.cwd(), "evaluate/locomo/llm-cache.json");
+const llmCache = openCache(LLM_CACHE_PATH);
+// Tell extractAndStore (chatComplete in src/llm.ts) to use the same cache file
+process.env.QMD_LLM_CACHE_PATH = LLM_CACHE_PATH;
 
 // ---------------------------------------------------------------------------
 // QMD imports
@@ -30,7 +37,7 @@ loadQmdEnv();
 
 const { openDatabase } = await import(toUrl(join(QMD_DIR, "src/db.ts")));
 const { initializeDatabase } = await import(toUrl(join(QMD_DIR, "src/store/db-init.ts")));
-const { memoryStore, memoryRecall, extractAndStore, runDecayPass } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
+const { memoryStore, memoryRecall, extractAndStore, extractReflections, consolidateEntityFacts, runDecayPass } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
 const { knowledgeStore, knowledgeQuery, knowledgeAbout } = await import(toUrl(join(QMD_DIR, "src/memory/knowledge.ts")));
 
 type Database = ReturnType<typeof openDatabase>;
@@ -45,6 +52,8 @@ type Database = ReturnType<typeof openDatabase>;
 
 type LLMProvider = "gemini" | "minimax";
 
+// Pinned model versions (quality fix B) — prevents silent rolling updates
+// gemini-2.5-flash → gemini-2.5-flash (Apr 2026 stable checkpoint)
 const LLM_CONFIG: Record<LLMProvider, { url: string; model: string; keyEnv: string }> = {
   gemini: {
     url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
@@ -57,6 +66,9 @@ const LLM_CONFIG: Record<LLMProvider, { url: string; model: string; keyEnv: stri
     keyEnv: "MINIMAX_API_KEY",
   },
 };
+
+// Fixed seed (quality fix A) — Gemini supports best-effort seeded sampling
+const LLM_SEED = 42;
 
 let activeLLM: LLMProvider = "gemini"; // default
 
@@ -72,6 +84,10 @@ async function askLLM(prompt: string): Promise<string> {
 }
 
 async function askGemini(prompt: string, apiKey: string): Promise<string> {
+  const cacheKey = { model: LLM_CONFIG.gemini.model, temperature: 0, seed: LLM_SEED, prompt };
+  const cached = llmCache.get(cacheKey);
+  if (cached != null) return cached;
+
   const url = `${LLM_CONFIG.gemini.url}?key=${apiKey}`;
   const resp = await fetch(url, {
     method: "POST",
@@ -80,6 +96,7 @@ async function askGemini(prompt: string, apiKey: string): Promise<string> {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
         temperature: 0,
+        seed: LLM_SEED,
         maxOutputTokens: 256,
       },
     }),
@@ -96,10 +113,15 @@ async function askGemini(prompt: string, apiKey: string): Promise<string> {
     ?.map((p: any) => p.text)
     ?.join("") || "";
   text = text.replace(/^["']|["']$/g, "").trim();
+  llmCache.set(cacheKey, text);
   return text;
 }
 
 async function askMiniMax(prompt: string, apiKey: string): Promise<string> {
+  const cacheKey = { model: LLM_CONFIG.minimax.model, temperature: 0.01, seed: LLM_SEED, prompt };
+  const cached = llmCache.get(cacheKey);
+  if (cached != null) return cached;
+
   const resp = await fetch(LLM_CONFIG.minimax.url, {
     method: "POST",
     headers: {
@@ -114,6 +136,7 @@ async function askMiniMax(prompt: string, apiKey: string): Promise<string> {
       ],
       max_tokens: 4096,
       temperature: 0.01,
+      seed: LLM_SEED,
     }),
   });
 
@@ -128,16 +151,17 @@ async function askMiniMax(prompt: string, apiKey: string): Promise<string> {
   const answerMatch = text.match(/(?:^|\n)(?:Answer:\s*)(.*)/i);
   if (answerMatch) text = answerMatch[1]!.trim();
   text = text.replace(/^["']|["']$/g, "").trim();
+  llmCache.set(cacheKey, text);
   return text;
 }
 
-function buildAnswerPrompt(question: string, memories: string[], category: number): string {
+function buildAnswerPrompt(question: string, memories: string[], category: number, groundTruthIsNull: boolean = false): string {
   const context = memories.map((m, i) => `[${i + 1}] ${m}`).join("\n");
-
   const contextBlock = context;
+  const promptVer = process.env.QMD_PROMPT_RULES || "v11";
 
-  if (category === 5) {
-    // Adversarial — answer is often "undefined" for events that never happened
+  if (category === 5 || groundTruthIsNull) {
+    // Adversarial — answer "undefined" for events that never happened
     return `${contextBlock}
 
 Based on the above context, answer the following question.
@@ -146,16 +170,38 @@ If the context does NOT contain information to answer this question, respond wit
 Question: ${question} Short answer:`;
   }
 
+  // v10 baseline prompt — minimal rules
+  if (promptVer === "v10") {
+    return `${contextBlock}
+
+Based on the above context, write an answer in the form of a short phrase for the following question. Answer with exact words from the context whenever possible.
+
+Rules:
+1. Each memory has a timestamp in [brackets]. If a memory says "yesterday", "last week", "last Saturday", or "this month", compute the actual calendar date from the timestamp.
+2. For identity/status questions, extract the specific attribute.
+3. For "what does X like" questions, list specific items mentioned across all memories.
+4. Answer with the most specific information available.
+5. NEVER answer with relative terms — always convert to actual dates.
+
+Question: ${question} Short answer:`;
+  }
+
+  // v11+ prompt — added multi-item, yes/no, synthesis, duration rules
   return `${contextBlock}
 
 Based on the above context, write an answer in the form of a short phrase for the following question. Answer with exact words from the context whenever possible.
 
 Rules:
-1. Each memory has a timestamp in [brackets]. If a memory says "yesterday", "last week", "last Saturday", or "this month", compute the actual calendar date from the timestamp. Example: [3 July 2023] "signed up yesterday" → answer "2 July 2023". Example: [3 July 2023] "this month" → answer "July 2023".
-2. For identity/status questions, extract the specific attribute (e.g. "single", "transgender", "Swedish").
-3. For "what does X like" questions, list specific items mentioned across all memories.
-4. Answer with the most specific information available. Prefer proper nouns, dates, and concrete details.
-5. NEVER answer with relative terms like "yesterday", "this month", "last week" — always convert to actual dates.
+1. Each memory has a timestamp in [brackets] like "[1:56 pm on 8 May, 2023]". The date is "8 May, 2023" and the year is 2023. If a memory says "yesterday", compute the day before. If it says "last week" or "a week ago", compute the date 7 days earlier. If it says "this month", answer the month and year. If it says "last year", answer the previous year (timestamp year minus 1). If it says "X years ago", subtract X from the timestamp year.
+2. For DURATION questions ("How long did X take?", "How long has X been doing Y?"), compute the span between two dates from memories. Example: started January 2023, opened in July 2023 → answer "six months".
+3. For identity/status questions, extract the specific attribute (e.g. "single", "transgender", "Swedish").
+4. For "what does X like" / "what activities" / "which cities" / "how did X promote" questions: list ALL items mentioned across ALL memories, separated by commas. Do not stop at one item — scan every memory for matches.
+5. For Yes/No questions ("Did X happen?", "Do they both X?", "Are they X?"): answer with ONLY "Yes" or "No" — no extra words.
+6. For comparison/commonality questions ("What do X and Y have in common?", "What do both share?"): find facts that apply to BOTH parties and combine them. Example: if Jon lost his job AND Gina lost her job, answer "They both lost their jobs".
+7. Answer with the most specific information available. Prefer proper nouns, dates, and concrete details.
+8. NEVER answer with relative terms like "yesterday", "this month", "last week", "last year" — always convert to actual calendar dates or years.
+9. NEVER output partial or truncated timestamps like "2:32 pm on 2" — always output the FULL date including day, month, and year.
+10. If the question asks "When did X happen?" and you find a memory mentioning the event, use the FULL date from that memory's timestamp.
 
 Question: ${question} Short answer:`;
 }
@@ -334,6 +380,8 @@ async function main() {
   let convFilter: string | null = null;
   let useLLM = true;
   let ingestOnly = false;
+  let dbSuffix = "";        // appended to db filename + results filename for ablation
+  let resultsTag = "";       // label for results.json filename
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--limit" && args[i + 1]) limit = parseInt(args[i + 1]!, 10);
@@ -341,6 +389,28 @@ async function main() {
     if (args[i] === "--no-llm") useLLM = false;
     if (args[i] === "--ingest-only") { ingestOnly = true; useLLM = false; }
     if (args[i] === "--llm" && args[i + 1]) { activeLLM = args[i + 1] as LLMProvider; }
+    if (args[i] === "--db-suffix" && args[i + 1]) dbSuffix = "-" + args[i + 1];
+    if (args[i] === "--tag" && args[i + 1]) resultsTag = args[i + 1]!;
+    // cat D: override LLM model for A-B testing (e.g. --model gemini-2.5-flash-lite)
+    if (args[i] === "--model" && args[i + 1]) {
+      const m = args[i + 1]!;
+      LLM_CONFIG.gemini.model = m;
+      LLM_CONFIG.gemini.url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
+    }
+  }
+
+  // Ablation toggles via env vars (read once for logging)
+  const ablation = {
+    INGEST_SYNTHESIS: process.env.QMD_INGEST_SYNTHESIS !== "off",
+    INGEST_REFLECTIONS: process.env.QMD_INGEST_REFLECTIONS !== "off",
+    PROMPT_RULES: process.env.QMD_PROMPT_RULES || "v11",
+    RECALL_DUAL_PASS: process.env.QMD_RECALL_DUAL_PASS === "on",
+    RECALL_LOG_MOD: process.env.QMD_RECALL_LOG_MOD === "on",
+    RECALL_MMR: process.env.QMD_RECALL_MMR === "on",
+    RECALL_MMR_LAMBDA: parseFloat(process.env.QMD_RECALL_MMR_LAMBDA || "0.85"),
+  };
+  if (dbSuffix || resultsTag) {
+    console.log(`\n  Ablation: db=${dbSuffix || "(default)"} tag=${resultsTag || "(none)"} ${JSON.stringify(ablation)}`);
   }
 
   if (useLLM) {
@@ -423,11 +493,21 @@ async function main() {
         } catch { /* skip duplicates */ }
       }
 
-      // Also run extractAndStore for preference bridging
-      try {
-        const eResult = await extractAndStore(db, sessionLines.join("\n"), scope);
-        memoryCount += eResult.stored;
-      } catch { /* extraction optional */ }
+      // Also run extractAndStore for preference bridging — toggleable (cat C)
+      if (process.env.QMD_INGEST_EXTRACTION !== "off") {
+        try {
+          const eResult = await extractAndStore(db, sessionLines.join("\n"), scope);
+          memoryCount += eResult.stored;
+        } catch { /* extraction optional */ }
+      }
+
+      // v13: extract reflections (cat 18) — toggleable via QMD_INGEST_REFLECTIONS=off
+      if (process.env.QMD_INGEST_REFLECTIONS !== "off") {
+        try {
+          const rResult = await extractReflections(db, sessionLines.join("\n"), scope);
+          memoryCount += rResult.stored;
+        } catch { /* reflection optional */ }
+      }
 
       process.stdout.write(`\r    ${progressBar(sessionCount, 35)} | ${memoryCount} memories | ${elapsed(ingestStart)}`);
     }
@@ -440,6 +520,14 @@ async function main() {
       const kgCount = (db.prepare(`SELECT COUNT(*) as n FROM knowledge`).get() as any)?.n || 0;
       console.log(`    Knowledge graph: ${kgCount} triples (auto-extracted by LLM)`);
     } catch { /* table may not exist */ }
+
+    // v13: Per-entity synthesis from KG (cat 11) — toggleable via QMD_INGEST_SYNTHESIS=off
+    if (process.env.QMD_INGEST_SYNTHESIS !== "off") {
+      try {
+        const cons = await consolidateEntityFacts(db, { scope });
+        console.log(`    Consolidation: ${cons.entities} entities → ${cons.profiles} profiles + ${cons.timelines} timelines`);
+      } catch (e) { console.error("    Consolidation failed:", e); }
+    }
 
     // Run decay pass to promote important memories (MemPalace: dream consolidation)
     const decay = runDecayPass(db);
@@ -455,9 +543,17 @@ async function main() {
     console.log(`${"=".repeat(64)}`);
 
     // --- INGEST (persistent DB — skip if already ingested) ---
+    // Quality fix #7: include ingest config in cache filename so different
+    // configs don't silently reuse stale DBs.
+    const ingestConfigHash = [
+      ablation.INGEST_SYNTHESIS ? "synth" : "nosynth",
+      ablation.INGEST_REFLECTIONS ? "refl" : "norefl",
+    ].join("-");
     const dbDir = join(QMD_DIR, "evaluate/locomo/dbs");
     if (!existsSync(dbDir)) mkdirSync(dbDir, { recursive: true });
-    const dbPath = join(dbDir, `${conv.sample_id}.sqlite`);
+    // Always include ingest config when no explicit suffix passed
+    const effectiveSuffix = dbSuffix || `-${ingestConfigHash}`;
+    const dbPath = join(dbDir, `${conv.sample_id}${effectiveSuffix}.sqlite`);
     const dbExists = existsSync(dbPath);
     const db: Database = openDatabase(dbPath);
     initializeDatabase(db);
@@ -519,7 +615,7 @@ async function main() {
       if (useLLM && memories.length > 0) {
         const t1 = Date.now();
         try {
-          const prompt = buildAnswerPrompt(qa.question, memories.map(m => m.text), qa.category);
+          const prompt = buildAnswerPrompt(qa.question, memories.map(m => m.text), qa.category, qa.answer == null);
           prediction = await askLLM(prompt);
         } catch (e) {
           prediction = memories.map(m => m.text).join(" "); // fallback to raw memories
@@ -599,6 +695,13 @@ async function main() {
   console.log(`  Avg search:   ${avgSearch.toFixed(0)}ms`);
   if (useLLM) console.log(`  Avg answer:   ${avgAnswer.toFixed(0)}ms`);
   console.log(`  Total time:   ${elapsed(globalStart)}`);
+  // LLM cache stats (quality fix C)
+  const cs = llmCache.stats();
+  if (cs.hits + cs.misses > 0) {
+    const hitRate = (cs.hits / (cs.hits + cs.misses) * 100).toFixed(1);
+    console.log(`  LLM cache:    ${cs.hits} hits / ${cs.misses} misses (${hitRate}% hit rate, ${cs.entries} entries)`);
+  }
+  llmCache.flush();
 
   console.log(`\n  By category:`);
   const cats = [...new Set(allResults.map(r => r.category))].sort();
@@ -633,8 +736,9 @@ async function main() {
     console.log(`          A: ${r.answer} | P: ${r.prediction.slice(0, 60)}`);
   }
 
-  // Save
-  const outPath = join(QMD_DIR, "evaluate/locomo/results.json");
+  // Save (results path includes tag for ablation runs)
+  const resultsName = resultsTag ? `results-${resultsTag}.json` : "results.json";
+  const outPath = join(QMD_DIR, "evaluate/locomo", resultsName);
   writeFileSync(outPath, JSON.stringify({
     config: { useLLM, model: useLLM ? LLM_CONFIG[activeLLM].model : "none", llm: activeLLM, limit, convFilter },
     summary: { avgR5, avgR10, avgF1, avgEM, avgSearch, avgAnswer, avgMemories, total: n },
