@@ -12,6 +12,7 @@ import { getDefaultLlamaCpp } from "../llm.js";
 import { isLocalEnabled } from "../remote-config.js";
 import { getDecayScore } from "./decay.js";
 import { classifyMemory } from "./patterns.js";
+import { knowledgeQuery, type KnowledgeEntry } from "./knowledge.js";
 
 // =============================================================================
 // Embedding LRU cache — avoids redundant API calls for repeated text
@@ -564,6 +565,62 @@ export async function memoryStoreBatch(
 }
 
 /**
+ * Extract capitalized multi-word entities from the query as a rough
+ * proper-noun filter. Used to decide whether the KG-in-recall injection
+ * should fire. Very conservative — matches "Caroline", "London",
+ * "Samsung Galaxy S22"; misses lowercase entities and single-letter
+ * abbreviations. Zero-dependency, no NER runtime.
+ */
+function extractQueryEntities(query: string): string[] {
+  // Match 1-3 consecutive capitalized words. Skip sentence-initial words
+  // that are stopwords to reduce false positives ("Which did I first…").
+  const STOPWORDS = new Set(["Which", "Who", "What", "When", "Where", "How", "Why", "Did", "Does", "Is", "Are", "Was", "Were", "The", "This", "That", "These", "Those", "Yes", "No"]);
+  const matches = query.match(/[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}/g) || [];
+  return matches
+    .map(m => m.trim())
+    .filter(m => {
+      const first = m.split(/\s+/)[0]!;
+      return !STOPWORDS.has(first) && m.length >= 3;
+    })
+    // Dedupe while preserving order
+    .filter((m, i, a) => a.indexOf(m) === i);
+}
+
+/**
+ * Query the knowledge graph for triples about the given entities, scoped
+ * to the caller's memory scope. Each triple is rendered as a short
+ * memory-style sentence. Capped at maxFacts total across all entities
+ * (default 5) to avoid flooding the top-K.
+ */
+function queryKGForEntities(
+  db: Database,
+  entities: string[],
+  scope: string | undefined,
+  maxFacts: number = 5
+): Array<{ id: string; text: string }> {
+  const facts: Array<{ id: string; text: string }> = [];
+  const seen = new Set<string>();
+
+  for (const entity of entities) {
+    if (facts.length >= maxFacts) break;
+    let triples: KnowledgeEntry[] = [];
+    try {
+      triples = knowledgeQuery(db, { subject: entity, scope, limit: 10 });
+    } catch {
+      continue;
+    }
+    for (const t of triples) {
+      if (facts.length >= maxFacts) break;
+      const text = `${t.subject} ${t.predicate} ${t.object}`;
+      if (seen.has(text)) continue;
+      seen.add(text);
+      facts.push({ id: `kg:${t.id}`, text });
+    }
+  }
+  return facts;
+}
+
+/**
  * Extract a dialog/session key from a memory's metadata JSON.
  * Prefers dialog-level ID ("D1:3") which is strictly more specific than
  * the session-level ID ("D1"). Returns null for memories with no metadata.
@@ -834,6 +891,50 @@ export async function memoryRecall(
     } catch (err) {
       // Rerank failed — fall back to original ranking
       process.stderr.write(`Memory rerank failed: ${err instanceof Error ? err.message : err}\n`);
+    }
+  }
+
+  // 5b2. Smart KG-in-recall (v16, roadmap cat 10 + cat 2). The knowledge
+  // graph is populated by extractAndStore but wasn't being queried during
+  // recall — v8 tried a blunt injection and had to roll back because
+  // generic entries flooded the top results and hurt single-hop F1.
+  //
+  // This pass is gated by three conditions to avoid the v8 failure mode:
+  //   1. Opt-in: QMD_RECALL_KG=on (default off, baseline unchanged)
+  //   2. Query must contain at least one proper-noun entity (Caroline,
+  //      Samsung Galaxy S22, …). Lowercase/wh-questions are skipped.
+  //   3. Fires only when the current top score is weak (< 0.3) — strong
+  //      FTS/vec hits are never displaced.
+  // KG facts are capped at 5 total and inserted with moderate score (0.25)
+  // so they rank below any real strong hits and only surface when the
+  // main pipeline came up short. Also skipped in RAW mode.
+  if (!RAW && process.env.QMD_RECALL_KG === "on") {
+    const entities = extractQueryEntities(query);
+    const topScore = sorted[0]?.score ?? 0;
+    if (entities.length > 0 && entities.length <= 3 && topScore < 0.3) {
+      const kgFacts = queryKGForEntities(db, entities, scope, 5);
+      let kgAdded = 0;
+      for (const fact of kgFacts) {
+        if (results.has(fact.id)) continue;
+        const entry = {
+          id: fact.id,
+          text: fact.text,
+          category: "fact",
+          scope: scope || "global",
+          importance: 0.6,
+          score: 0.25,
+          created_at: Date.now(),
+          _access_count: 0,
+          _tier: "peripheral",
+          metadata: null,
+        };
+        results.set(fact.id, entry);
+        sorted.push(entry);
+        kgAdded++;
+      }
+      if (kgAdded > 0) {
+        sorted.sort((a, b) => b.score - a.score);
+      }
     }
   }
 
