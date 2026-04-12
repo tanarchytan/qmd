@@ -89,7 +89,6 @@ Use `/release <version>` to cut a release. Add changelog entries under `## [Unre
 - **`src/remote-config.ts`** — Per-operation provider configuration builder (`QMD_EMBED_PROVIDER`, `QMD_RERANK_PROVIDER`, `QMD_QUERY_EXPANSION_PROVIDER`). Cached singleton.
 - **`src/env.ts`** — Loads QMD config from `~/.config/qmd/.env`. Two-tier precedence: QMD_* env vars from .env override stale parent process vars.
 - **`src/ast.ts`** — AST-aware code chunking via tree-sitter (TS/JS/Python/Go/Rust). Falls back to regex chunking for markdown and unknown types.
-- **`src/app/`** — Application layer: `commands/` (collection, context, document, maintenance, search), `services/llm-service.ts`, `ports/llm.ts` (LLM port abstraction).
 - **`src/embedded-skills.ts`** — Generated file bundling `skills/qmd/` content. Regenerate when updating packaged skills.
 
 ### Memory system (`src/memory/`)
@@ -213,3 +212,11 @@ openclaw plugins install @tanarchy/qmd@dev
 # 3. openclaw gateway restart
 ```
 
+## graphify
+
+This project has a graphify knowledge graph at graphify-out/.
+
+Rules:
+- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
+- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
+- After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current
