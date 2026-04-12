@@ -1,11 +1,41 @@
 # QMD Roadmap
 
 > For agents: this file tracks all pending work and benchmark history. Read this first when resuming a session.
-> Last updated: 2026-04-12
+> Last updated: 2026-04-12 (post-graphify, pre-compaction snapshot)
 
 **Package:** `@tanarchy/qmd` — npm (`@dev` tag for dev branch, `@fork` tag for stable)
 **Repo:** `github.com/tanarchytan/qmd` — `main` (stable) + `dev` (active development)
 **Branch:** Work on `dev`, merge to `main` when stable.
+
+---
+
+## 🆕 Session 2026-04-12 — commits shipped
+
+| SHA | Type | Summary |
+|-----|------|---------|
+| `cd4d3dd` | chore | Cleanup repo + reorganize docs (remove code-graph + memorybench + AGENTS/GEMINI duplicates; ROADMAP→docs/; new docs/EVAL.md) |
+| `6f4f890` | feat(memory) | v15-final — synthesis, eviction, ablation toggles, dead code cleanup |
+| `a94ea1a` | feat(eval) | LongMemEval support + LoCoMo ablation tooling + LLM cache + seed |
+| `5827cb1` | perf(memory) | Batch ingest API (memoryStoreBatch) + storage toggles + extract/answer model split |
+| `9c138c8` | feat(eval) | Apples-to-apples LME metric (SR@K) + raw recall mode + drop dead toggles |
+| `a6fe802` | perf(eval) | In-process worker pool (--workers N) + embed batch 32→64 + stale comment cleanup |
+
+**Working tree clean** as of compaction. All session work committed.
+
+## 🚦 In-flight at compaction
+
+- **LME oracle baseline** (`b5pjsje27` / pid 49146): 49/50 questions, ~5 min from completion. Started **before** the seed/cache/SR@K commits. Result will be a slow baseline with token-overlap R@K only — NOT comparable to MemPalace's session-id metric.
+
+## 🎯 Immediate next actions (post-compaction queue)
+
+1. **Capture LME baseline result** when finished — read `~/qmd-eval/evaluate/longmemeval/results-lme-oracle-v15final.json`
+2. **Re-run LME with optimizations** (sharded + batched + lite extraction + worker pool) — gets SR@K and ~10× speedup
+3. **Run raw-mode LME** (extraction off, synthesis off, per-turn off, `QMD_RECALL_RAW=on`) — apples-to-apples with MemPalace recipe
+4. **Run full LME-s sharded** (500Q × 47 sessions) — real benchmark number
+5. **Cross-validate v15-final on conv-25** (untested third LoCoMo conversation)
+6. **v16 candidates** (Hindsight-inspired): smart KG-in-recall, post-retrieval reflect, cross-encoder rerank, separate temporal path
+
+See `~/.claude/projects/.../memory/project_session_handoff_20260412.md` for full session state.
 
 ---
 
@@ -718,6 +748,103 @@ Why: a single prompt extracting both atomic facts and cross-event reflections in
 | Metadata scoring | memory table has metadata field | Never populated in eval |
 | Batch embeddings | search.ts batch pattern | memoryRecall does single embeds |
 | Dream consolidation | plugin.ts:252 | Only in OpenClaw, not benchmarked |
+
+---
+
+## ⚡ Speed Optimization Stack (shipped this session)
+
+All available, all OFF or auto unless noted. See `docs/EVAL.md` for the full env-var + CLI flag reference.
+
+| Optimization | Where | Default | Speedup |
+|--------------|-------|---------|---------|
+| **`memoryStoreBatch()` API** | `src/memory/index.ts` | always on (auto-used) | ~3-5× ingest, system-wide |
+| **`embedBatch` BATCH_SIZE 64** | `src/llm.ts` | always on | halves embed HTTP round-trips |
+| **`--workers N`** in-process pool | LME eval | 1 | ~4-8× (interleaves LLM I/O) |
+| **`--shard N/M`** parallel sharding | LME eval | none | linear N× across processes |
+| **`--extract-model` / `--answer-model`** split | both evals | uses default | use lite for cheap extraction, full for answers |
+| **`--db-suffix`** auto-hashed cache | both evals | based on ingest config | prevents stale-cache foot-gun |
+| **LLM response cache** (file-backed) | `evaluate/_shared/llm-cache.ts` | on (`QMD_LLM_CACHE=off` to disable) | 100% reproducible re-runs |
+| **`seed=42`** in all LLM calls | `src/llm.ts`, both evals | always | best-effort reproducibility |
+| **`QMD_RECALL_RAW=on`** | `src/memory/index.ts` | off | disable boosts/decay/temporal/expansion/rerank — pure BM25+vec+RRF |
+
+**Combined: 50-min sequential LME oracle → ~3-5 min wall** with sharding+workers+lite-extract.
+For 500Q LME-s: ~10 hours → ~1.5 hours.
+
+### Removed env-var toggles (lost in v15 ablation)
+
+- `QMD_RECALL_DUAL_PASS` — dual-pass split, hurt F1
+- `QMD_RECALL_LOG_MOD` — importance log-modulation, neutral
+- `QMD_RECALL_MMR` + `QMD_RECALL_MMR_LAMBDA` — MMR diversity, hurt single-hop F1
+
+---
+
+## 📐 SR@K vs R@K — apples-to-apples with MemPalace
+
+QMD's R@K = **answer-token overlap** with retrieved memory text.
+MemPalace's `recall_any` = **session-id intersection** with `answer_session_ids`.
+
+**These are different metrics.** MemPalace's published 96.6% LongMemEval is session-id-based.
+
+LME ingest now stores `metadata.source_session_id` on every memory. The eval reports BOTH:
+- `R@5 / R@10` — token-overlap (QMD's original)
+- `SR@5 / SR@10` — session-id (MemPalace-comparable, used for cross-system claims)
+
+---
+
+## 🔬 MemPalace 96.6% — verified architecture
+
+Confirmed against `mempalace/searcher.py` and `benchmarks/longmemeval_bench.py`:
+
+```python
+client = chromadb.EphemeralClient()                  # fresh corpus per question
+collection = client.create_collection("mempal_drawers")
+collection.add(documents=[session_text...], metadatas=[{"corpus_id": sid}...])
+results = collection.query(query_texts=[q], n_results=5)
+top5 = {meta["corpus_id"] for meta in results["metadatas"][0]}
+hit = any(sid in top5 for sid in answer_session_ids)
+```
+
+| Item | MemPalace value |
+|------|-----------------|
+| Embedding | `all-MiniLM-L6-v2` 384-dim (fastembed default) |
+| Distance | l2 / Euclidean (ChromaDB default) — NOT cosine |
+| Storage granularity | one document per session OR per turn (flag) |
+| Score boosts | NONE in raw mode (`searcher.py` is 30 lines) |
+| Reranking | NONE in raw mode |
+| Knowledge graph | NONE in retrieval (separate SQLite layer for time queries) |
+| Recall metric | `recall_any` — session-id intersection |
+
+**Their hierarchical/extraction modes (Wings/Halls/Rooms, AAAK) score LOWER than raw.** Adding complexity hurt them. Strong signal that v15-final's complexity may be hurting LME — to be tested via QMD_RECALL_RAW=on + extraction-off.
+
+---
+
+## 🕸️ Graphify (knowledge graph of QMD itself)
+
+Installed `graphifyy` 0.4.6 (PyPI). Built initial QMD code graph.
+
+**Graph stats:** 547 nodes · 928 edges · 35 communities · 10 god nodes · 77.5× token reduction per query vs naive corpus
+
+**Top god nodes (architectural backbone):**
+1. `LlamaCpp` (29 edges)
+2. README root (20)
+3. `closeDb()` (19)
+4. `getDb()` (16)
+5. `RemoteLLM` (15)
+
+**Insight:** LLM/embedding plumbing in `src/llm.ts` dominates centrality. Half the god nodes are LLM-side.
+
+**Refactor candidate flagged:** `src/cli/qmd.ts` is the lowest-cohesion large community (cohesion 0.08, 63 functions). Long-known monolith, now objectively confirmed.
+
+**Outputs:** `graphify-out/{graph.html, graph.json, GRAPH_REPORT.md, manifest.json, cost.json}` (gitignored)
+
+**Query interface:**
+```sh
+graphify query "how does memory recall work"
+graphify path "memoryStore" "knowledgeStore"
+graphify explain "consolidateEntityFacts"
+```
+
+`.graphifyignore` excludes test/, evaluate/, finetune/, setup/, docs/, skills/, dist/, node_modules/.
 
 ---
 
