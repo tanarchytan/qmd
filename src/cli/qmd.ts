@@ -255,41 +255,6 @@ function checkIndexHealth(db: Database): void {
 
 // Compute unique display path for a document
 // Always include at least parent folder + filename, add more parent dirs until unique
-function computeDisplayPath(
-  filepath: string,
-  collectionPath: string,
-  existingPaths: Set<string>
-): string {
-  // Get path relative to collection (include collection dir name)
-  const collectionDir = collectionPath.replace(/\/$/, '');
-  const collectionName = collectionDir.split('/').pop() || '';
-
-  let relativePath: string;
-  if (filepath.startsWith(collectionDir + '/')) {
-    // filepath is under collection: use collection name + relative path
-    relativePath = collectionName + filepath.slice(collectionDir.length);
-  } else {
-    // Fallback: just use the filepath
-    relativePath = filepath;
-  }
-
-  const parts = relativePath.split('/').filter(p => p.length > 0);
-
-  // Always include at least parent folder + filename (minimum 2 parts if available)
-  // Then add more parent dirs until unique
-  const minParts = Math.min(2, parts.length);
-  for (let i = parts.length - minParts; i >= 0; i--) {
-    const candidate = parts.slice(i).join('/');
-    if (!existingPaths.has(candidate)) {
-      return candidate;
-    }
-  }
-
-  // Absolute fallback: use full path (should be unique)
-  return filepath;
-}
-
-
 function formatTimeAgo(date: Date): string {
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
   if (seconds < 60) return `${seconds}s ago`;
@@ -1772,16 +1737,6 @@ async function vectorIndex(
   closeDb();
 }
 
-// Normalize BM25 score to 0-1 range using sigmoid
-function normalizeBM25(score: number): number {
-  // BM25 scores are negative in SQLite (lower = better)
-  // Typical range: -15 (excellent) to -2 (weak match)
-  // Map to 0-1 where higher is better
-  const absScore = Math.abs(score);
-  // Sigmoid-ish normalization: maps ~2-15 range to ~0.1-0.95
-  return 1 / (1 + Math.exp(-(absScore - 5) / 3));
-}
-
 type OutputOptions = {
   format: OutputFormat;
   full: boolean;
@@ -1823,14 +1778,6 @@ function formatExplainNumber(value: number): string {
   return value.toFixed(4);
 }
 
-// Shorten directory path for display - relative to $HOME (used for context paths, not documents)
-function shortPath(dirpath: string): string {
-  const home = homedir();
-  if (dirpath.startsWith(home)) {
-    return '~' + dirpath.slice(home.length);
-  }
-  return dirpath;
-}
 
 type EmptySearchReason = "no_results" | "min_score";
 
