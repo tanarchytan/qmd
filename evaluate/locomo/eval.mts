@@ -37,7 +37,7 @@ loadQmdEnv();
 
 const { openDatabase } = await import(toUrl(join(QMD_DIR, "src/db.ts")));
 const { initializeDatabase } = await import(toUrl(join(QMD_DIR, "src/store/db-init.ts")));
-const { memoryStore, memoryStoreBatch, memoryRecall, extractAndStore, extractReflections, consolidateEntityFacts, runDecayPass } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
+const { memoryStore, memoryStoreBatch, memoryRecall, extractAndStore, extractReflections, consolidateEntityFacts, runDecayPass, memoryReflect } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
 const { knowledgeStore, knowledgeQuery, knowledgeAbout } = await import(toUrl(join(QMD_DIR, "src/memory/knowledge.ts")));
 
 type Database = ReturnType<typeof openDatabase>;
@@ -723,6 +723,19 @@ async function main() {
 
       const searchMs = Date.now() - t0;
 
+      // --- OPTIONAL REFLECT (roadmap cat 11): pre-filter memories into a
+      // compressed fact list before the answer call. Opt-in via
+      // QMD_RECALL_REFLECT=on. Adds one extra LLM call per question.
+      let answerMemories = memories.map(m => m.text);
+      if (process.env.QMD_RECALL_REFLECT === "on" && memories.length > 0 && useLLM) {
+        try {
+          const reflected = await memoryReflect(qa.question, memories, { maxFacts: 8 });
+          if (reflected) {
+            answerMemories = [reflected];
+          }
+        } catch { /* fall back to raw memories */ }
+      }
+
       // --- ANSWER ---
       let prediction = "";
       let answerMs = 0;
@@ -730,7 +743,7 @@ async function main() {
       if (useLLM && memories.length > 0) {
         const t1 = Date.now();
         try {
-          const prompt = buildAnswerPrompt(qa.question, memories.map(m => m.text), qa.category, qa.answer == null);
+          const prompt = buildAnswerPrompt(qa.question, answerMemories, qa.category, qa.answer == null);
           prediction = await askLLM(prompt);
         } catch (e) {
           prediction = memories.map(m => m.text).join(" "); // fallback to raw memories

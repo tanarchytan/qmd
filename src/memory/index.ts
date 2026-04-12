@@ -964,6 +964,61 @@ export async function memoryRecall(
   return sorted;
 }
 
+/**
+ * Post-retrieval reflect synthesis (roadmap cat 11 — Hindsight pattern).
+ *
+ * Takes a question and a list of retrieved memories, makes ONE LLM call
+ * that identifies which facts in the memories are relevant to the
+ * question, and returns them as a compressed numbered list. The idea:
+ * instead of dumping 50 memories into the answer prompt and letting the
+ * answer model sift, pre-filter with a dedicated extract pass so the
+ * answer call sees only the signal.
+ *
+ * Known to help on multi-session questions where the relevant facts
+ * are scattered across many top-K hits — exactly the LME multi-session
+ * F1 bottleneck flagged in the v15.1 benchmark.
+ *
+ * Returns null if:
+ *   - no remote LLM is configured (caller falls back to raw memories)
+ *   - the LLM call fails
+ *   - the response can't be parsed
+ *
+ * Cost: one extra chatComplete call per question. Cache-friendly if
+ * QMD_LLM_CACHE_PATH is set.
+ */
+export async function memoryReflect(
+  question: string,
+  memories: Array<{ text: string }>,
+  options: { maxFacts?: number } = {}
+): Promise<string | null> {
+  if (memories.length === 0) return null;
+
+  const remote = getRemoteLLM();
+  if (!remote) return null;
+
+  const maxFacts = options.maxFacts ?? 5;
+  const context = memories.map((m, i) => `[${i + 1}] ${m.text}`).join("\n");
+
+  const prompt = `You are a fact-extraction assistant. Below is a question and a set of candidate memories. Extract at most ${maxFacts} facts from the memories that are directly relevant to answering the question. Output only the facts, one per line, numbered. Do not explain. Do not invent facts not in the memories. If nothing is relevant, output the single line: NONE.
+
+Question: ${question}
+
+Memories:
+${context}
+
+Relevant facts:`;
+
+  try {
+    const reply = await remote.chatComplete(prompt);
+    if (!reply) return null;
+    const trimmed = reply.trim();
+    if (!trimmed || trimmed === "NONE") return null;
+    return trimmed;
+  } catch {
+    return null;
+  }
+}
+
 export function memoryForget(
   db: Database,
   id: string
