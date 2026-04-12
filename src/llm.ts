@@ -4,20 +4,13 @@
  * Provides embeddings, text generation, and reranking using local GGUF models.
  */
 
-// Lazy-load node-llama-cpp — avoids top-level await that breaks Jiti (OpenClaw plugin loader).
-// OpenClaw installs with --ignore-scripts which skips node-llama-cpp's native build.
-// The plugin only uses RemoteLLM (cloud APIs), never local GGUF inference.
-let _llamaMod: any = null;
-async function loadLlamaCppModule(): Promise<any> {
-  if (!_llamaMod) {
-    try {
-      _llamaMod = await import("node-llama-cpp");
-    } catch (err) {
-      throw new Error(`node-llama-cpp not available. Install with: npm install node-llama-cpp\n${err}`);
-    }
-  }
-  return _llamaMod;
-}
+// node-llama-cpp loader split out to src/llm/loader.ts for shared access by
+// sibling modules without circular imports back through this file.
+import { loadLlamaCppModule } from "./llm/loader.js";
+// Re-export model-pull utilities (moved to src/llm/pull.ts).
+export { pullModels, DEFAULT_MODEL_CACHE_DIR } from "./llm/pull.js";
+export type { PullResult } from "./llm/pull.js";
+
 // Type aliases (erased at compile time, no runtime import)
 type Llama = any;
 type LlamaModel = any;
@@ -25,7 +18,7 @@ type LlamaEmbeddingContext = any;
 type LlamaToken = any;
 import { homedir } from "os";
 import { join } from "path";
-import { existsSync, mkdirSync, statSync, unlinkSync, readdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, statSync, readFileSync, writeFileSync } from "fs";
 // Inline to avoid circular dep with remote-config.ts
 function isLocalEnabled(): boolean {
   const val = process.env.QMD_LOCAL?.toLowerCase();
@@ -231,103 +224,11 @@ export const DEFAULT_RERANK_MODEL_URI = DEFAULT_RERANK_MODEL;
 export const DEFAULT_GENERATE_MODEL_URI = DEFAULT_GENERATE_MODEL;
 
 // Local model cache directory
+// MODEL_CACHE_DIR kept here because LlamaCpp still references it directly below.
+// When LlamaCpp moves to src/llm/local.ts this can migrate fully to llm/pull.ts.
 const MODEL_CACHE_DIR = process.env.XDG_CACHE_HOME
   ? join(process.env.XDG_CACHE_HOME, "qmd", "models")
   : join(homedir(), ".cache", "qmd", "models");
-export const DEFAULT_MODEL_CACHE_DIR = MODEL_CACHE_DIR;
-
-export type PullResult = {
-  model: string;
-  path: string;
-  sizeBytes: number;
-  refreshed: boolean;
-};
-
-type HfRef = {
-  repo: string;
-  file: string;
-};
-
-function parseHfUri(model: string): HfRef | null {
-  if (!model.startsWith("hf:")) return null;
-  const without = model.slice(3);
-  const parts = without.split("/");
-  if (parts.length < 3) return null;
-  const repo = parts.slice(0, 2).join("/");
-  const file = parts.slice(2).join("/");
-  return { repo, file };
-}
-
-async function getRemoteEtag(ref: HfRef): Promise<string | null> {
-  const url = `https://huggingface.co/${ref.repo}/resolve/main/${ref.file}`;
-  try {
-    const resp = await fetch(url, { method: "HEAD" });
-    if (!resp.ok) return null;
-    const etag = resp.headers.get("etag");
-    return etag || null;
-  } catch {
-    return null;
-  }
-}
-
-export async function pullModels(
-  models: string[],
-  options: { refresh?: boolean; cacheDir?: string } = {}
-): Promise<PullResult[]> {
-  const cacheDir = options.cacheDir || MODEL_CACHE_DIR;
-  if (!existsSync(cacheDir)) {
-    mkdirSync(cacheDir, { recursive: true });
-  }
-
-  const results: PullResult[] = [];
-  for (const model of models) {
-    let refreshed = false;
-    const hfRef = parseHfUri(model);
-    const filename = model.split("/").pop();
-    const entries = readdirSync(cacheDir, { withFileTypes: true });
-    const cached = filename
-      ? entries
-          .filter((entry) => entry.isFile() && entry.name.includes(filename))
-          .map((entry) => join(cacheDir, entry.name))
-      : [];
-
-    if (hfRef && filename) {
-      const etagPath = join(cacheDir, `${filename}.etag`);
-      const remoteEtag = await getRemoteEtag(hfRef);
-      const localEtag = existsSync(etagPath)
-        ? readFileSync(etagPath, "utf-8").trim()
-        : null;
-      const shouldRefresh =
-        options.refresh || !remoteEtag || remoteEtag !== localEtag || cached.length === 0;
-
-      if (shouldRefresh) {
-        for (const candidate of cached) {
-          if (existsSync(candidate)) unlinkSync(candidate);
-        }
-        if (existsSync(etagPath)) unlinkSync(etagPath);
-        refreshed = cached.length > 0;
-      }
-    } else if (options.refresh && filename) {
-      for (const candidate of cached) {
-        if (existsSync(candidate)) unlinkSync(candidate);
-        refreshed = true;
-      }
-    }
-
-    const mod = await loadLlamaCppModule();
-    const path = await mod.resolveModelFile(model, cacheDir);
-    const sizeBytes = existsSync(path) ? statSync(path).size : 0;
-    if (hfRef && filename) {
-      const remoteEtag = await getRemoteEtag(hfRef);
-      if (remoteEtag) {
-        const etagPath = join(cacheDir, `${filename}.etag`);
-        writeFileSync(etagPath, remoteEtag + "\n", "utf-8");
-      }
-    }
-    results.push({ model, path, sizeBytes, refreshed });
-  }
-  return results;
-}
 
 // =============================================================================
 // LLM Interface
