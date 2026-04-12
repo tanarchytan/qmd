@@ -313,11 +313,28 @@ await store.close()
 ## Development
 
 ```sh
-bun src/cli/qmd.ts <command>   # Run from source
-bun link                        # Install globally as 'qmd'
-npx vitest run test/            # Run tests
-npm run build                   # Compile TypeScript to dist/
+npx tsx src/cli/qmd.ts <command>   # Run CLI from source (dev mode)
+npm link                            # Install globally as 'qmd'
+npx vitest run test/                # Run tests
+npm run build                       # Compile TypeScript to dist/
+npm run typecheck                   # tsc --noEmit (no emit, just type-check)
 ```
+
+Node.js ≥22 required. Bun support was dropped — all code is Node-only.
+
+## Benchmarks
+
+QMD's memory system is evaluated against two long-term memory benchmarks:
+
+| Benchmark | Tests | QMD v15-final |
+|-----------|-------|---------------|
+| **LoCoMo** (199Q conv-26 + 105Q conv-30) | Conversational memory across 35-session dialogues | F1 60.9% / EM 38.6% (cross-conv avg) |
+| **LongMemEval** (500Q oracle / s / m) | Information-retrieval memory across many sessions | TBD (in progress) |
+
+Reference SOTA on LongMemEval (per [vectorize.io memory survey](https://vectorize.io/articles/best-ai-agent-memory-systems)):
+- Hindsight 91.4% · SuperMemory 81.6% · Zep 63.8% · Mem0 49.0%
+
+See [`docs/EVAL.md`](docs/EVAL.md) for the eval methodology, env-var ablation toggles, parallel sharding, and reproducibility notes. Full version history, technique tables, lessons learned, and SOTA targets in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Standing on the Shoulders of Giants
 

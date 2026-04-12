@@ -28,11 +28,6 @@
   "exclude": [
     "node_modules",
     "dist",
-    "src/qmd.ts",
-    "src/mcp.ts",
-    "src/formatter.ts",
-    "src/test-preload.ts",
-    "src/bench-*.ts",
-    "migrate-schema.ts"
+    "src/bench-*.ts"
   ]
 }

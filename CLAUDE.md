@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Where to find docs
+
+Project documentation lives in `docs/`. **Read these before starting non-trivial work:**
+
+- **`docs/ROADMAP.md`** — version history, technique tables, SOTA reference targets, session lessons learned, quality fix tracker, next testing phases. **Always check the latest version + lessons before proposing changes.**
+- **`docs/EVAL.md`** — how to run LoCoMo + LongMemEval benchmarks, env-var ablation toggles, parallel sharded runs, reproducibility notes (seed=42, model name pitfalls, cache invalidation).
+- **`docs/SYNTAX.md`** — markdown/qmd syntax reference for indexed content.
+
+`CHANGELOG.md` tracks shipped releases. This file (CLAUDE.md) is for code structure and constraints — not benchmark history.
+
 ## Package
 
 `@tanarchy/qmd` — on-device hybrid search for markdown files with BM25, vector search, and LLM reranking. Plus a memory system with decay, knowledge graph, and OpenClaw integration.
@@ -191,7 +201,7 @@ Knowledge: `knowledge_store`, `knowledge_query`, `knowledge_invalidate`, `knowle
 - **Jiti compatibility** — No top-level await anywhere in the import chain. node-llama-cpp lazy-loaded via dynamic import. db.ts uses synchronous createRequire.
 - Node.js ≥22 required (Bun dropped)
 - **Build script** syncs `openclaw.plugin.json` version from `package.json`, compiles TS, and injects a shebang into `dist/cli/qmd.js`
-- **tsconfig excludes** — `src/qmd.ts`, `src/mcp.ts`, `src/formatter.ts`, `src/test-preload.ts`, `src/bench-*.ts`, `migrate-schema.ts` are excluded from type-checking (legacy/standalone files)
+- **tsconfig excludes** — `src/bench-*.ts` is excluded from type-checking (standalone benchmark scripts)
 
 ## OpenClaw Plugin Install
 
@@ -202,3 +212,4 @@ openclaw plugins install @tanarchy/qmd@dev
 # 2. Add plugins.entries.tanarchy-qmd with enabled: true + config
 # 3. openclaw gateway restart
 ```
+

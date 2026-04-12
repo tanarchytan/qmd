@@ -7,18 +7,30 @@ package-lock.json
 archive/
 texts/
 .cursor/
-.cursorrules
-.windsurfrules
 .github/copilot/
-.mcp.json
-.opencode.json
+.claude/
+
+# Markdown — only allow tracked top-level docs and curated subdirs.
+# (root *.md is ignored by default; explicitly track the ones below.)
 *.md
 !README.md
 !CLAUDE.md
 !CHANGELOG.md
 !skills/**/*.md
 !finetune/*.md
-!docs/*.md
+!docs/**/*.md
+
 finetune/outputs/
 finetune/data/train/
-.claude/
+
+# Evaluation artifacts (sqlite + per-tag results + LLM cache)
+evaluate/locomo/debug-*.mjs
+evaluate/locomo/dbs/
+evaluate/locomo/results.json
+evaluate/locomo/results-*.json
+evaluate/locomo/locomo10.json
+evaluate/locomo/llm-cache.json
+evaluate/longmemeval/longmemeval_*.json
+evaluate/longmemeval/dbs/
+evaluate/longmemeval/results*.json
+evaluate/longmemeval/llm-cache.json
