@@ -9,6 +9,7 @@ texts/
 .cursor/
 .github/copilot/
 .claude/
+graphify-out/
 
 # Markdown — only allow tracked top-level docs and curated subdirs.
 # (root *.md is ignored by default; explicitly track the ones below.)

@@ -324,12 +324,18 @@ Node.js ≥22 required. Bun support was dropped — all code is Node-only.
 
 ## Benchmarks
 
-QMD's memory system is evaluated against two long-term memory benchmarks:
+QMD's memory system is evaluated against two long-term memory benchmarks, with recall measured apples-to-apples against MemPalace's `compute_retrieval_recall` (session-id and dialog-id match, not token-overlap):
 
-| Benchmark | Tests | QMD v15-final |
-|-----------|-------|---------------|
-| **LoCoMo** (199Q conv-26 + 105Q conv-30) | Conversational memory across 35-session dialogues | F1 60.9% / EM 38.6% (cross-conv avg) |
-| **LongMemEval** (500Q oracle / s / m) | Information-retrieval memory across many sessions | TBD (in progress) |
+| Benchmark | Tests | QMD v15.1 |
+|-----------|-------|-----------|
+| **LongMemEval oracle** (n=50, temporal-reasoning subset) | Information-retrieval memory across many sessions | **SR@5 = 100.0%** · F1 52.9% · EM 28.0% |
+| **LoCoMo** (conv-26 + conv-30) | Conversational memory across 35-session dialogues | F1 60.9% / EM 38.6% (v15-final cross-conv avg; v15.1 DR@K re-run in progress) |
+
+**Apples-to-apples caveats**
+- `SR@K` = MemPalace `recall_any`: did any top-K memory come from a session listed in the QA's evidence? Directly comparable to their published 96.6% LongMemEval R@5.
+- `DR@K` = MemPalace `compute_retrieval_recall`: fraction of evidence dialog IDs appearing in top-K (LoCoMo only, since LongMemEval has no dialog IDs).
+- The earlier v15-final "80% R@5" was a legacy token-overlap metric that fails on short numeric answers ("27" vs "27 years old" scored 0). SR@5 re-measurement shows retrieval was already at ceiling on the temporal-reasoning subset.
+- LongMemEval numbers are on a temporal-reasoning-only subset (dataset-order artifact from `--limit 50`). A `--limit 200` mixed-category run is the next step before calling any number representative.
 
 Reference SOTA on LongMemEval (per [vectorize.io memory survey](https://vectorize.io/articles/best-ai-agent-memory-systems)):
 - Hindsight 91.4% · SuperMemory 81.6% · Zep 63.8% · Mem0 49.0%

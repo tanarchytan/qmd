@@ -22,18 +22,49 @@
 
 **Working tree clean** as of compaction. All session work committed.
 
-## 🚦 In-flight at compaction
+## 🚀 v15.1 — apples-to-apples + temporal answer fix (2026-04-12)
 
-- **LME oracle baseline** (`b5pjsje27` / pid 49146): 49/50 questions, ~5 min from completion. Started **before** the seed/cache/SR@K commits. Result will be a slow baseline with token-overlap R@K only — NOT comparable to MemPalace's session-id metric.
+**Two changes from v15-final, validated on LME oracle:**
 
-## 🎯 Immediate next actions (post-compaction queue)
+1. **Answer prompt v11 → v11.1** (env-gated via `QMD_PROMPT_RULES=v11.1`). Adds three rules addressing the failure modes found in the first LME baseline analysis: ordering ("which came first"), no-refuse duration arithmetic, enumerate-then-count.
+2. **MemPalace-aligned recall metric** — the published 96.6% is session-id `recall_any`, not token-overlap. We now store `source_session_id` / `source_dialog_id` metadata at ingest and report SR@K (LME) / DR@K + SR@K (LoCoMo) alongside the legacy R@K.
 
-1. **Capture LME baseline result** when finished — read `~/qmd-eval/evaluate/longmemeval/results-lme-oracle-v15final.json`
-2. **Re-run LME with optimizations** (sharded + batched + lite extraction + worker pool) — gets SR@K and ~10× speedup
-3. **Run raw-mode LME** (extraction off, synthesis off, per-turn off, `QMD_RECALL_RAW=on`) — apples-to-apples with MemPalace recipe
-4. **Run full LME-s sharded** (500Q × 47 sessions) — real benchmark number
-5. **Cross-validate v15-final on conv-25** (untested third LoCoMo conversation)
-6. **v16 candidates** (Hindsight-inspired): smart KG-in-recall, post-retrieval reflect, cross-encoder rerank, separate temporal path
+### LME A/B on oracle, n=50 (temporal-reasoning subset)
+
+| Metric | v15-final (v11) | **v15.1 (v11.1)** | Δ |
+|---|---|---|---|
+| **SR@5** (MemPalace apples-to-apples) | **100.0%** | **100.0%** | = |
+| **SR@10** | **100.0%** | **100.0%** | = |
+| R@5 (legacy token-overlap) | 86.0% | 86.0% | = |
+| R@10 | 92.0% | 92.0% | = |
+| F1 | 51.4% | 52.9% | **+1.5pp** |
+| EM | 22.0% | 28.0% | **+6.0pp** |
+
+**Headline:** SR@5 = 100% on both runs. The 80% R@5 in the first baseline was a pure metric artifact (token-overlap fails on short numeric answers — "27" vs "27 years old" scores 0). **QMD retrieval was already apples-to-apples with MemPalace; we'd been chasing a phantom gap.**
+
+v11.1 prompt delivers a real but modest F1 (+1.5pp) and clearer EM (+6pp) improvement. Ships as the default once LoCoMo cross-check confirms no regression.
+
+### Apples-to-apples metric design (LoCoMo)
+
+Following MemPalace's `benchmarks/locomo_bench.py` verbatim:
+- **`DR@K`** — dialog-level fractional recall: `found_dialog_ids / len(evidence)`. Primary metric.
+  - Each memory stores `source_dialog_id` from the dataset's native `dia_id` field (`D<sess>:<turn>`).
+  - Evidence like `["D1:9", "D1:11"]` and finding only one scores 0.5, not 1.0 — rewards multi-hop retrieval properly.
+- **`SR@K`** — session-level any-match (coarser secondary metric, matches MemPalace session granularity mode).
+- Top-K reported at K ∈ {5, 10, 15, 50}. K=50 is MemPalace's default but generous; SR@5/DR@5 are the honest numbers.
+- `memoryRecall(limit: 50)` then slice locally — one recall call serves all four K values.
+
+### Pending / in-flight
+
+1. **LoCoMo conv-30 run** with DR@K/SR@K — in flight (bg `bq2g25djf`, ~10 min wall, fresh ingest required for new metadata schema)
+2. **LoCoMo conv-26 cross-check** after conv-30 lands
+3. **LME full distribution** — current `--limit 50` is all `temporal-reasoning` due to dataset ordering. Need `--limit 200` or a shuffled sample for the four other question types (single-hop, multi-hop, knowledge-update, abstention)
+4. **Raw-mode LME** (`QMD_RECALL_RAW=on`, extraction off) — closest replica of MemPalace's ChromaDB recipe; tests whether our pipeline complexity helps or hurts
+5. **v16 candidates** (Hindsight-inspired, post-v15.1 ship): smart KG-in-recall, post-retrieval reflect synthesis, cross-encoder rerank, separate temporal retrieval path
+
+### Side issue to fix
+
+Query expansion is passing `--extract-model gemini-2.5-flash-lite` through to the Nebius provider and 404'ing. Separate code path, doesn't affect results (QE is effectively disabled during these runs), but should be decoupled so `--extract-model` only overrides the extraction LLM.
 
 See `~/.claude/projects/.../memory/project_session_handoff_20260412.md` for full session state.
 

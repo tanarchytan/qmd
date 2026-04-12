@@ -223,7 +223,26 @@ Watch by category:
 | SuperMemory | 81.6% | Memory graph + RAG + auto contradiction resolution |
 | Zep / Graphiti | 63.8% | Temporal KG with bitemporal validity |
 | Mem0 | 49.0% | Vector + KG dual-store, atomic extraction |
-| QMD v15-final | TBD | BM25 + vec + RRF + LLM rerank + merged extraction + synthesis |
+| QMD v15.1 | **SR@5 100% / F1 52.9%** (n=50 oracle, temporal-only subset) | BM25 + vec + RRF + LLM rerank + merged extraction + synthesis + v11.1 temporal prompt |
+
+**QMD v15.1 LME apples-to-apples (2026-04-12, oracle, n=50, temporal-reasoning):**
+- **SR@5 / SR@10 = 100.0%** (MemPalace `recall_any`, session-id match)
+- Legacy R@5 = 86.0%, R@10 = 92.0% (token-overlap — mismeasures short numeric answers)
+- F1 = 52.9%, EM = 28.0%
+
+The SR@K number is directly comparable to MemPalace's 96.6%. The first baseline's "R@5 = 80%" was a token-overlap metric artifact, not a retrieval gap. **Caveat:** still only temporal-reasoning (dataset ordering); full-distribution run on `--limit 200` needed before calling any number representative.
+
+## Apples-to-apples metrics (MemPalace alignment)
+
+Both evals now store session/dialog metadata at ingest and report recall at four K values:
+
+| Metric | Definition | Where |
+|---|---|---|
+| `SR@K` | Session-id any-match (`recall_any`) — any top-K memory's `source_session_id` in the QA's evidence sessions | LME, LoCoMo |
+| `DR@K` | Dialog-level fractional recall — `found_dialog_ids / len(evidence)`; direct port of MemPalace `compute_retrieval_recall` | LoCoMo only (LME has no dialog IDs) |
+| `R@K` | Legacy token-overlap — kept for backward comparison, known to mismeasure short numeric answers | both |
+
+K ∈ {5, 10, 15, 50}. MemPalace's default is 50, but SR@5 / DR@5 are the honest numbers — K=50 is essentially "did we put it anywhere in a half-conversation window" and should be treated as a retrieval ceiling, not a headline score.
 
 See `ROADMAP.md` for full architectural delta vs Hindsight and v16 candidate optimizations.
 
