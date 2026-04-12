@@ -89,10 +89,18 @@ export type MemoryStoreOptions = {
   metadata?: Record<string, unknown>;
 };
 
+export type MemoryTier = "peripheral" | "working" | "core";
+
 export type MemoryRecallOptions = {
   query: string;
   scope?: string;
   category?: MemoryCategory;
+  /**
+   * Restrict retrieval to a specific tier or set of tiers. When omitted,
+   * all tiers are eligible. Used by tier-aware callers (Zep-style
+   * agents querying "working" or "episodic" memory explicitly).
+   */
+  tier?: MemoryTier | MemoryTier[];
   limit?: number;
   rerank?: boolean;
 };
@@ -687,6 +695,11 @@ export async function memoryRecall(
   const limit = options.limit || 10;
   const scope = options.scope;
   const category = options.category;
+  // Tier filter (roadmap cat 1): a normalized set of tiers to accept.
+  // Empty set = no filter (all tiers eligible).
+  const tierFilter: Set<string> | null = options.tier
+    ? new Set(Array.isArray(options.tier) ? options.tier : [options.tier])
+    : null;
 
   // Prepared statements — reused across FTS and vec lookups (avoids recompile)
   const getByRowid = db.prepare(`SELECT * FROM memories WHERE rowid = ?`);
@@ -703,6 +716,7 @@ export async function memoryRecall(
   const addResult = (mem: Memory, score: number) => {
     if (scope && mem.scope !== scope && mem.scope !== "global") return;
     if (category && mem.category !== category) return;
+    if (tierFilter && !tierFilter.has(mem.tier)) return;
     const existing = results.get(mem.id);
     if (existing) {
       existing.score += score;
@@ -1216,6 +1230,40 @@ export function memoryPushPack(
   pushReason(hotRows, "hot-tail");
 
   return pack;
+}
+
+/**
+ * Tier-grouped recall (roadmap cat 1 — Tiered / Hierarchical Storage).
+ *
+ * Runs three parallel recalls scoped to each tier and returns the
+ * results as a structured object. Callers that want separate
+ * working/core pools (Zep-style subgraph queries, MemGPT recall vs
+ * archival) can use this instead of manually filtering a flat recall.
+ *
+ * Each tier call gets its own limit — default 5 per tier — so the
+ * caller receives up to 15 memories total. Scope, category, and rerank
+ * options are forwarded to all three calls.
+ *
+ * This is a behavioural "tiered storage" entry point without a schema
+ * rewrite. All memories still live in the `memories` table; the
+ * tier-aware API surfaces what was always possible but not exposed.
+ */
+export async function memoryRecallTiered(
+  db: Database,
+  options: Omit<MemoryRecallOptions, "tier"> & { perTierLimit?: number }
+): Promise<{
+  core: MemoryRecallResult[];
+  working: MemoryRecallResult[];
+  peripheral: MemoryRecallResult[];
+}> {
+  const perTierLimit = options.perTierLimit ?? 5;
+  const base = { ...options, limit: perTierLimit };
+  const [core, working, peripheral] = await Promise.all([
+    memoryRecall(db, { ...base, tier: "core" }),
+    memoryRecall(db, { ...base, tier: "working" }),
+    memoryRecall(db, { ...base, tier: "peripheral" }),
+  ]);
+  return { core, working, peripheral };
 }
 
 export function memoryForget(
