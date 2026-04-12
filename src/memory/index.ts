@@ -563,6 +563,64 @@ export async function memoryStoreBatch(
   return results;
 }
 
+/**
+ * Extract a dialog/session key from a memory's metadata JSON.
+ * Prefers dialog-level ID ("D1:3") which is strictly more specific than
+ * the session-level ID ("D1"). Returns null for memories with no metadata.
+ */
+function memoryDialogKey(m: { metadata?: string | null }): string | null {
+  if (!m.metadata) return null;
+  try {
+    const meta = JSON.parse(m.metadata) as {
+      source_dialog_id?: string;
+      source_session_id?: string;
+    };
+    return meta.source_dialog_id || meta.source_session_id || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Dialog-aware MMR-lite re-selection. Preserves rank-order priority but
+ * prefers picking memories from dialogs/sessions we haven't seen yet.
+ * When all remaining candidates share already-covered dialogs, falls
+ * back to score order for the rest.
+ *
+ * Complexity: O(limit × sorted.length) worst case — fine for typical
+ * limit=50 / sorted.length≤150.
+ */
+function applyDialogDiversity<T extends { metadata?: string | null }>(
+  sorted: T[],
+  limit: number
+): T[] {
+  const selected: T[] = [];
+  const remaining = [...sorted];
+  const seen = new Set<string>();
+
+  while (selected.length < limit && remaining.length > 0) {
+    // First try: pick the top candidate whose dialog key is unseen.
+    let pickIdx = -1;
+    for (let i = 0; i < remaining.length; i++) {
+      const key = memoryDialogKey(remaining[i]!);
+      if (!key || !seen.has(key)) {
+        pickIdx = i;
+        break;
+      }
+    }
+    // Everything left is from already-covered dialogs → take top by score.
+    if (pickIdx === -1) pickIdx = 0;
+
+    const [picked] = remaining.splice(pickIdx, 1);
+    if (!picked) break;
+    selected.push(picked);
+    const key = memoryDialogKey(picked);
+    if (key) seen.add(key);
+  }
+
+  return selected;
+}
+
 export async function memoryRecall(
   db: Database,
   options: MemoryRecallOptions
@@ -779,7 +837,19 @@ export async function memoryRecall(
     }
   }
 
-  sorted = sorted.slice(0, limit);
+  // 5c. Dialog-aware diversity (v16). Addresses the DR@K vs SR@K gap:
+  // on multi-evidence queries, a plain score sort often piles up several
+  // memories from the same source dialog, leaving other evidence dialogs
+  // uncovered in the top-K. Greedy MMR-lite reshuffles the top-limit to
+  // prefer unseen source_dialog_id / source_session_id first, falling
+  // back to score order when all remaining candidates come from already-
+  // covered dialogs. Opt-in via QMD_RECALL_DIVERSIFY=on (default off so
+  // the baseline is unchanged).
+  if (!RAW && process.env.QMD_RECALL_DIVERSIFY === "on" && sorted.length > 2) {
+    sorted = applyDialogDiversity(sorted, limit);
+  } else {
+    sorted = sorted.slice(0, limit);
+  }
 
   // Touch access counts for recalled memories (batched in transaction for performance)
   const now = Date.now();
