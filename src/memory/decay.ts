@@ -38,7 +38,7 @@ const STALE_THRESHOLD = 0.3;
 // Scoring functions
 // =============================================================================
 
-export function recencyScore(daysSinceCreation: number, importance: number, tier: string): number {
+function recencyScore(daysSinceCreation: number, importance: number, tier: string): number {
   const baseHL = BASE_HALF_LIFE[tier] ?? 14;
   const beta = BETA[tier] ?? 1.0;
   const effectiveHL = baseHL * Math.exp(MU * importance);
@@ -46,11 +46,11 @@ export function recencyScore(daysSinceCreation: number, importance: number, tier
   return Math.exp(-lambda * Math.pow(Math.max(0, daysSinceCreation), beta));
 }
 
-export function frequencyScore(accessCount: number): number {
+function frequencyScore(accessCount: number): number {
   return 1 - Math.exp(-accessCount / 5);
 }
 
-export function intrinsicScore(importance: number): number {
+function intrinsicScore(importance: number): number {
   return Math.max(0, Math.min(1, importance));
 }
 
@@ -71,7 +71,7 @@ export function compositeScore(
 
 export type TierChange = { id: string; oldTier: string; newTier: string; composite: number };
 
-export function evaluateTier(
+function evaluateTier(
   currentTier: string, accessCount: number, composite: number, importance: number
 ): string | null {
   if (currentTier === "peripheral") {
@@ -129,4 +129,96 @@ export function getDecayScore(
 ): number {
   const daysSince = (Date.now() - createdAt) / 86400000;
   return compositeScore(daysSince, accessCount, importance, tier);
+}
+
+// =============================================================================
+// Eviction (cat 17 — LRU-K, O'Neil 1993; type-weighted from Total Recall)
+// =============================================================================
+
+export type EvictionOptions = {
+  /** Memories older than this are eviction candidates. Default 30 days. */
+  maxAgeDays?: number;
+  /** Importance threshold below which memories are evictable. Default 0.4. */
+  minImportance?: number;
+  /** Memories with at least this access count are spared. Default 2. */
+  minAccessCount?: number;
+  /** Don't actually delete, just report. */
+  dryRun?: boolean;
+};
+
+export type EvictionResult = {
+  evaluated: number;
+  evicted: number;
+  preserved: number;
+  bytesFreed: number;
+};
+
+/**
+ * LRU-K type-weighted eviction.
+ *
+ * Evicts cold low-value memories. Type weighting:
+ *   - tier=core         → never evicted
+ *   - tier=working      → evicted only if very stale (composite < 0.1)
+ *   - tier=peripheral   → evicted if old + low importance + cold
+ *   - reflection/decision categories → spared (carry meta-knowledge)
+ *
+ * From: LRU-K (O'Neil et al. 1993, SIGMOD), Total Recall type-weighted eviction.
+ *
+ * Run periodically (cron / dream consolidation), NOT during eval — eviction
+ * during ingest would defeat dedup. Skip during LoCoMo by passing dryRun.
+ */
+export function runEvictionPass(db: Database, options: EvictionOptions = {}): EvictionResult {
+  const maxAge = (options.maxAgeDays ?? 30) * 86400000;
+  const minImp = options.minImportance ?? 0.4;
+  const minAccess = options.minAccessCount ?? 2;
+  const now = Date.now();
+  const cutoff = now - maxAge;
+
+  // Find candidates: old, low importance, low access, not core, not protected category
+  const candidates = db.prepare(`
+    SELECT id, text, importance, access_count, last_accessed, created_at, tier, category
+    FROM memories
+    WHERE created_at < ?
+      AND importance < ?
+      AND access_count < ?
+      AND tier != 'core'
+      AND category != 'reflection'
+      AND category != 'decision'
+  `).all(cutoff, minImp, minAccess) as Array<{
+    id: string; text: string; importance: number; access_count: number;
+    last_accessed: number | null; created_at: number; tier: string; category: string;
+  }>;
+
+  if (options.dryRun) {
+    const bytes = candidates.reduce((s, c) => s + c.text.length, 0);
+    return { evaluated: candidates.length, evicted: 0, preserved: candidates.length, bytesFreed: bytes };
+  }
+
+  let evicted = 0;
+  let bytesFreed = 0;
+  const delMem = db.prepare(`DELETE FROM memories WHERE id = ?`);
+  // memories_vec is created lazily on first vector insert; tolerate its absence
+  let delVec: ReturnType<typeof db.prepare> | null = null;
+  try { delVec = db.prepare(`DELETE FROM memories_vec WHERE id = ?`); } catch { /* table not yet created */ }
+  const log = db.prepare(`INSERT INTO memory_history (memory_id, action, old_value, timestamp) VALUES (?, 'EVICT', ?, ?)`);
+
+  // Use better-sqlite3 nestable transaction API (item #11) — safer than raw BEGIN/COMMIT
+  const txn = db.transaction((cs: typeof candidates) => {
+    for (const c of cs) {
+      // Working tier needs an extra check — only evict if very stale
+      if (c.tier === "working") {
+        const days = (now - c.created_at) / 86400000;
+        const score = compositeScore(days, c.access_count, c.importance, c.tier);
+        if (score >= 0.1) continue;
+      }
+      log.run(c.id, c.text, now);
+      delMem.run(c.id);
+      if (delVec) { try { delVec.run(c.id); } catch { /* skip individual vec failures */ } }
+      evicted++;
+      bytesFreed += c.text.length;
+    }
+  });
+  txn(candidates);
+
+  return { evaluated: candidates.length, evicted, preserved: candidates.length - evicted, bytesFreed };
 }

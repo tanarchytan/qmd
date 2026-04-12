@@ -23,8 +23,8 @@
  *     "config": {
  *       "autoRecall": true,
  *       "autoCapture": true,
- *       "topK": 5,
- *       "scope": "global"
+ *       "embed": { "provider": "zeroentropy", "apiKey": "...", "model": "zembed-1" },
+ *       "rerank": { "provider": "zeroentropy", "apiKey": "...", "model": "zerank-2" }
  *     }
  *   }
  */
@@ -39,12 +39,18 @@ import {
   knowledgeInvalidate, knowledgeEntities,
 } from "../memory/index.js";
 
-// Load env before anything else
-loadQmdEnv();
-
 // =============================================================================
 // Config
 // =============================================================================
+
+interface ProviderConfig {
+  provider?: string;
+  apiKey?: string;
+  url?: string;
+  model?: string;
+  dimensions?: number;
+  mode?: string;
+}
 
 interface QmdPluginConfig {
   autoRecall: boolean;
@@ -52,6 +58,10 @@ interface QmdPluginConfig {
   topK: number;
   scope: string;
   dbPath?: string;
+  local?: boolean;
+  embed?: ProviderConfig;
+  rerank?: ProviderConfig;
+  queryExpansion?: ProviderConfig;
 }
 
 const DEFAULT_CONFIG: QmdPluginConfig = {
@@ -60,6 +70,46 @@ const DEFAULT_CONFIG: QmdPluginConfig = {
   topK: 5,
   scope: "global",
 };
+
+// =============================================================================
+// Config → env mapping
+// =============================================================================
+
+/**
+ * Map openclaw.json plugin config to QMD_* environment variables.
+ * Called AFTER loadQmdEnv() so plugin config wins over .env file.
+ */
+function applyConfigToEnv(cfg: QmdPluginConfig): void {
+  // Plugin default: remote-only (no cmake/GPU needed)
+  if (cfg.local === false || cfg.local === undefined) {
+    process.env.QMD_LOCAL = "no";
+  } else {
+    process.env.QMD_LOCAL = "yes";
+  }
+
+  if (cfg.embed) {
+    if (cfg.embed.provider) process.env.QMD_EMBED_PROVIDER = cfg.embed.provider;
+    if (cfg.embed.apiKey) process.env.QMD_EMBED_API_KEY = cfg.embed.apiKey;
+    if (cfg.embed.url) process.env.QMD_EMBED_URL = cfg.embed.url;
+    if (cfg.embed.model) process.env.QMD_EMBED_MODEL = cfg.embed.model;
+    if (cfg.embed.dimensions) process.env.QMD_EMBED_DIMENSIONS = String(cfg.embed.dimensions);
+  }
+
+  if (cfg.rerank) {
+    if (cfg.rerank.provider) process.env.QMD_RERANK_PROVIDER = cfg.rerank.provider;
+    if (cfg.rerank.apiKey) process.env.QMD_RERANK_API_KEY = cfg.rerank.apiKey;
+    if (cfg.rerank.url) process.env.QMD_RERANK_URL = cfg.rerank.url;
+    if (cfg.rerank.model) process.env.QMD_RERANK_MODEL = cfg.rerank.model;
+    if (cfg.rerank.mode) process.env.QMD_RERANK_MODE = cfg.rerank.mode;
+  }
+
+  if (cfg.queryExpansion) {
+    if (cfg.queryExpansion.provider) process.env.QMD_QUERY_EXPANSION_PROVIDER = cfg.queryExpansion.provider;
+    if (cfg.queryExpansion.apiKey) process.env.QMD_QUERY_EXPANSION_API_KEY = cfg.queryExpansion.apiKey;
+    if (cfg.queryExpansion.url) process.env.QMD_QUERY_EXPANSION_URL = cfg.queryExpansion.url;
+    if (cfg.queryExpansion.model) process.env.QMD_QUERY_EXPANSION_MODEL = cfg.queryExpansion.model;
+  }
+}
 
 // =============================================================================
 // Database
@@ -84,31 +134,47 @@ const qmdPlugin = definePluginEntry({
   id: "tanarchy-qmd",
   name: "Tanarchy QMD",
   description: "Document search + conversation memory + knowledge graph powered by QMD",
-  // No kind: "memory" — we complement existing memory systems, don't compete for the slot
 
   async register(api: OpenClawPluginApi) {
     const rawConfig = api.pluginConfig as Partial<QmdPluginConfig> | undefined;
     const cfg: QmdPluginConfig = { ...DEFAULT_CONFIG, ...rawConfig };
 
-    const _db = getDb(cfg);
+    // 1. Load .env defaults, then override with plugin config
+    loadQmdEnv();
+    applyConfigToEnv(cfg);
 
+    const _db = getDb(cfg);
+    const defaultScope = cfg.scope;
+
+    // Per-request state — scoped per message, not shared across agents
     let lastUserMessage = "";
-    let currentSessionKey: string | undefined;
+    let activeScope = defaultScope;
 
     api.logger.info(
-      `tanarchy-qmd: registered (autoRecall: ${cfg.autoRecall}, autoCapture: ${cfg.autoCapture}, scope: ${cfg.scope})`,
+      `tanarchy-qmd: registered (autoRecall: ${cfg.autoRecall}, autoCapture: ${cfg.autoCapture}, scope: ${defaultScope})`,
     );
+
+    // ========================================================================
+    // Helper: resolve scope for a session key
+    // ========================================================================
+
+    function resolveScope(sessionKey?: string): string {
+      if (sessionKey) {
+        const match = sessionKey.match(/^agent:([^:]+)/);
+        if (match) return `agent:${match[1]}`;
+      }
+      return defaultScope;
+    }
 
     // ========================================================================
     // Auto-recall: inject relevant memories before agent response
     // ========================================================================
 
     if (cfg.autoRecall) {
-      // Cache the last user message for recall
       api.on("message_received", (event: { content?: string; sessionKey?: string }) => {
         if (event.content && event.content.length > 5) {
           lastUserMessage = event.content;
-          currentSessionKey = event.sessionKey;
+          activeScope = resolveScope(event.sessionKey);
         }
       });
 
@@ -116,18 +182,36 @@ const qmdPlugin = definePluginEntry({
         if (!lastUserMessage || lastUserMessage.length < 10) return;
 
         try {
-          const memories = await memoryRecall(_db, {
-            query: lastUserMessage,
-            scope: cfg.scope,
-            limit: cfg.topK,
-          });
+          // Search both agent-scoped AND global memories
+          const scope = activeScope;
+          const scopes = [scope];
+          if (scope !== "global" && scope.startsWith("agent:")) {
+            scopes.push("global");
+          }
 
-          if (memories.length > 0) {
-            const memoryContext = memories
+          const allMemories: Array<{ category: string; text: string; score: number }> = [];
+          for (const s of scopes) {
+            const memories = await memoryRecall(_db, {
+              query: lastUserMessage,
+              scope: s,
+              limit: cfg.topK,
+            });
+            allMemories.push(...memories);
+          }
+
+          // Dedupe by text and sort by score
+          const seen = new Set<string>();
+          const dedupedMemories = allMemories.filter(m => {
+            if (seen.has(m.text)) return false;
+            seen.add(m.text);
+            return true;
+          }).sort((a, b) => b.score - a.score).slice(0, cfg.topK);
+
+          if (dedupedMemories.length > 0) {
+            const memoryContext = dedupedMemories
               .map(m => `[${m.category}] ${m.text}`)
               .join("\n");
 
-            // Inject as system message before the conversation
             if (context.messages) {
               context.messages.unshift({
                 role: "system",
@@ -150,7 +234,6 @@ const qmdPlugin = definePluginEntry({
         if (!event.messages || event.messages.length === 0) return;
 
         try {
-          // Extract from the last few messages (user + assistant)
           const recentMessages = event.messages.slice(-4);
           const text = recentMessages
             .map(m => m.role === "user" ? m.content : `Assistant: ${m.content}`)
@@ -158,7 +241,7 @@ const qmdPlugin = definePluginEntry({
 
           if (text.length < 30) return;
 
-          await extractAndStore(_db, text, cfg.scope);
+          await extractAndStore(_db, text, activeScope);
         } catch (err) {
           api.logger.warn(`tanarchy-qmd capture failed: ${err}`);
         }
@@ -168,18 +251,7 @@ const qmdPlugin = definePluginEntry({
     // ========================================================================
     // Dreaming integration
     // ========================================================================
-    // OpenClaw's dreaming system (Light → REM → Deep phases) runs on a cron
-    // schedule. Since v2026.4.7, it respects the active memory slot plugin.
-    //
-    // Our integration:
-    // 1. On each agent_end, track session count for dream gating
-    // 2. Ingest session corpus files from memory/.dreams/session-corpus/
-    // 3. Run decay pass as consolidation when triggered
-    //
-    // The dreaming phases themselves are managed by memory-core.
-    // We participate by being the memory slot that receives promoted entries.
 
-    // Session-based dream gate: run consolidation after enough sessions
     let sessionCount = 0;
     const DREAM_SESSION_THRESHOLD = 5;
     const DREAM_HOURS_THRESHOLD = 24;
@@ -200,34 +272,31 @@ const qmdPlugin = definePluginEntry({
             const { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync } = await import("node:fs");
             const { dirname } = await import("node:path");
 
-            // Load cursor state
             let cursor: Record<string, { lines: number }> = {};
             try {
               if (existsSync(cursorPath)) cursor = JSON.parse(readFileSync(cursorPath, "utf-8"));
             } catch {}
 
             const files = readdirSync(corpusDir).filter(f => f.endsWith(".txt")).sort();
-            for (const file of files.slice(-7)) { // Last 7 days
+            for (const file of files.slice(-7)) {
               const content = readFileSync(`${corpusDir}/${file}`, "utf-8");
               const lines = content.split("\n").length;
 
-              // Skip if already fully ingested
               if (cursor[file] && cursor[file].lines >= lines) continue;
 
               if (content.length > 50) {
-                await extractAndStore(_db, content, cfg.scope);
+                await extractAndStore(_db, content, defaultScope);
               }
               cursor[file] = { lines };
             }
 
-            // Save cursor
             try { mkdirSync(dirname(cursorPath), { recursive: true }); } catch {}
             writeFileSync(cursorPath, JSON.stringify(cursor, null, 2));
           } catch {
             // No corpus dir yet — that's fine
           }
 
-          // 2. Run decay pass (tier promotion/demotion)
+          // 2. Run decay pass
           const result = runDecayPass(_db);
           api.logger.info(
             `tanarchy-qmd: consolidation complete — ${result.processed} memories, ` +
@@ -243,7 +312,7 @@ const qmdPlugin = definePluginEntry({
     });
 
     // ========================================================================
-    // Tools (using OpenClaw SDK registerTool signature)
+    // Tools
     // ========================================================================
 
     const tools = [
@@ -252,7 +321,7 @@ const qmdPlugin = definePluginEntry({
         description: "Store a memory with auto-dedup and auto-classification",
         parameters: { type: "object", properties: { text: { type: "string" }, category: { type: "string" }, importance: { type: "number" } }, required: ["text"] },
         execute: async (_id: string, params: any) => {
-          const result = await memoryStore(_db, { ...params, scope: cfg.scope });
+          const result = await memoryStore(_db, { ...params, scope: activeScope });
           const msg = result.status === "created" ? `Stored: ${result.id}` : `Duplicate: ${result.duplicate_id}`;
           return { content: [{ type: "text" as const, text: msg }] };
         },
@@ -262,7 +331,7 @@ const qmdPlugin = definePluginEntry({
         description: "Search memories by natural language",
         parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "number" } }, required: ["query"] },
         execute: async (_id: string, params: any) => {
-          const results = await memoryRecall(_db, { ...params, scope: cfg.scope });
+          const results = await memoryRecall(_db, { ...params, scope: activeScope });
           const text = results.length === 0
             ? "No memories found."
             : results.map((r, i) => `${i + 1}. [${r.category}] ${r.text} (score: ${r.score.toFixed(2)})`).join("\n");
@@ -283,7 +352,7 @@ const qmdPlugin = definePluginEntry({
         description: "Extract memories from conversation text",
         parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
         execute: async (_id: string, params: any) => {
-          const result = await extractAndStore(_db, params.text, cfg.scope);
+          const result = await extractAndStore(_db, params.text, activeScope);
           return { content: [{ type: "text" as const, text: `Extracted ${result.extracted.length}: ${result.stored} stored, ${result.duplicates} duplicates` }] };
         },
       },
@@ -327,18 +396,17 @@ const qmdPlugin = definePluginEntry({
     }
 
     // ========================================================================
-    // Session cleanup — prevent unbounded Map growth (from memory-lancedb-pro)
+    // Session cleanup
     // ========================================================================
 
     api.on("session_end", () => {
-      // Reset session-scoped state
       lastUserMessage = "";
-      currentSessionKey = undefined;
+      activeScope = defaultScope;
       sessionCount = 0;
     });
 
     // ========================================================================
-    // Startup — run decay pass on boot (from memory-lancedb-pro gateway_start)
+    // Startup — run decay pass on boot
     // ========================================================================
 
     api.on("gateway_start", () => {
@@ -355,15 +423,14 @@ const qmdPlugin = definePluginEntry({
     });
 
     // ========================================================================
-    // Tool error tracking — store errors as reflection memories
-    // (from memory-lancedb-pro after_tool_call)
+    // Tool error tracking
     // ========================================================================
 
     api.on("after_tool_call", async (event: { toolName?: string; error?: string }) => {
       if (!event.error || event.error.trim().length === 0) return;
       try {
         const text = `Tool "${event.toolName || 'unknown'}" failed: ${event.error.slice(0, 200)}`;
-        await memoryStore(_db, { text, category: "reflection" as any, scope: cfg.scope, importance: 0.3 });
+        await memoryStore(_db, { text, category: "reflection" as any, scope: activeScope, importance: 0.3 });
       } catch {
         // Don't let error tracking break the flow
       }

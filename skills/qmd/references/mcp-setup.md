@@ -1,9 +1,9 @@
-# QMD MCP Server Setup
+# QMD Setup Reference
 
 ## Install
 
 ```bash
-npm install -g @tanarchy/qmd
+npm install -g @tanarchy/qmd@dev
 qmd collection add ~/path/to/markdown --name myknowledge
 qmd embed
 ```
@@ -28,7 +28,13 @@ qmd embed
 }
 ```
 
-**OpenClaw** (`~/.openclaw/openclaw.json`):
+**OpenClaw Plugin** (recommended for OpenClaw users — see SKILL.md for full setup):
+```bash
+openclaw plugins install @tanarchy/qmd@dev
+# Then add to plugins.allow + plugins.entries in openclaw.json
+```
+
+**OpenClaw MCP** (alternative — MCP sidecar, no plugin hooks):
 ```json
 {
   "mcp": {
@@ -49,9 +55,11 @@ qmd mcp stop                # Stop daemon
 
 ## Tools
 
-### structured_search
+### Document Search
 
-Search with pre-expanded queries.
+#### query
+
+Search with auto-expansion and reranking.
 
 ```json
 {
@@ -61,8 +69,8 @@ Search with pre-expanded queries.
     { "type": "hyde", "query": "hypothetical answer passage..." }
   ],
   "limit": 10,
-  "collection": "optional",
-  "minScore": 0.0
+  "collections": ["optional"],
+  "intent": "disambiguation hint"
 }
 ```
 
@@ -72,7 +80,7 @@ Search with pre-expanded queries.
 | `vec` | Vector | Question |
 | `hyde` | Vector | Answer passage (50-100 words) |
 
-### get
+#### get
 
 Retrieve document by path or `#docid`.
 
@@ -82,7 +90,7 @@ Retrieve document by path or `#docid`.
 | `full` | bool? | Return full content |
 | `lineNumbers` | bool? | Add line numbers |
 
-### multi_get
+#### multi_get
 
 Retrieve multiple documents.
 
@@ -91,12 +99,98 @@ Retrieve multiple documents.
 | `pattern` | string | Glob or comma-separated list |
 | `maxBytes` | number? | Skip large files (default 10KB) |
 
-### status
+#### status
 
 Index health and collections. No params.
+
+#### briefing
+
+Agent wake-up context: collections, search tips, contexts. No params.
+
+#### manage
+
+Admin operations: `embed`, `update`, `cleanup`, `sync`, `decay`.
+
+### Memory
+
+#### memory_store
+
+Store a memory with auto-dedup and auto-classification.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `text` | string | Memory text (required) |
+| `category` | string? | preference/decision/fact/entity/reflection |
+| `importance` | number? | 0.0-1.0 |
+| `scope` | string? | Namespace (default: "global") |
+
+#### memory_recall
+
+Search memories by natural language.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `query` | string | Search query (required) |
+| `limit` | number? | Max results (default: 10) |
+| `scope` | string? | Namespace |
+
+#### memory_forget
+
+Delete a memory by ID.
+
+#### memory_update
+
+Update text, importance, or category of an existing memory.
+
+#### memory_extract
+
+Extract memories from conversation text (LLM or heuristic).
+
+#### memory_stats
+
+Memory count by tier (peripheral/working/core), category, and scope.
+
+### Knowledge Graph
+
+#### knowledge_store
+
+Store a temporal fact as subject-predicate-object triple. Auto-invalidates conflicting prior facts.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `subject` | string | Entity (required) |
+| `predicate` | string | Relationship (required) |
+| `object` | string | Value (required) |
+
+#### knowledge_query
+
+Query facts, optionally at a point in time.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `subject` | string? | Filter by entity |
+| `predicate` | string? | Filter by relationship |
+| `as_of` | string? | ISO date for point-in-time query |
+
+#### knowledge_invalidate
+
+Mark a fact as no longer valid (sets valid_until to now).
+
+#### knowledge_entities
+
+List all known entities in the knowledge graph.
+
+#### knowledge_timeline
+
+All facts about a specific entity, sorted by time.
+
+#### knowledge_stats
+
+Entity count, fact count, expired count.
 
 ## Troubleshooting
 
 - **Not starting**: `which qmd`, `qmd mcp` manually
 - **No results**: `qmd collection list`, `qmd embed`
 - **Slow first search**: Normal, models loading (~3GB)
+- **API errors**: `node setup/scripts/selfcheck.mjs`

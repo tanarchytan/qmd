@@ -1,21 +1,169 @@
 ---
 name: qmd
-description: Search + memory + knowledge graph for AI agents. Use for searching docs, storing memories, tracking knowledge, and recalling past decisions.
+description: Search + memory + knowledge graph for AI agents. BM25, vector, RRF fusion, LLM reranking, Weibull decay, temporal knowledge.
 license: MIT
-compatibility: Requires qmd CLI or MCP server. Install via `npm install -g @tanarchy/qmd@dev`.
+compatibility: Node.js >=22. Works standalone (CLI/MCP) or as OpenClaw plugin.
 metadata:
   author: tanarchy
   version: "2.1.0-dev"
-allowed-tools: Bash(qmd:*), mcp__qmd__*
 ---
 
-# QMD - Quick Markdown Search
-
-Local search engine for markdown content.
+# QMD — Search + Memory + Knowledge Graph
 
 ## Status
 
-!`qmd status 2>/dev/null || echo "Not installed: npm install -g @tanarchy/qmd"`
+!`qmd status 2>/dev/null || echo "Not installed: npm install -g @tanarchy/qmd@dev"`
+
+## Install
+
+### Quick Setup (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tanarchytan/qmd/dev/setup/setup-qmd.sh | bash
+```
+
+Detects your environment, picks a provider, writes config, and verifies. Works for both OpenClaw and standalone.
+
+### As OpenClaw Plugin
+
+**Step 1** — Install the plugin:
+```bash
+openclaw plugins install @tanarchy/qmd@dev
+```
+
+**Step 2** — Allow the plugin in `~/.openclaw/openclaw.json`:
+```json
+{
+  "plugins": {
+    "allow": ["tanarchy-qmd"]
+  }
+}
+```
+
+**Step 3** — Enable with config:
+```json
+{
+  "plugins": {
+    "entries": {
+      "tanarchy-qmd": {
+        "enabled": true,
+        "config": {
+          "autoRecall": true,
+          "autoCapture": true,
+          "embed": {
+            "provider": "zeroentropy",
+            "apiKey": "${ZEROENTROPY_API_KEY}",
+            "model": "zembed-1"
+          },
+          "rerank": {
+            "provider": "zeroentropy",
+            "apiKey": "${ZEROENTROPY_API_KEY}",
+            "model": "zerank-2"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**Step 4** — Restart:
+```bash
+openclaw gateway restart
+```
+
+### As MCP Server
+
+**Claude Code** (`~/.claude/settings.json`):
+```json
+{
+  "mcpServers": {
+    "qmd": { "command": "qmd", "args": ["mcp"] }
+  }
+}
+```
+
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "qmd": { "command": "qmd", "args": ["mcp"] }
+  }
+}
+```
+
+### As CLI
+
+```bash
+npm install -g @tanarchy/qmd@dev
+```
+
+## Configuration
+
+### OpenClaw Plugin Config
+
+All provider config lives in `openclaw.json` under `plugins.entries.tanarchy-qmd.config`:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `autoRecall` | boolean | `true` | Inject relevant memories before each turn |
+| `autoCapture` | boolean | `true` | Extract memories after each turn |
+| `topK` | number | `5` | Max memories to recall |
+| `scope` | string | `"global"` | Memory scope (auto-detects agent ID) |
+| `local` | boolean | `false` | Enable local GGUF models (requires cmake/GPU) |
+| `embed` | object | — | Embedding provider config |
+| `rerank` | object | — | Reranking provider config |
+| `queryExpansion` | object | — | Query expansion provider config |
+
+Each provider object: `{ "provider", "apiKey", "url", "model", "dimensions" }`
+
+### Provider Examples
+
+**ZeroEntropy (embed + rerank):**
+```json
+{
+  "embed": { "provider": "zeroentropy", "apiKey": "ze-...", "model": "zembed-1" },
+  "rerank": { "provider": "zeroentropy", "apiKey": "ze-...", "model": "zerank-2" }
+}
+```
+
+**SiliconFlow (free tier, all 3 operations):**
+```json
+{
+  "embed": { "provider": "siliconflow", "apiKey": "sk-...", "model": "Qwen/Qwen3-Embedding-8B" },
+  "rerank": { "provider": "siliconflow", "apiKey": "sk-...", "model": "BAAI/bge-reranker-v2-m3", "mode": "rerank" },
+  "queryExpansion": { "provider": "siliconflow", "apiKey": "sk-...", "model": "zai-org/GLM-4.5-Air" }
+}
+```
+
+**Nebius embed + ZeroEntropy rerank (best quality):**
+```json
+{
+  "embed": { "provider": "api", "apiKey": "neb-...", "url": "https://api.studio.nebius.ai/v1", "model": "Qwen3-Embedding-8B" },
+  "rerank": { "provider": "zeroentropy", "apiKey": "ze-...", "model": "zerank-2" },
+  "queryExpansion": { "provider": "api", "apiKey": "neb-...", "url": "https://api.studio.nebius.ai/v1", "model": "meta-llama/Meta-Llama-3.1-70B-Instruct" }
+}
+```
+
+### Standalone Config (CLI / MCP)
+
+Set env vars in `~/.config/qmd/.env`:
+```bash
+QMD_LOCAL=no
+QMD_EMBED_PROVIDER=zeroentropy
+QMD_EMBED_API_KEY=ze-your-key
+QMD_EMBED_MODEL=zembed-1
+# QMD_EMBED_DIMENSIONS=        # Optional, auto-detected
+QMD_RERANK_PROVIDER=zeroentropy
+QMD_RERANK_API_KEY=ze-your-key
+QMD_RERANK_MODEL=zerank-2
+# QMD_RERANK_MODE=rerank       # rerank (dedicated API) or llm (chat model)
+# QMD_QUERY_EXPANSION_PROVIDER=siliconflow
+# QMD_QUERY_EXPANSION_API_KEY=sk-your-key
+# QMD_QUERY_EXPANSION_MODEL=zai-org/GLM-4.5-Air
+```
+
+See `.env.example` in the package for all options.
 
 ## MCP: `query`
 
@@ -58,7 +206,7 @@ Local search engine for markdown content.
 **expand (auto-expand)**
 - Use a single-line query (implicit) or `expand: question` on its own line
 - Lets the local LLM generate lex/vec/hyde variations
-- Do not mix `expand:` with other typed lines — it's either a standalone expand query or a full query document
+- Do not mix `expand:` with other typed lines
 
 ### Intent (Disambiguation)
 
@@ -73,8 +221,6 @@ When a query term is ambiguous, add `intent` to steer results:
 }
 ```
 
-Intent affects expansion, reranking, chunk selection, and snippet extraction. It does not search on its own — it's a steering signal that disambiguates queries like "performance" (web-perf vs team health vs fitness).
-
 ### Combining Types
 
 | Goal | Approach |
@@ -87,26 +233,9 @@ Intent affects expansion, reranking, chunk selection, and snippet extraction. It
 
 First query gets 2x weight in fusion — put your best guess first.
 
-### Lex Query Syntax
-
-| Syntax | Meaning | Example |
-|--------|---------|---------|
-| `term` | Prefix match | `perf` matches "performance" |
-| `"phrase"` | Exact phrase | `"rate limiter"` |
-| `-term` | Exclude | `performance -sports` |
-
-Note: `-term` only works in lex queries, not vec/hyde.
-
-### Collection Filtering
-
-```json
-{ "collections": ["docs"] }              // Single
-{ "collections": ["docs", "notes"] }     // Multiple (OR)
-```
-
-Omit to search all collections.
-
 ## Other MCP Tools
+
+### Document Tools
 
 | Tool | Use |
 |------|-----|
@@ -115,54 +244,69 @@ Omit to search all collections.
 | `status` | Collections and health |
 | `briefing` | Agent wake-up: collections, contexts, search tips |
 | `manage` | Admin: `embed`, `update`, `cleanup`, `sync`, `decay` |
+
+### Memory Tools
+
+| Tool | Use |
+|------|-----|
 | `memory_store` | Store a memory (auto-dedup, auto-classify) |
 | `memory_recall` | Search memories (hybrid: FTS + vector + decay) |
 | `memory_forget` | Delete a memory |
 | `memory_update` | Update text/importance/category |
 | `memory_extract` | Extract memories from conversation text |
 | `memory_stats` | Memory count by tier/category/scope |
+
+### Knowledge Graph Tools
+
+| Tool | Use |
+|------|-----|
 | `knowledge_store` | Store a temporal fact (auto-invalidates conflicts) |
 | `knowledge_query` | Query facts (optionally at a point in time) |
 | `knowledge_invalidate` | Mark a fact as no longer valid |
 | `knowledge_entities` | List all known entities |
+| `knowledge_timeline` | All facts about entity, sorted by time |
+| `knowledge_stats` | Entity count, fact count, expired count |
 
 ## CLI
 
 ```bash
 qmd query "question"              # Auto-expand + rerank
 qmd query $'lex: X\nvec: Y'       # Structured
-qmd query $'expand: question'     # Explicit expand
-qmd query --json --explain "q"    # Show score traces (RRF + rerank blend)
+qmd query --json --explain "q"    # Show score traces
 qmd search "keywords"             # BM25 only (no LLM)
 qmd get "#abc123"                 # By docid
-qmd multi-get "journals/2026-*.md" -l 40  # Batch pull snippets by glob
-qmd multi-get notes/foo.md,notes/bar.md   # Comma-separated list, preserves order
-```
-
-## HTTP API
-
-```bash
-curl -X POST http://localhost:8181/query \
-  -H "Content-Type: application/json" \
-  -d '{"searches": [{"type": "lex", "query": "test"}]}'
+qmd multi-get "journals/2026-*.md" -l 40  # Batch by glob
+qmd memory store "I prefer TypeScript"    # Store (auto-classify)
+qmd memory recall "what language"         # Search memories
+qmd memory extract "conversation text"    # Extract from conversation
+qmd memory stats                          # Stats by tier/category
+qmd memory decay                          # Run decay pass
+qmd memory import conversations.json      # Import conversations
+qmd memory export memories.json           # Export all memories
 ```
 
 ## Setup
 
 ```bash
-npm install -g @tanarchy/qmd@dev
 qmd collection add ~/notes --name notes
 qmd embed
 ```
 
-## Memory
+## Verification
 
 ```bash
-qmd memory store "I prefer TypeScript for backend"    # Store (auto-classify)
-qmd memory recall "what language do I prefer"          # Search memories
-qmd memory extract "conversation text here"            # Extract from conversation
-qmd memory stats                                       # Stats by tier/category/scope
-qmd memory decay                                       # Run decay pass
-qmd memory import conversations.json                   # Import conversations
-qmd memory export memories.json                        # Export all memories
+qmd status                                # Check index health
+qmd memory store "test" && qmd memory recall "test"  # Test memory
+openclaw plugins doctor                   # Check plugin (OpenClaw)
+node setup/scripts/selfcheck.mjs          # Probe endpoints
+node setup/scripts/config-validate.mjs    # Validate config
 ```
+
+## Troubleshooting
+
+- **Plugin not loading**: `openclaw plugins doctor`, then `rm -rf /tmp/jiti/` and restart gateway
+- **No embeddings**: `qmd embed -f` to force re-embed
+- **Dimension mismatch** after provider change: `qmd embed -f`
+- **API key issues**: `node setup/scripts/selfcheck.mjs` to probe endpoints
+- **Config issues**: `node setup/scripts/config-validate.mjs`
+- **Not starting**: check `which qmd`, try `qmd mcp` manually

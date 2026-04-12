@@ -12,8 +12,6 @@ import { getDefaultLlamaCpp } from "../llm.js";
 import { isLocalEnabled } from "../remote-config.js";
 import { getDecayScore } from "./decay.js";
 import { classifyMemory } from "./patterns.js";
-// ZE collections removed — no meaningful improvement on full 199Q benchmark (+0.5% R@10, -0.6% F1)
-// import { zeMemoryStore, zeMemorySearch, zeMemoryDelete, zeIsAvailable } from "./ze-collections.js";
 
 // =============================================================================
 // Embedding LRU cache — avoids redundant API calls for repeated text
@@ -37,20 +35,28 @@ function setCachedEmbedding(text: string, embedding: number[]): void {
   }
   embedCache.set(key, embedding);
 }
-export { runDecayPass, type DecayResult } from "./decay.js";
-import { extractAndStore as _extractAndStore, type ExtractionResult } from "./extractor.js";
+export { runDecayPass, runEvictionPass, type DecayResult, type EvictionResult, type EvictionOptions } from "./decay.js";
+import { extractAndStore as _extractAndStore, extractReflections as _extractReflections, type ExtractionResult } from "./extractor.js";
 export type { ExtractionResult } from "./extractor.js";
 
 /** Wrapper that injects memoryStore + knowledgeStore to break circular import */
 export async function extractAndStore(db: Database, text: string, scope?: string): Promise<ExtractionResult> {
   return _extractAndStore(db, text, scope, memoryStore, knowledgeStore);
 }
-export { classifyMemory, extractPreferences, hasMemorySignal } from "./patterns.js";
-export { knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeAbout, knowledgeTimeline, knowledgeStats, toSlug } from "./knowledge.js";
-export { importConversation, exportMemories, importMemories } from "./import.js";
-// ZE collections exports kept for optional use but not called by default
-// export { zeMemoryStore, zeMemorySearch, zeMemoryDelete, zeIsAvailable, zeDatacenter } from "./ze-collections.js";
 
+/** Reflection extraction wrapper — see extractor.extractReflections */
+export async function extractReflections(db: Database, text: string, scope?: string) {
+  return _extractReflections(db, text, scope, memoryStore);
+}
+export { classifyMemory, extractPreferences, hasMemorySignal } from "./patterns.js";
+import { knowledgeStore, consolidateEntityFacts as _consolidateEntityFacts } from "./knowledge.js";
+export { knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeAbout, knowledgeTimeline, knowledgeStats, toSlug } from "./knowledge.js";
+
+/** Per-entity fact consolidation — wraps memoryStore to break circular import. */
+export async function consolidateEntityFacts(db: Database, options?: { scope?: string; minFacts?: number }) {
+  return _consolidateEntityFacts(db, memoryStore, options);
+}
+export { importConversation, exportMemories, importMemories } from "./import.js";
 // =============================================================================
 // Types
 // =============================================================================
@@ -418,8 +424,6 @@ export async function memoryStore(
   // Changelog
   db.prepare(`INSERT INTO memory_history (memory_id, action, new_value, timestamp) VALUES (?, 'ADD', ?, ?)`).run(id, text, now);
 
-  // ZE collections dual-write removed (no meaningful benchmark improvement)
-
   return { id, status: "created" };
 }
 
@@ -598,8 +602,39 @@ export async function memoryRecall(
     }
   }
 
-  // 5. Sort by score, take candidates for reranking
-  let sorted = [...results.values()].sort((a, b) => b.score - a.score);
+  // 4c. OPTIONAL: Importance log-modulation (Tinkerclaw Instant Recall, α=0.15)
+  // Enabled via QMD_RECALL_LOG_MOD=on. Off by default (v14 baseline).
+  if (process.env.QMD_RECALL_LOG_MOD === "on") {
+    for (const result of results.values()) {
+      result.score *= 1 + 0.15 * Math.log(1 + result.importance * 10);
+    }
+  }
+
+  // 5. Build sorted candidate pool
+  // Default: single ranking (v10 baseline)
+  // QMD_RECALL_DUAL_PASS=on: split into atomic vs chunk tiers, merge top from each
+  type ResultEntry = ReturnType<typeof results.values> extends IterableIterator<infer T> ? T : never;
+  let sorted: ResultEntry[];
+  if (process.env.QMD_RECALL_DUAL_PASS === "on") {
+    const ATOMIC_MAX_LEN = 200;
+    const ATOMIC_MIN_IMPORTANCE = 0.65;
+    const all = [...results.values()];
+    const atomic = all.filter(r => r.text.length < ATOMIC_MAX_LEN || r.importance >= ATOMIC_MIN_IMPORTANCE);
+    const chunks = all.filter(r => r.text.length >= ATOMIC_MAX_LEN && r.importance < ATOMIC_MIN_IMPORTANCE);
+    atomic.sort((a, b) => b.score - a.score);
+    chunks.sort((a, b) => b.score - a.score);
+    const candidatePoolSize = limit * 3;
+    const merged = new Map<string, typeof all[number]>();
+    const atomicReserve = Math.ceil(candidatePoolSize / 2);
+    const chunkReserve = candidatePoolSize - atomicReserve;
+    for (let i = 0; i < atomicReserve && i < atomic.length; i++) merged.set(atomic[i]!.id, atomic[i]!);
+    for (let i = 0; i < chunkReserve && i < chunks.length; i++) merged.set(chunks[i]!.id, chunks[i]!);
+    for (let i = atomicReserve; merged.size < candidatePoolSize && i < atomic.length; i++) merged.set(atomic[i]!.id, atomic[i]!);
+    for (let i = chunkReserve; merged.size < candidatePoolSize && i < chunks.length; i++) merged.set(chunks[i]!.id, chunks[i]!);
+    sorted = [...merged.values()].sort((a, b) => b.score - a.score);
+  } else {
+    sorted = [...results.values()].sort((a, b) => b.score - a.score);
+  }
 
   // 5b. Optional: rerank top candidates with LLM/dedicated reranker
   if (options.rerank !== false && sorted.length > 1) {
@@ -627,7 +662,51 @@ export async function memoryRecall(
     }
   }
 
-  sorted = sorted.slice(0, limit);
+  // 5c. OPTIONAL: MMR diversity filter (Tinkerclaw Total Recall, λ configurable)
+  // Enabled via QMD_RECALL_MMR=on. λ via QMD_RECALL_MMR_LAMBDA (default 0.85).
+  // Quality fix #5: use token bigrams instead of single-token Jaccard so short
+  // atomic facts don't false-positive on stop-equivalent overlap.
+  if (process.env.QMD_RECALL_MMR === "on" && sorted.length > limit) {
+    const _lam = parseFloat(process.env.QMD_RECALL_MMR_LAMBDA || "0.85");
+    const lambda = Number.isFinite(_lam) ? Math.max(0, Math.min(1, _lam)) : 0.85;
+    const candidates = sorted.slice(0, Math.min(sorted.length, limit * 2));
+    // Build bigram sets — captures two-word phrases, less prone to false matches
+    const bigramSet = (text: string): Set<string> => {
+      const tokens = (text.toLowerCase().match(/\w+/g) || []);
+      const grams = new Set<string>();
+      for (let i = 0; i < tokens.length - 1; i++) grams.add(tokens[i] + " " + tokens[i + 1]);
+      // Fallback for very short texts: also include unigrams
+      if (grams.size < 3) for (const t of tokens) grams.add(t);
+      return grams;
+    };
+    const grams = candidates.map(r => bigramSet(r.text));
+    const maxScore = candidates[0]?.score || 1;
+    const selectedIdx: number[] = [0];
+    while (selectedIdx.length < limit && selectedIdx.length < candidates.length) {
+      let bestIdx = -1;
+      let bestMmr = -Infinity;
+      for (let i = 0; i < candidates.length; i++) {
+        if (selectedIdx.includes(i)) continue;
+        let maxSim = 0;
+        for (const j of selectedIdx) {
+          const a = grams[i]!; const b = grams[j]!;
+          let inter = 0;
+          for (const t of a) if (b.has(t)) inter++;
+          const union = a.size + b.size - inter;
+          const sim = union === 0 ? 0 : inter / union;
+          if (sim > maxSim) maxSim = sim;
+        }
+        const normScore = (candidates[i]!.score) / maxScore;
+        const mmr = lambda * normScore - (1 - lambda) * maxSim;
+        if (mmr > bestMmr) { bestMmr = mmr; bestIdx = i; }
+      }
+      if (bestIdx >= 0) selectedIdx.push(bestIdx);
+      else break;
+    }
+    sorted = selectedIdx.map(i => candidates[i]!);
+  } else {
+    sorted = sorted.slice(0, limit);
+  }
 
   // Touch access counts for recalled memories (batched in transaction for performance)
   const now = Date.now();
@@ -652,8 +731,6 @@ export function memoryForget(
   db.prepare(`INSERT INTO memory_history (memory_id, action, old_value, timestamp) VALUES (?, 'DELETE', ?, ?)`).run(id, mem.text, now);
   db.prepare(`DELETE FROM memories WHERE id = ?`).run(id);
   try { db.prepare(`DELETE FROM memories_vec WHERE id = ?`).run(id); } catch {}
-
-  // ZE collection delete removed
 
   return { deleted: true };
 }

@@ -203,3 +203,103 @@ export function knowledgeStats(db: Database): {
   const activeFacts = (db.prepare(`SELECT COUNT(*) as c FROM knowledge WHERE valid_until IS NULL`).get() as { c: number }).c;
   return { entities, facts, activeFacts, expiredFacts: facts - activeFacts };
 }
+
+// =============================================================================
+// Synthesis / consolidation (cat 11 — Sleep Consolidation level promotion + Zep community)
+// =============================================================================
+
+type MemoryCategory = "preference" | "fact" | "decision" | "entity" | "reflection" | "other";
+type SynthesisStoreFn = (db: Database, opts: {
+  text: string;
+  category?: MemoryCategory;
+  scope?: string;
+  importance?: number;
+}) => Promise<{ id: string; status: "created" | "duplicate"; duplicate_id?: string }>;
+
+/**
+ * Per-entity fact consolidation (v13: temporal-anchored, predicate-grouped).
+ *
+ * Generates two types of synthesis memory per entity:
+ *  1. PROFILE — all facts joined as a self-contained dossier ("[entity-summary:slug] ...")
+ *  2. TIMELINE — date-anchored facts in chronological order ("[entity-timeline:slug] ...")
+ *
+ * Both stored as high-importance entity-category memories so dual-pass retrieval
+ * surfaces them for multi-hop ("what does X do") and temporal ("when did X") queries.
+ *
+ * From: Sleep Consolidation (level promotion), Zep (community subgraph),
+ * GraphRAG (community summarization), Tinkerclaw Total Recall (timeline preservation).
+ */
+export async function consolidateEntityFacts(
+  db: Database,
+  storeFn: SynthesisStoreFn,
+  options: { scope?: string; minFacts?: number } = {}
+): Promise<{ entities: number; profiles: number; timelines: number; skipped: number }> {
+  const minFacts = options.minFacts ?? 2;
+  const entities = knowledgeEntities(db);
+  let profiles = 0;
+  let timelines = 0;
+  let skipped = 0;
+
+  for (const entity of entities) {
+    const facts = knowledgeAbout(db, entity);
+    if (facts.length < minFacts) { skipped++; continue; }
+
+    const display = entity.replace(/_/g, " ");
+
+    // 1. PROFILE — group facts by predicate for readability
+    // ("places: rome, paris. occupation: dancer. likes: pizza, music.")
+    const byPredicate = new Map<string, string[]>();
+    for (const f of facts) {
+      const pred = f.predicate.replace(/_/g, " ");
+      if (!byPredicate.has(pred)) byPredicate.set(pred, []);
+      byPredicate.get(pred)!.push(f.object);
+    }
+    const profileLines = [...byPredicate.entries()].map(
+      ([pred, objs]) => `${pred}: ${[...new Set(objs)].join(", ")}`
+    );
+    const profileText = `[entity-summary:${entity}] ${display}. ${profileLines.join(". ")}.`;
+
+    try {
+      const r = await storeFn(db, {
+        text: profileText,
+        category: "entity",
+        scope: options.scope,
+        importance: 0.85,
+      });
+      if (r.status === "created") profiles++;
+    } catch { /* skip */ }
+
+    // 2. TIMELINE — only facts with valid_from, sorted chronologically
+    const dated = facts
+      .filter(f => f.valid_from != null)
+      .sort((a, b) => (a.valid_from! - b.valid_from!));
+
+    if (dated.length >= 2) {
+      // Natural date format matches LoCoMo answer tokens
+      // (ISO format `[2023-05-08]` cost ~3pp R@5 due to tokenizer mismatch)
+      const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+      const fmtDate = (ms: number) => {
+        const d = new Date(ms);
+        return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}, ${d.getUTCFullYear()}`;
+      };
+      const timelineLines = dated.map(f => {
+        const date = fmtDate(f.valid_from!);
+        const pred = f.predicate.replace(/_/g, " ");
+        return `[${date}] ${display} ${pred} ${f.object}`;
+      });
+      const timelineText = `[entity-timeline:${entity}] ${timelineLines.join(". ")}.`;
+
+      try {
+        const r = await storeFn(db, {
+          text: timelineText,
+          category: "entity",
+          scope: options.scope,
+          importance: 0.85,
+        });
+        if (r.status === "created") timelines++;
+      } catch { /* skip */ }
+    }
+  }
+
+  return { entities: entities.length, profiles, timelines, skipped };
+}

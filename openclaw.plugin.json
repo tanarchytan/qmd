@@ -1,8 +1,9 @@
 {
   "id": "tanarchy-qmd",
   "name": "Tanarchy QMD",
-  "description": "QMD memory + knowledge graph plugin for OpenClaw",
-  "version": "2.1.0-dev.20",
+  "description": "Search + memory + knowledge graph for AI agents. BM25, vector, RRF fusion, LLM reranking, Weibull decay, temporal knowledge.",
+  "version": "2.1.0-dev.23",
+  "skills": ["skills/qmd"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -26,6 +27,40 @@
       "dbPath": {
         "type": "string",
         "description": "Override path to the QMD SQLite database"
+      },
+      "local": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable local node-llama-cpp (requires cmake/GPU). Default false for plugin."
+      },
+      "embed": {
+        "type": "object",
+        "properties": {
+          "provider": { "type": "string", "description": "api | url | siliconflow | openai | zeroentropy" },
+          "apiKey": { "type": "string" },
+          "url": { "type": "string" },
+          "model": { "type": "string" },
+          "dimensions": { "type": "number" }
+        }
+      },
+      "rerank": {
+        "type": "object",
+        "properties": {
+          "provider": { "type": "string", "description": "api | url | siliconflow | openai | zeroentropy | dashscope | gemini" },
+          "apiKey": { "type": "string" },
+          "url": { "type": "string" },
+          "model": { "type": "string" },
+          "mode": { "type": "string", "description": "rerank | llm" }
+        }
+      },
+      "queryExpansion": {
+        "type": "object",
+        "properties": {
+          "provider": { "type": "string", "description": "api | url | siliconflow | openai | gemini" },
+          "apiKey": { "type": "string" },
+          "url": { "type": "string" },
+          "model": { "type": "string" }
+        }
       }
     }
   }

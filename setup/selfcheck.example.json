@@ -1,0 +1,17 @@
+{
+  "embed": {
+    "provider": "zeroentropy",
+    "apiKey": "YOUR_ZEROENTROPY_API_KEY",
+    "model": "zembed-1"
+  },
+  "rerank": {
+    "provider": "zeroentropy",
+    "apiKey": "YOUR_ZEROENTROPY_API_KEY",
+    "model": "zerank-2"
+  },
+  "queryExpansion": {
+    "provider": "siliconflow",
+    "apiKey": "YOUR_SILICONFLOW_API_KEY",
+    "model": "zai-org/GLM-4.5-Air"
+  }
+}

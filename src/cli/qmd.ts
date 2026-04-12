@@ -1772,38 +1772,6 @@ async function vectorIndex(
   closeDb();
 }
 
-// Sanitize a term for FTS5: remove punctuation except apostrophes
-function sanitizeFTS5Term(term: string): string {
-  // Remove all non-alphanumeric except apostrophes (for contractions like "don't")
-  return term.replace(/[^\w']/g, '').trim();
-}
-
-// Build FTS5 query: phrase-aware with fallback to individual terms
-function buildFTS5Query(query: string): string {
-  // Sanitize the full query for phrase matching
-  const sanitizedQuery = query.replace(/[^\w\s']/g, '').trim();
-
-  const terms = query
-    .split(/\s+/)
-    .map(sanitizeFTS5Term)
-    .filter(term => term.length >= 2); // Skip single chars and empty
-
-  if (terms.length === 0) return "";
-  if (terms.length === 1) return `"${terms[0]!.replace(/"/g, '""')}"`;
-
-  // Strategy: exact phrase OR proximity match OR individual terms
-  // Exact phrase matches rank highest, then close proximity, then any term
-  const phrase = `"${sanitizedQuery.replace(/"/g, '""')}"`;
-  const quotedTerms = terms.map(t => `"${t.replace(/"/g, '""')}"`);
-
-  // FTS5 NEAR syntax: NEAR(term1 term2, distance)
-  const nearPhrase = `NEAR(${quotedTerms.join(' ')}, 10)`;
-  const orTerms = quotedTerms.join(' OR ');
-
-  // Exact phrase > proximity > any term
-  return `(${phrase}) OR (${nearPhrase}) OR (${orTerms})`;
-}
-
 // Normalize BM25 score to 0-1 range using sigmoid
 function normalizeBM25(score: number): number {
   // BM25 scores are negative in SQLite (lower = better)

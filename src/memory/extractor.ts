@@ -51,6 +51,20 @@ function splitIntoChunks(text: string): string[] {
 // Importance heuristic
 // =============================================================================
 
+/**
+ * Importance scale (quality fix #9):
+ *   0.4   — synthetic preference bridge entries (low; auxiliary signal)
+ *   0.5   — heuristic fallback / unknown category
+ *   0.6   — reflections, preferences (medium-low; subjective)
+ *   0.7   — facts, entities (default for raw extracted facts)
+ *   0.75  — entity facts (slight bump for strong typing)  [used by knowledge.ts synthesis]
+ *   0.8   — decisions (medium-high; explicit choices)
+ *   0.85  — entity profile/timeline syntheses             [knowledge.ts:consolidateEntityFacts]
+ *   +0.1  — long texts (>200 chars get bonus, capped at 1.0)
+ *
+ * Decay scoring uses importance × frequency × recency. Higher importance →
+ * slower decay → memory survives in working/core tier longer.
+ */
 function estimateImportance(text: string, category: PatternCategory): number {
   let importance = 0.5;
 
@@ -91,30 +105,34 @@ function extractHeuristic(text: string): ExtractedMemory[] {
 // LLM extraction — Mem0-style atomic facts + entity triples
 // =============================================================================
 
-// Mem0-inspired prompt: extract clean atomic facts + entity relationships
-const EXTRACTION_PROMPT = `You are a Personal Information Organizer. Extract distinct facts from this conversation.
+// Mem0-inspired prompt: extract atomic facts + entity triples + reflections
+// (cat 18 fix: combined reflection extraction into one LLM call to halve API cost)
+const EXTRACTION_PROMPT = `You are a Personal Information Organizer. Extract distinct facts AND cross-event reflections from this conversation.
 
 Rules:
-- Extract ONLY from user/speaker messages, not assistant responses
+- Extract from user/speaker messages
 - Each fact must be self-contained (understandable without context)
 - Include names, dates, places, preferences, relationships, plans
 - For entity facts, also output a triple: subject|predicate|object
+- Reflections must span MULTIPLE events — capture motivations, commonalities, patterns, cause/effect, emotional arcs
 
 Output format (one per line):
 [category] fact text
 [entity] fact text ||| subject|predicate|object
+[reflection] cross-event insight
 
 Categories: preference, fact, decision, entity, reflection
 
-Examples:
-[entity] John is a software engineer ||| john|occupation|software engineer
-[preference] Sarah prefers morning workouts
+Examples (generic):
+[entity] User-A is a software engineer ||| user-a|occupation|software engineer
+[preference] User-B prefers morning workouts
 [fact] The meeting is scheduled for March 15th
-[entity] David moved from Sweden 4 years ago ||| david|moved_from|sweden
-[decision] We decided to use PostgreSQL for the new project
-[entity] Caroline is a transgender woman ||| caroline|identity|transgender woman
-[fact] Melanie has 3 children
-[entity] Melanie signed up for pottery class on July 2nd ||| melanie|signed_up_for|pottery class
+[entity] User-C moved from country-X 4 years ago ||| user-c|moved_from|country-x
+[decision] User-A and User-B decided to use PostgreSQL for the new project
+[entity] User-D has 3 children ||| user-d|num_children|3
+[fact] User-D's kids enjoy outdoor activities
+[reflection] User-A and User-B both started their businesses after losing their jobs
+[reflection] User-C's interest in counseling stems from support received during her own transition
 
 Conversation:
 `;
@@ -133,6 +151,7 @@ async function extractWithLLM(text: string): Promise<ExtractedMemory[]> {
       const match = line.match(/^\[(\w+)\]\s+(.+)/);
       if (!match) continue;
       const cat = match[1]!.toLowerCase() as PatternCategory;
+      // Includes 'reflection' so the same prompt covers both fact extraction and reflection
       if (!["preference", "fact", "decision", "entity", "reflection"].includes(cat)) continue;
 
       let memText = match[2]!.trim();
@@ -237,4 +256,22 @@ export async function extractAndStore(
   }
 
   return { extracted, stored, duplicates, preferences, triples };
+}
+
+// =============================================================================
+// Reflection extraction (cat 18) — DEPRECATED standalone path
+// =============================================================================
+// Reflections are now extracted as part of extractAndStore via the unified
+// EXTRACTION_PROMPT. This function is kept for backwards compatibility and as
+// a no-op so existing call sites still type-check.
+//
+// (cat 18 quality fix #4: combined into one LLM call to halve ingest API cost)
+export async function extractReflections(
+  _db: Database,
+  _text: string,
+  _scope: string | undefined,
+  _storeFn: StoreFn
+): Promise<{ extracted: number; stored: number; duplicates: number }> {
+  // No-op: reflections are extracted by extractAndStore now.
+  return { extracted: 0, stored: 0, duplicates: 0 };
 }

@@ -1,5 +1,2 @@
-export {
-  createStore,
-  getDefaultDbPath,
-  enableProductionMode,
-} from "../store.js";
+export { createStore } from "./factory.js";
+export { getDefaultDbPath, enableProductionMode } from "./path.js";

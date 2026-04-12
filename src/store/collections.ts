@@ -4,4 +4,4 @@ export {
   getAllCollections,
   removeCollection,
   renameCollection,
-} from "../store.js";
+} from "./context.js";
