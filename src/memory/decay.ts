@@ -250,3 +250,60 @@ export function runEvictionPass(db: Database, options: EvictionOptions = {}): Ev
 
   return { evaluated: candidates.length, evicted, preserved: candidates.length - evicted, bytesFreed };
 }
+
+// =============================================================================
+// Scheduled cleanup — the "cleaning lady" hook (roadmap cat 6)
+// =============================================================================
+
+export type CleanupOptions = EvictionOptions & {
+  /**
+   * Minimum number of memories that must exist before eviction runs.
+   * Below this, only the decay pass runs. Default: 1000.
+   */
+  minMemoriesForEviction?: number;
+  /**
+   * Skip the decay pass entirely. Only eviction runs.
+   */
+  skipDecay?: boolean;
+};
+
+export type CleanupResult = {
+  decay: DecayResult | null;
+  eviction: EvictionResult | null;
+  totalMemoriesBefore: number;
+  totalMemoriesAfter: number;
+};
+
+/**
+ * Scheduled cleanup hook. Runs the decay pass (tier promotion + cold-
+ * memory flagging) and — if the database is beyond the configured
+ * threshold — an eviction pass. Safe to call from OpenClaw hooks, a
+ * cron-like scheduler, or a session-end dream-consolidation step.
+ *
+ * Gated by a memory-count threshold so a small database isn't hit with
+ * eviction churn on every call. Tests / ingestion pipelines should
+ * either pass minMemoriesForEviction: 0 (force eviction) or
+ * skipDecay: false (decay-only mode) depending on intent.
+ */
+export function runCleanupPass(
+  db: Database,
+  options: CleanupOptions = {}
+): CleanupResult {
+  const before = (db.prepare(`SELECT COUNT(*) as n FROM memories`).get() as { n: number }).n;
+
+  const decay = options.skipDecay ? null : runDecayPass(db);
+
+  const minForEviction = options.minMemoriesForEviction ?? 1000;
+  const eviction = before >= minForEviction
+    ? runEvictionPass(db, options)
+    : null;
+
+  const after = (db.prepare(`SELECT COUNT(*) as n FROM memories`).get() as { n: number }).n;
+
+  return {
+    decay,
+    eviction,
+    totalMemoriesBefore: before,
+    totalMemoriesAfter: after,
+  };
+}
