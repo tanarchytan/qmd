@@ -170,6 +170,35 @@ export type LLMSessionOptions = {
 };
 
 /**
+ * Abstract LLM interface — implemented by LlamaCpp (local) and RemoteLLM (cloud).
+ */
+export interface LLM {
+  /** Get embeddings for text */
+  embed(text: string, options?: EmbedOptions): Promise<EmbeddingResult | null>;
+
+  /** Generate text completion */
+  generate(prompt: string, options?: GenerateOptions): Promise<GenerateResult | null>;
+
+  /** Check if a model exists/is available */
+  modelExists(model: string): Promise<ModelInfo>;
+
+  /**
+   * Expand a search query into multiple variations for different backends.
+   * Returns a list of Queryable objects.
+   */
+  expandQuery(query: string, options?: { context?: string, includeLexical?: boolean }): Promise<Queryable[]>;
+
+  /**
+   * Rerank documents by relevance to a query.
+   * Returns list of documents with relevance scores (higher = more relevant).
+   */
+  rerank(query: string, documents: RerankDocument[], options?: RerankOptions): Promise<RerankResult>;
+
+  /** Dispose of resources */
+  dispose(): Promise<void>;
+}
+
+/**
  * Session interface for scoped LLM access with lifecycle guarantees
  */
 export interface ILLMSession {

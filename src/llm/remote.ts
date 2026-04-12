@@ -1,0 +1,703 @@
+/**
+ * llm/remote.ts — Remote LLM (cloud-provider) implementation.
+ *
+ * Split out from src/llm.ts. Implements the LLM interface using
+ * cloud providers (OpenAI-compatible, ZeroEntropy-style, SiliconFlow,
+ * Gemini, Nebius) with per-operation configuration: embed, rerank, and
+ * query expansion can each use different providers/models/URLs.
+ *
+ * Zero dependency on LlamaCpp or node-llama-cpp — the plugin/loader paths
+ * that disable local inference still get a fully functional remote LLM.
+ */
+
+import { homedir } from "os";
+import { join } from "path";
+import { existsSync, readFileSync } from "fs";
+
+import type {
+  LLM,
+  EmbedOptions,
+  EmbeddingResult,
+  GenerateOptions,
+  GenerateResult,
+  ModelInfo,
+  Queryable,
+  QueryType,
+  RerankDocument,
+  RerankDocumentResult,
+  RerankOptions,
+  RerankResult,
+} from "./types.js";
+
+// =============================================================================
+// Configuration types
+// =============================================================================
+
+export type OperationProvider = 'api' | 'url' | 'gemini';
+
+export type OperationConfig = {
+  provider: OperationProvider;
+  apiKey: string;
+  url?: string;
+  model?: string;
+};
+
+export type RemoteLLMConfig = {
+  embed?: OperationConfig & { dimensions?: number };
+  rerank?: OperationConfig & { mode?: 'llm' | 'rerank' };
+  queryExpansion?: OperationConfig;
+  /** Optional per-operation timeouts (ms). */
+  timeoutsMs?: {
+    embed?: number;
+    rerank?: number;
+    generate?: number;
+  };
+};
+
+// =============================================================================
+// fetchWithRetry — shared HTTP helper with timeout + backoff + better errors
+// =============================================================================
+
+/**
+ * Remote fetch with:
+ * - Timeout (AbortController)
+ * - Exponential backoff retry with jitter (maxAttempts default: 3)
+ * - Better errors (provider/op + HTTP status + response snippet)
+ * - Keep-alive hint header
+ */
+async function fetchWithRetry(
+  input: string | URL | Request,
+  init: RequestInit | undefined,
+  opts: {
+    provider: string;
+    operation: "embed" | "rerank" | "generate";
+    timeoutMs?: number;
+    maxAttempts?: number;
+    baseDelayMs?: number;
+  },
+): Promise<Response> {
+  const provider = opts.provider;
+  const operation = opts.operation;
+  const maxAttempts = Math.max(1, opts.maxAttempts ?? 3);
+  const baseDelayMs = Math.max(50, opts.baseDelayMs ?? 500);
+
+  const DEFAULT_TIMEOUTS_MS = {
+    embed: 30_000,
+    rerank: 15_000,
+    generate: 60_000,
+  } as const;
+
+  const envTimeoutMs = (() => {
+    const raw = process.env.QMD_TIMEOUT_MS;
+    if (!raw) return undefined;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+    return Math.round(parsed);
+  })();
+
+  const timeoutMs = Math.max(
+    1,
+    Math.round(
+      opts.timeoutMs
+        ?? envTimeoutMs
+        ?? (operation === "embed"
+          ? DEFAULT_TIMEOUTS_MS.embed
+          : operation === "rerank"
+            ? DEFAULT_TIMEOUTS_MS.rerank
+            : DEFAULT_TIMEOUTS_MS.generate)
+    )
+  );
+
+  const url = (() => {
+    if (typeof input === "string") return input;
+    if (input instanceof URL) return input.toString();
+    return (input as Request).url;
+  })();
+
+  const isRetryableStatus = (status: number): boolean =>
+    status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599);
+
+  const getRetryAfterMs = (resp: Response): number | undefined => {
+    const raw = resp.headers.get("retry-after");
+    if (!raw) return undefined;
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+    const date = Date.parse(raw);
+    if (!Number.isFinite(date)) return undefined;
+    const diff = date - Date.now();
+    return diff > 0 ? diff : undefined;
+  };
+
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  const backoffDelayMs = (attempt: number): number => {
+    const exp = Math.pow(2, Math.max(0, attempt - 1));
+    const jitter = Math.random() * baseDelayMs;
+    return Math.min(30_000, Math.round(baseDelayMs * exp + jitter));
+  };
+
+  const readBodySnippet = async (resp: Response, limit = 500): Promise<string> => {
+    try {
+      const text = await resp.text();
+      const trimmed = text.trim();
+      if (!trimmed) return "";
+      return trimmed.length > limit ? `${trimmed.slice(0, limit)}…` : trimmed;
+    } catch {
+      return "";
+    }
+  };
+
+  const initWithKeepAlive: RequestInit | undefined = init
+    ? {
+      ...init,
+      headers: (() => {
+        const headers = new Headers(init.headers);
+        if (!headers.has("connection")) headers.set("Connection", "keep-alive");
+        return headers;
+      })(),
+    }
+    : init;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs);
+
+    if (initWithKeepAlive?.signal) {
+      const parent = initWithKeepAlive.signal;
+      if (parent.aborted) {
+        controller.abort(parent.reason);
+      } else {
+        parent.addEventListener("abort", () => controller.abort(parent.reason), { once: true });
+      }
+    }
+
+    let resp: Response | null = null;
+    let fetchErr: unknown = null;
+
+    try {
+      resp = await fetch(input, { ...(initWithKeepAlive || {}), signal: controller.signal });
+    } catch (err) {
+      fetchErr = err;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (resp) {
+      if (resp.ok) return resp;
+
+      const status = resp.status;
+      const snippet = await readBodySnippet(resp);
+      const hint = status === 401 ? ' — check your QMD_*_API_KEY'
+        : status === 403 ? ' — API key may lack permissions'
+        : status === 404 ? ' — check your QMD_*_URL (endpoint not found)'
+        : status === 422 ? ' — check your QMD_*_MODEL (invalid model name)'
+        : '';
+      const msg = `[${provider}] ${operation} failed (HTTP ${status}${hint}) ${url}${snippet ? ` — ${snippet}` : ""}`;
+
+      const retryable = isRetryableStatus(status);
+      if (!retryable || attempt === maxAttempts) {
+        throw new Error(msg);
+      }
+
+      const retryAfterMs = getRetryAfterMs(resp);
+      const delayMs = Math.max(retryAfterMs ?? 0, backoffDelayMs(attempt));
+      process.stderr.write(`${msg}\nRetrying in ${Math.round(delayMs / 1000)}s (attempt ${attempt + 1}/${maxAttempts})...\n`);
+      await sleep(delayMs);
+      continue;
+    }
+
+    const errMsg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+    const msg = `[${provider}] ${operation} error ${url} — ${errMsg}`;
+
+    if (attempt === maxAttempts) {
+      throw new Error(msg);
+    }
+
+    const delayMs = backoffDelayMs(attempt);
+    process.stderr.write(`${msg}\nRetrying in ${Math.round(delayMs / 1000)}s (attempt ${attempt + 1}/${maxAttempts})...\n`);
+    await sleep(delayMs);
+  }
+
+  throw new Error(`[${provider}] ${operation} failed: exhausted retries`);
+}
+
+// =============================================================================
+// Rerank prompt: loads from ~/.config/qmd/rerank-prompt.txt if it exists,
+// otherwise uses the built-in default.
+// =============================================================================
+
+const DEFAULT_RERANK_PROMPT = `你是记忆检索助手。根据查询从候选文档中筛选并提取相关信息。
+
+查询：{{query}}
+
+候选文档：
+{{documents}}
+
+规则：
+1. 只提取与查询直接相关的文档内容，忽略不相关的
+2. 每篇用 [编号] 开头，后面跟提取的核心内容
+3. 用纯文本输出，不要JSON，不要markdown格式符
+4. 没有相关文档则输出 NONE
+5. 多篇文档内容相同或高度重复时，只提取第一篇，跳过后续重复
+6. 优先选择原始数据源（如日记、笔记、配置记录），跳过「对话/搜索会话记录」类文档——即包含 memory_search、tool_use、tool_result、assistant回复搜索结果 等痕迹的文档，这些是之前搜索产生的二手转述，不是一手信息
+
+示例格式：
+[0] 提取的核心内容
+[3] 另一篇的核心内容`;
+
+function buildRerankPrompt(query: string, docsText: string): string {
+  const configDir = process.env.QMD_CONFIG_DIR || join(homedir(), ".config", "qmd");
+  const promptPath = join(configDir, "rerank-prompt.txt");
+  let template = DEFAULT_RERANK_PROMPT;
+  try {
+    if (existsSync(promptPath)) {
+      template = readFileSync(promptPath, "utf-8");
+    }
+  } catch { /* ignore read errors, use default */ }
+  return template.replace(/\{\{query\}\}/g, query).replace(/\{\{documents\}\}/g, docsText);
+}
+
+// =============================================================================
+// RemoteLLM — LLM implementation backed by cloud providers
+// =============================================================================
+
+export class RemoteLLM implements LLM {
+  private readonly config: RemoteLLMConfig;
+
+  constructor(config: RemoteLLMConfig) {
+    this.config = config;
+  }
+
+  async embed(text: string, options?: EmbedOptions): Promise<EmbeddingResult | null> {
+    if (!this.config.embed) throw new Error("RemoteLLM.embed() requires embed config. Set QMD_EMBED_PROVIDER.");
+    const results = await this._embedTexts([text], options);
+    return results[0] ?? null;
+  }
+
+  async generate(_prompt: string, _options?: GenerateOptions): Promise<GenerateResult | null> {
+    throw new Error("RemoteLLM.generate() is not implemented.");
+  }
+
+  async modelExists(_model: string): Promise<ModelInfo> {
+    throw new Error("RemoteLLM.modelExists() is not implemented.");
+  }
+
+  async expandQuery(
+    query: string,
+    options?: { context?: string; includeLexical?: boolean }
+  ): Promise<Queryable[]> {
+    const cfg = this.config.queryExpansion;
+    if (!cfg) return this.fallbackExpansion(query, options?.includeLexical ?? true);
+
+    const includeLexical = options?.includeLexical ?? true;
+    const provider = cfg.provider;
+    const apiKey = cfg.apiKey;
+    const model = cfg.model;
+    const timeoutMs = this.config.timeoutsMs?.generate;
+
+    const prompt = [
+      "Expand this search query into exactly 3 lines (no more, no less):",
+      "lex: keyword terms (space-separated, not a sentence)",
+      "vec: semantic search query",
+      "hyde: hypothetical document snippet",
+      "",
+      `Query: ${query}`,
+    ].join("\n");
+
+    try {
+      if (provider === 'gemini') {
+        const baseUrl = (cfg.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
+        const geminiModel = model || 'gemini-2.5-flash';
+        const resp = await fetchWithRetry(
+          `${baseUrl}/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent`,
+          {
+            method: "POST",
+            headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { temperature: 0.7, maxOutputTokens: 300 },
+            }),
+          },
+          { provider: "gemini", operation: "generate", timeoutMs },
+        );
+        const data = await resp.json() as {
+          candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+        };
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        return this.parseExpansionResult(text, query, includeLexical);
+      } else {
+        // 'api' or 'url'
+        const url = provider === 'api'
+          ? `${(cfg.url || '').replace(/\/$/, '')}/chat/completions`
+          : cfg.url!;
+        if (!url || url === '/chat/completions') throw new Error("QMD_QUERY_EXPANSION_URL is required. Set the base URL (api) or full endpoint (url) for query expansion.");
+        const body: Record<string, unknown> = {
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 300,
+          temperature: 0.7,
+        };
+        if (model) body.model = model;
+        if (model && model.toLowerCase().includes('qwen3')) body.enable_thinking = false;
+        const resp = await fetchWithRetry(url, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }, { provider, operation: "generate", timeoutMs });
+        const data = await resp.json() as {
+          choices?: Array<{ message?: { content?: string } }>;
+        };
+        const text = data.choices?.[0]?.message?.content || "";
+        return this.parseExpansionResult(text, query, includeLexical);
+      }
+    } catch (err) {
+      const attemptedUrl = cfg.provider === 'gemini'
+        ? `${(cfg.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '')}/v1beta/models/...`
+        : (cfg.provider === 'api' ? `${(cfg.url || '').replace(/\/$/, '')}/chat/completions` : cfg.url || '(no url)');
+      process.stderr.write(`[queryExpansion] ${attemptedUrl} error: ${err}\n`);
+      return this.fallbackExpansion(query, includeLexical);
+    }
+  }
+
+  /**
+   * Send a freeform prompt via the query expansion provider and get text back.
+   * Used for memory extraction, LLM conflict resolution, and other non-search calls.
+   */
+  async chatComplete(prompt: string): Promise<string | null> {
+    const cfg = this.config.queryExpansion;
+    if (!cfg) return null;
+    // Quality fix A+B: pin model + seed for reproducible extraction calls.
+    // gemini-2.5-flash → gemini-2.5-flash-001 (Apr 2026 stable checkpoint)
+    const SEED = 42;
+    // Quality fix C: file-based response cache. Eval scripts set
+    // QMD_LLM_CACHE_PATH to opt in (production code uses an in-memory map).
+    const cachePath = process.env.QMD_LLM_CACHE_PATH;
+    let cacheGet: ((p: string, m: string) => string | null) | null = null;
+    let cacheSet: ((p: string, m: string, v: string) => void) | null = null;
+    if (cachePath && process.env.QMD_LLM_CACHE !== "off") {
+      try {
+        const { openCache } = await import("../../evaluate/_shared/llm-cache.js");
+        const cache = openCache(cachePath);
+        cacheGet = (p, m) => cache.get({ model: m, temperature: 0, seed: SEED, prompt: p });
+        cacheSet = (p, m, v) => cache.set({ model: m, temperature: 0, seed: SEED, prompt: p }, v);
+      } catch { /* cache optional */ }
+    }
+    try {
+      if (cfg.provider === 'gemini') {
+        const baseUrl = (cfg.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
+        const model = cfg.model || 'gemini-2.5-flash';
+        if (cacheGet) {
+          const c = cacheGet(prompt, model);
+          if (c != null) return c;
+        }
+        const resp = await fetchWithRetry(
+          `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+          {
+            method: "POST",
+            headers: { "x-goog-api-key": cfg.apiKey, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { temperature: 0, seed: SEED, maxOutputTokens: 1000 },
+            }),
+          },
+          { provider: "gemini", operation: "generate", timeoutMs: this.config.timeoutsMs?.generate },
+        );
+        const data = await resp.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || null;
+        if (text && cacheSet) cacheSet(prompt, model, text);
+        return text;
+      } else {
+        const url = cfg.provider === 'api'
+          ? `${(cfg.url || '').replace(/\/$/, '')}/chat/completions`
+          : cfg.url!;
+        if (!url || url === '/chat/completions') return null;
+        const body: Record<string, unknown> = {
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 1000,
+          temperature: 0,
+          seed: SEED,
+        };
+        if (cfg.model) body.model = cfg.model;
+        const resp = await fetchWithRetry(url, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }, { provider: cfg.provider, operation: "generate", timeoutMs: this.config.timeoutsMs?.generate });
+        const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }> };
+        return data.choices?.[0]?.message?.content || null;
+      }
+    } catch (err) {
+      process.stderr.write(`[chatComplete] error: ${err}\n`);
+      return null;
+    }
+  }
+
+  async rerank(
+    query: string,
+    documents: RerankDocument[],
+    options: RerankOptions = {}
+  ): Promise<RerankResult> {
+    const cfg = this.config.rerank;
+    if (!cfg) throw new Error("RemoteLLM.rerank() requires rerank config. Set QMD_RERANK_PROVIDER.");
+
+    const provider = cfg.provider;
+    const apiKey = cfg.apiKey;
+    const model = options.model || cfg.model;
+    const timeoutMs = options.timeoutMs ?? this.config.timeoutsMs?.rerank;
+    const mode = cfg.mode ?? (provider === 'url' ? 'rerank' : 'llm');
+
+    if (provider === 'gemini') {
+      return this._rerankWithGemini(query, documents, cfg, model, timeoutMs);
+    }
+
+    if (mode === 'rerank') {
+      const url = provider === 'api'
+        ? `${(cfg.url || '').replace(/\/$/, '')}/rerank`
+        : cfg.url!;
+      if (!url || url === '/rerank') throw new Error("QMD_RERANK_URL is required. Set the base URL (api) or full endpoint (url) for reranking.");
+
+      const resp = await fetchWithRetry(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(model ? { model } : {}),
+          query,
+          documents: documents.map(d => d.text),
+          top_n: Math.max(1, documents.length),
+        }),
+      }, { provider, operation: "rerank", timeoutMs });
+
+      const data = await resp.json() as {
+        results?: Array<{ index: number; relevance_score: number }>;
+      };
+      const results: RerankDocumentResult[] = (data.results || [])
+        .map(item => {
+          const doc = documents[item.index];
+          if (!doc) return null;
+          return { file: doc.file, score: item.relevance_score, index: item.index };
+        })
+        .filter((item): item is RerankDocumentResult => item !== null);
+      return { results, model: model || "rerank" };
+    }
+
+    // LLM chat-based rerank
+    const url = provider === 'api'
+      ? `${(cfg.url || '').replace(/\/$/, '')}/chat/completions`
+      : cfg.url!;
+    if (!url || url === '/chat/completions') throw new Error("QMD_RERANK_URL is required. Set the base URL (api) or full endpoint (url) for LLM-based reranking.");
+
+    const docsText = documents.map((doc, i) => `[${i}] ${doc.text}`).join("\n---\n");
+    const prompt = buildRerankPrompt(query, docsText);
+    const body: Record<string, unknown> = {
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0,
+      max_tokens: 2000,
+    };
+    if (model) body.model = model;
+
+    const resp = await fetchWithRetry(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }, { provider, operation: "rerank", timeoutMs });
+
+    const data = await resp.json() as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const rawText = data.choices?.[0]?.message?.content || "";
+    const parsed = this.parsePlainTextExtracts(rawText, documents.length);
+    if (parsed.length === 0 && rawText.trim() !== "NONE") {
+      process.stderr.write(`[rerank llm] unexpected response format: ${rawText.slice(0, 200)}\n`);
+    }
+    const results: RerankDocumentResult[] = [];
+    for (let rank = 0; rank < parsed.length; rank++) {
+      const item = parsed[rank]!;
+      const doc = documents[item.index];
+      if (!doc) continue;
+      results.push({ file: doc.file, score: 1.0 - rank * 0.05, index: item.index, extract: item.extract || undefined });
+    }
+    return { results, model: model || "llm" };
+
+  }
+
+  async dispose(): Promise<void> {
+    // No-op: RemoteLLM has no local resources to dispose.
+  }
+
+  // =========================================================================
+  // Private helpers
+  // =========================================================================
+
+  async embedBatch(texts: string[]): Promise<(EmbeddingResult | null)[]> {
+    if (texts.length === 0) return [];
+    if (!this.config.embed) throw new Error("RemoteLLM.embedBatch() requires embed config. Set QMD_EMBED_PROVIDER.");
+    return this._embedTexts(texts);
+  }
+
+  private async _embedTexts(texts: string[], options?: EmbedOptions): Promise<(EmbeddingResult | null)[]> {
+    const cfg = this.config.embed!;
+    const provider = cfg.provider;
+    const apiKey = cfg.apiKey;
+    const model = options?.model || cfg.model;
+    const timeoutMs = options?.timeoutMs ?? this.config.timeoutsMs?.embed;
+    // BATCH_SIZE bumped from 32 → 64. ZeroEntropy and OpenAI-compatible
+    // embed APIs accept up to 100-256 per request; 64 halves the round-trips
+    // for large ingests without risking provider limits.
+    const BATCH_SIZE = 64;
+    const allResults: (EmbeddingResult | null)[] = new Array(texts.length).fill(null);
+
+    for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+      const batch = texts.slice(i, i + BATCH_SIZE);
+      const input = batch.length === 1 ? batch[0] : batch;
+
+      try {
+        if (provider === 'api') {
+          const baseUrl = (cfg.url || '').replace(/\/$/, '');
+          if (!baseUrl) throw new Error("QMD_EMBED_URL is required when QMD_EMBED_PROVIDER=api. Set the base URL of your embedding endpoint (e.g. https://api.openai.com/v1).");
+          const resp = await fetchWithRetry(`${baseUrl}/embeddings`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ ...(model ? { model } : {}), input, encoding_format: "float" }),
+          }, { provider: "api", operation: "embed", timeoutMs });
+
+          const data = await resp.json() as {
+            data?: Array<{ embedding: number[]; index?: number }>;
+            model?: string;
+          };
+          const usedModel = data.model || model || "unknown";
+          for (const item of data.data || []) {
+            const idx = (item.index ?? 0) + i;
+            if (idx < allResults.length && item.embedding) {
+              allResults[idx] = { embedding: item.embedding, model: usedModel };
+            }
+          }
+        } else if (provider === 'url') {
+          const url = cfg.url;
+          if (!url) throw new Error("QMD_EMBED_URL is required when QMD_EMBED_PROVIDER=url. Set the full endpoint URL for embedding.");
+          const body: Record<string, unknown> = { input, input_type: "document" };
+          if (model) body.model = model;
+          if (cfg.dimensions) body.dimensions = cfg.dimensions;
+          const resp = await fetchWithRetry(url, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }, { provider: "url", operation: "embed", timeoutMs });
+
+          const data = await resp.json() as {
+            data?: Array<{ embedding: number[]; index?: number }>;
+            results?: Array<{ embedding: number[] | string }>;
+            model?: string;
+          };
+          const usedModel = data.model || model || "unknown";
+          if (data.data && data.data.length > 0) {
+            for (const item of data.data) {
+              const idx = (item.index ?? 0) + i;
+              if (idx < allResults.length && item.embedding) {
+                allResults[idx] = { embedding: item.embedding, model: usedModel };
+              }
+            }
+          } else if (data.results && data.results.length > 0) {
+            for (let j = 0; j < data.results.length; j++) {
+              const r = data.results[j]!;
+              if (typeof r.embedding !== 'string' && r.embedding) {
+                allResults[i + j] = { embedding: r.embedding, model: usedModel };
+              }
+            }
+          }
+        } else {
+          throw new Error(`Unsupported embed provider: ${provider}. Use 'api' or 'url'.`);
+        }
+      } catch (err) {
+        process.stderr.write(`[embed] batch offset ${i} error: ${err}\n`);
+      }
+    }
+    return allResults;
+  }
+
+  private async _rerankWithGemini(
+    query: string,
+    documents: RerankDocument[],
+    cfg: OperationConfig,
+    model: string | undefined,
+    timeoutMs: number | undefined,
+  ): Promise<RerankResult> {
+    const baseUrl = (cfg.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
+    const geminiModel = model || 'gemini-2.5-flash';
+    const docsText = documents.map((doc, i) => `[${i}] ${doc.text}`).join("\n---\n");
+    const prompt = buildRerankPrompt(query, docsText);
+
+    const resp = await fetchWithRetry(
+      `${baseUrl}/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent`,
+      {
+        method: "POST",
+        headers: { "x-goog-api-key": cfg.apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0, thinkingConfig: { thinkingBudget: 0 } },
+        }),
+      },
+      { provider: "gemini", operation: "rerank", timeoutMs },
+    );
+
+    const data = await resp.json() as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const parsed = this.parsePlainTextExtracts(rawText, documents.length);
+    if (parsed.length === 0 && rawText.trim() !== "NONE") {
+      process.stderr.write(`Gemini rerank: unexpected response format: ${rawText.slice(0, 200)}\n`);
+    }
+    const results: RerankDocumentResult[] = [];
+    for (let rank = 0; rank < parsed.length; rank++) {
+      const item = parsed[rank]!;
+      const doc = documents[item.index];
+      if (!doc) continue;
+      results.push({ file: doc.file, score: 1.0 - rank * 0.05, index: item.index, extract: item.extract || undefined });
+    }
+    return { results, model: geminiModel };
+  }
+
+  private parseExpansionResult(text: string, query: string, includeLexical: boolean): Queryable[] {
+    const lines = text.trim().split("\n");
+    const queryables: Queryable[] = lines
+      .map((line: string): Queryable | null => {
+        const colonIdx = line.indexOf(":");
+        if (colonIdx === -1) return null;
+        const type = line.slice(0, colonIdx).trim().toLowerCase();
+        if (type !== 'lex' && type !== 'vec' && type !== 'hyde') return null;
+        const content = line.slice(colonIdx + 1).trim();
+        if (!content) return null;
+        return { type: type as QueryType, text: content };
+      })
+      .filter((q: Queryable | null): q is Queryable => q !== null);
+
+    const filtered = includeLexical ? queryables : queryables.filter(q => q.type !== 'lex');
+    if (filtered.length > 0) return filtered;
+    return this.fallbackExpansion(query, includeLexical);
+  }
+
+  private fallbackExpansion(query: string, includeLexical: boolean): Queryable[] {
+    const fallback: Queryable[] = [
+      { type: 'vec', text: query },
+      { type: 'hyde', text: `Information about ${query}` },
+    ];
+    if (includeLexical) fallback.unshift({ type: 'lex', text: query });
+    return fallback;
+  }
+
+  private parsePlainTextExtracts(text: string, maxIndex: number): Array<{ index: number; extract: string }> {
+    const results: Array<{ index: number; extract: string }> = [];
+    const trimmed = text.trim();
+    if (!trimmed || trimmed === "NONE") return results;
+    const segments = trimmed.split(/(?=^\[\d+\])/m);
+    for (const segment of segments) {
+      const match = segment.match(/^\[(\d+)\]\s*([\s\S]*)/);
+      if (!match) continue;
+      const index = parseInt(match[1]!, 10);
+      const extract = match[2]!.trim();
+      if (index >= 0 && index < maxIndex && extract.length > 0) {
+        results.push({ index, extract });
+      }
+    }
+    return results;
+  }
+}
