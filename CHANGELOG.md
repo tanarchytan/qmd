@@ -2,6 +2,99 @@
 
 ## [Unreleased]
 
+### Memory v16 — roadmap category closeouts (2026-04-13)
+
+Seven partial-status roadmap categories closed as part of the v16
+cycle. All new features are opt-in or additive — the default recall
+pipeline is unchanged. Every change typechecks clean; benchmark A/B
+results land separately.
+
+- **Cat 2 — Dialog-aware diversity in top-K recall**
+  (`src/memory/index.ts:applyDialogDiversity`). Greedy MMR-lite
+  reshuffle of the top-K that prefers unseen `source_dialog_id` /
+  `source_session_id` first. Opt-in via `QMD_RECALL_DIVERSIFY=on`.
+  Addresses the DR@K vs SR@K gap surfaced by the v15.1 LoCoMo
+  conv-30 analysis (SR@5=82.9% but DR@5=52.6% — retrieval was finding
+  the right session but piling up duplicate dialog turns).
+
+- **Cat 6 — Scheduled cleanup hook**
+  (`src/memory/decay.ts:runCleanupPass`). Chains `runDecayPass` +
+  `runEvictionPass` into one scheduler-friendly entry point with a
+  `minMemoriesForEviction` threshold so small installs don't get
+  eviction churn. Wired into the OpenClaw dream-consolidation gate.
+
+- **Cat 7 — 4-component importance scoring**
+  (`src/memory/extractor.ts:estimateImportance`). Adds `entityDensity`
+  (capitalized-token fraction as a proper-noun proxy, filtered via a
+  small STOP_CAPS set) and `hasDecisionSignal` (regex for commitment
+  language) on top of the existing category + length components.
+  Zero-dependency, no NER runtime.
+
+- **Cat 10 — Smart KG-in-recall with strict gating**
+  (`src/memory/index.ts:queryKGForEntities`). The temporal knowledge
+  graph is populated at ingest but wasn't queried during recall;
+  v8's blunt injection had to be rolled back because generic KG
+  entries flooded the top-K. This pass is opt-in via
+  `QMD_RECALL_KG=on` and only fires when the query contains ≤3
+  proper-noun entities AND the current top score is weak (<0.3) AND
+  fewer than 5 KG facts are returned. Inserted with fixed score 0.25
+  so strong FTS/vec hits are never displaced.
+
+- **Cat 11 — Post-retrieval reflect synthesis**
+  (`src/memory/index.ts:memoryReflect`). New exported function that
+  takes a question + list of retrieved memories and makes one LLM
+  call to extract the facts directly relevant to the question,
+  returned as a compressed numbered list. Both eval scripts integrate
+  it behind `QMD_RECALL_REFLECT=on`. Designed to help on the LME
+  v15.1 multi-session F1=30% bottleneck where retrieval is at
+  SR@5=100% but the answer model drowns in 50 scattered memories.
+
+- **Cat 16 — Push Pack (hot-state bundle)**
+  (`src/memory/index.ts:memoryPushPack`). Zero-LLM, deterministic SQL
+  union of core-tier memories + high-importance recent memories +
+  hot-tail recently-accessed. Each entry carries a `reason`
+  provenance label. Intended for session_start / before_prompt_build
+  hooks to proactively prime long-term memory without an explicit
+  recall call.
+
+- **Cat 17 — Backward-K LRU sparing in eviction**
+  (`src/memory/decay.ts:runEvictionPass`). Any eviction candidate
+  whose `last_accessed` falls within `lruWindowDays` (default 7) is
+  treated as hot and exempted regardless of creation age. Working-
+  tier composite-score check now uses last-access age rather than
+  creation age as the recency reference. True LRU-K (tracking the
+  K-th most recent access) would require a new access-history
+  table; this is a behavioral approximation without the schema
+  cost.
+
+- **Cat 18 — Periodic reflection over memory streams**
+  (`src/memory/index.ts:runReflectionPass`). Walks the last N days
+  of non-reflection memories in a scope and asks the remote LLM for
+  3-5 high-level themes / decisions / patterns. Each generated
+  reflection is stored as a new category=reflection memory at
+  importance 0.75 so future recall picks it up via the normal
+  FTS/vector paths. Wired into the OpenClaw dream-consolidation
+  gate alongside `runCleanupPass`.
+
+Still open: cat 1 (tiered storage — reserved as largest rewrite),
+cat 19 (multi-agent identity tier hierarchy), cat 20 (cross-session
+routing). 19 + 20 require schema / architecture changes too large
+for this pass.
+
+### Refactor — src/llm.ts split
+
+The 2,283-line `src/llm.ts` has been split into a 76-line facade plus
+six cohesive submodules. Every existing `import ... from "./llm.js"`
+keeps working; only the internal layout changed.
+
+    src/llm.ts            76   (facade)
+    src/llm/loader.ts     23   lazy node-llama-cpp module loader
+    src/llm/pull.ts      110   HF model pull utilities
+    src/llm/types.ts     238   LLM + ILLMSession interfaces, default URIs, format helpers
+    src/llm/remote.ts    703   RemoteLLM cloud provider implementation
+    src/llm/session.ts   222   LLMSessionManager / LLMSession generic session
+    src/llm/local.ts    1111   LlamaCpp class + default-singleton + session coordination
+
 ### Memory benchmark — v15.1
 
 - **Apples-to-apples retrieval metric aligned with MemPalace**: both

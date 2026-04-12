@@ -114,6 +114,23 @@ Cross-cutting view: every technique appears in multiple systems. This shows over
 
 **Legend:** ✓ complete · ~ partial · ✗ missing
 
+### 🆕 Session 2026-04-13 category closeouts
+
+Closed as part of the v16 cycle (all opt-in or additive, no baseline regression):
+
+| Cat | Closeout | Entry point |
+|-----|----------|-------------|
+| 2 (partial) | Dialog-aware diversity in top-K recall | `QMD_RECALL_DIVERSIFY=on` → `applyDialogDiversity` in `memoryRecall` |
+| 6 | Scheduled cleanup hook | `runCleanupPass(db, opts)` → wired into OpenClaw dream gate |
+| 7 | 4-component importance scoring | `estimateImportance` now adds entityDensity + decisionSignal |
+| 10 | Smart KG-in-recall with strict gating | `QMD_RECALL_KG=on` → `queryKGForEntities` in `memoryRecall` |
+| 11 | Post-retrieval reflect synthesis | `memoryReflect(question, memories)` + `QMD_RECALL_REFLECT=on` in evals |
+| 16 | Push Pack (hot-state bundle) | `memoryPushPack(db, opts)` — zero-LLM SQL |
+| 17 | Backward-K LRU sparing in eviction | `runEvictionPass` + `lruWindowDays` option |
+| 18 | Periodic reflection over memory streams | `runReflectionPass(db, opts)` → wired into OpenClaw dream gate |
+
+Remaining partial: **cat 1** (tiered storage — reserved as largest rewrite), **cat 19** (multi-agent identity), **cat 20** (cross-session routing). 19 + 20 require schema / architecture changes too large for the v16 pass.
+
 ### 1. Tiered / Hierarchical Storage — **~ partial**
 
 | System | Approach | QMD |
