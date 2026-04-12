@@ -2,6 +2,70 @@
 
 ## [Unreleased]
 
+### Memory benchmark — v15.1
+
+- **Apples-to-apples retrieval metric aligned with MemPalace**: both
+  LongMemEval and LoCoMo benchmarks now report session-level `SR@K`
+  (MemPalace `recall_any`) and LoCoMo additionally reports dialog-level
+  `DR@K` — a direct port of MemPalace's
+  `benchmarks/locomo_bench.py:compute_retrieval_recall`
+  (`found_dialog_ids / len(evidence)`). Memories now carry
+  `source_session_id` / `source_dialog_id` metadata at ingest; LoCoMo
+  uses the dataset's native `dia_id` field (`"D<sess>:<turn>"`) so
+  matching against `qa.evidence` is bit-exact. Top-K pulls 50 memories
+  and reports K ∈ {5, 10, 15, 50} from one recall call.
+- **v11.1 answer prompt for temporal reasoning** (opt-in via
+  `QMD_PROMPT_RULES=v11.1`). Adds three rules: ordering ("which came
+  first" → compare dates, never refuse), duration arithmetic ("how long
+  between X and Y" → compute, never say "context does not provide"
+  when both anchor dates are visible), enumerate-then-count for
+  counting questions. LME oracle (n=50, temporal-reasoning subset):
+  F1 51.4 → 52.9 (+1.5pp), EM 22.0 → 28.0 (+6.0pp), SR@5 100%
+  unchanged.
+- Fix `--extract-model` flag in LME/LoCoMo eval scripts: it was
+  setting `QMD_QUERY_EXPANSION_MODEL` (wrong variable — the extractor
+  ignores it, queryExpansion then 404'd against Nebius on every run).
+  Removed pending a proper per-call override in the extractor.
+
+### Refactor
+
+- **Remove abandoned `src/app/` scaffold** (422 lines). The
+  `src/app/commands/*` handlers, `src/app/services/llm-service.ts`, and
+  `src/app/ports/llm.ts` were partial-refactor scaffolding with zero
+  imports from the rest of the codebase. Graph audit flagged all 13
+  handlers as degree-1 isolated nodes; grep across the source tree
+  confirmed no caller. Removed wholesale.
+- **Split `src/llm.ts`** from 2,283 → 1,163 lines (−49%) across four
+  new cohesive modules under `src/llm/`:
+    - `src/llm/loader.ts` — lazy node-llama-cpp module loader.
+    - `src/llm/pull.ts` — HF model-pull utilities.
+    - `src/llm/types.ts` — LLM / ILLMSession interfaces, default model
+      URIs, and embedding format helpers.
+    - `src/llm/remote.ts` — RemoteLLM class, fetchWithRetry,
+      configurable rerank prompt, all cloud-provider glue.
+    - `src/llm/session.ts` — LLMSessionManager / LLMSession /
+      withLLMSessionForLlm, now typed against the abstract LLM interface
+      instead of LlamaCpp directly.
+  `src/llm.ts` stays as a facade — every existing
+  `import ... from "./llm.js"` keeps working unchanged. LlamaCpp
+  remains in the facade for now (29-edge god node; extraction is parked
+  until a benchmark run can validate the move).
+- Remove three dead helpers in `src/cli/qmd.ts` (computeDisplayPath,
+  normalizeBM25, shortPath; −53 lines). Grep verified zero callers.
+- Fix three pre-existing implicit-any parameter errors in `src/llm.ts`
+  (onTextChunk callback, expandQuery parseExpansionResult `.map` +
+  `.filter` chain). Typecheck now clean across `src/`.
+
+### Docs
+
+- `docs/ROADMAP.md`: v15.1 section with LME A/B results, MemPalace-aligned
+  metric design, in-flight LoCoMo run, and the query-expansion side issue.
+- `docs/EVAL.md`: SOTA table updated with v15.1 numbers + new
+  "Apples-to-apples metrics" section defining SR@K / DR@K / R@K and
+  the K-value convention.
+- `README.md`: Benchmarks table updated with v15.1 LME apples-to-apples
+  numbers and caveat block on the prior token-overlap artifact.
+
 ## [2.1.0] - 2026-04-05
 
 Code files now chunk at function and class boundaries via tree-sitter,
