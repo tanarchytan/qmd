@@ -324,23 +324,41 @@ Node.js ≥22 required. Bun support was dropped — all code is Node-only.
 
 ## Benchmarks
 
-QMD's memory system is evaluated against two long-term memory benchmarks, with recall measured apples-to-apples against MemPalace's `compute_retrieval_recall` (session-id and dialog-id match, not token-overlap):
+QMD's memory system is evaluated against two long-term memory benchmarks. **Primary metrics are R@5 / R@10 (token-overlap recall) and F1 / EM (answer quality)** — these actually discriminate pipeline changes. MemPalace-style session recall (SR@K) and dialog recall (DR@K) are reported as secondary "reference" rows; they're ceilinged or near-ceilinged on these datasets and should be taken with a grain of salt (see caveats below).
 
-| Benchmark | Tests | QMD v15.1 |
-|-----------|-------|-----------|
-| **LongMemEval oracle** (n=50, temporal-reasoning subset) | Information-retrieval memory across many sessions | **SR@5 = 100.0%** · F1 52.9% · EM 28.0% |
-| **LoCoMo** (conv-26 + conv-30) | Conversational memory across 35-session dialogues | F1 60.9% / EM 38.6% (v15-final cross-conv avg; v15.1 DR@K re-run in progress) |
+### LongMemEval oracle (n=200, full distribution)
 
-**Apples-to-apples caveats**
-- `SR@K` = MemPalace `recall_any`: did any top-K memory come from a session listed in the QA's evidence? Directly comparable to their published 96.6% LongMemEval R@5.
-- `DR@K` = MemPalace `compute_retrieval_recall`: fraction of evidence dialog IDs appearing in top-K (LoCoMo only, since LongMemEval has no dialog IDs).
-- The earlier v15-final "80% R@5" was a legacy token-overlap metric that fails on short numeric answers ("27" vs "27 years old" scored 0). SR@5 re-measurement shows retrieval was already at ceiling on the temporal-reasoning subset.
-- LongMemEval numbers are on a temporal-reasoning-only subset (dataset-order artifact from `--limit 50`). A `--limit 200` mixed-category run is the next step before calling any number representative.
+| Pipeline | R@5 | R@10 | F1 | EM | SR@5 (MP-compat) |
+|---|---|---|---|---|---|
+| QMD v15.1 | **87.0%** | **93.0%** | **50.6%** | 27.5% | 100% ceiling |
+| QMD v16.1 (reflect augment) | 84.5% | 91.5% | 49.4% | 27.0% | 100% |
+| **MemPalace (own benchmark)** | **100%** | **100%** | — | — | 100% ceiling |
 
-Reference SOTA on LongMemEval (per [vectorize.io memory survey](https://vectorize.io/articles/best-ai-agent-memory-systems)):
+### LoCoMo conv-26 + conv-30 (n=304)
+
+| Pipeline | R@5 | R@10 | F1 | EM | DR@50 (MP-compat) |
+|---|---|---|---|---|---|
+| QMD v15-final | — | — | 60.9% | 38.6% | — |
+| QMD v15.1 | 50.0% | 60.9% | **58.6%** | 36.2% | **74.9%** |
+| QMD v16 (diversity only) | **50.9%** | **60.9%** | 58.9% | 37.2% | 75.7% |
+| **MemPalace (own benchmark)** | — | — | — | — | **74.8%** |
+
+Single-conv breakdowns and v16.1 (reflect augment) detail live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+**What this says:**
+
+- On the one metric where both sides cleanly discriminate — **LoCoMo dialog-level DR@50** — QMD v15.1 matches MemPalace's own benchmark to within 0.1pp (74.9 vs 74.8). Parity on their metric with their own pipeline.
+- On **LongMemEval oracle**, MemPalace's own benchmark scores **Recall@1 = 100%** because the oracle dataset is pre-filtered to relevant sessions — any retriever that returns anything trivially hits 100%. It's a ceiling measurement, not a comparison. Their published 96.6% headline is on the `longmemeval_s_cleaned` dataset (the fully unfiltered haystack), not oracle. Comparing our numbers to that requires running `_s` — a future benchmark.
+
+**Caveats on the MP-compat metrics** (this is why we demote them to reference rows):
+- `SR@K` (session any-match) hits 100% on LME oracle by construction — doesn't discriminate retriever quality.
+- `DR@K` (dialog fractional recall) is honest but only computable on LoCoMo where the dataset exposes dialog IDs.
+- Legacy R@K (token overlap) has a known blind spot on short numeric answers — "27" vs "27 years old" scored 0 pre-fix. New Substring-Hit (SH) metric catches that.
+
+Reference SOTA on LongMemEval (per [vectorize.io memory survey](https://vectorize.io/articles/best-ai-agent-memory-systems)) — all reported on `longmemeval_s_cleaned`, not oracle:
 - Hindsight 91.4% · SuperMemory 81.6% · Zep 63.8% · Mem0 49.0%
 
-See [`docs/EVAL.md`](docs/EVAL.md) for the eval methodology, env-var ablation toggles, parallel sharding, and reproducibility notes. Full version history, technique tables, lessons learned, and SOTA targets in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+See [`docs/EVAL.md`](docs/EVAL.md) for the metric definitions, env-var ablation toggles, parallel sharding, and reproducibility notes. Full version history, technique tables, lessons learned, and SOTA targets in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Standing on the Shoulders of Giants
 

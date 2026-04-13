@@ -22,6 +22,64 @@
 
 **Working tree clean** as of compaction. All session work committed.
 
+## 🆕 Session 2026-04-13 — v16 category closeouts, MemPalace ground truth, metric hierarchy
+
+### Headline: we match MemPalace on the metric that discriminates
+
+Instead of relying on their published numbers + our reimplementation of their metric, we cloned MemPalace develop to `~/external/mempalace` and ran their own `benchmarks/locomo_bench.py` and `benchmarks/longmemeval_bench.py` on the exact same data files our eval scripts use. Comparison on 2026-04-13:
+
+| Benchmark | Pipeline | Metric | Score | Notes |
+|---|---|---|---|---|
+| **LoCoMo conv-26+30 (n=304)** | **QMD v15.1** | **DR@50** | **74.9%** | dialog-level fractional recall |
+| | **MemPalace own run** | **DR@50** | **74.8%** | same metric, their pipeline |
+| LoCoMo conv-26+30 | MemPalace own run | session recall@any | 100% | 19 docs × top-50 = every session always in top-K |
+| LME oracle n=200 | QMD v15.1 | R@5 / R@10 | 87.0% / 93.0% | token overlap |
+| | MemPalace own run | Recall@1 / @5 / @50 | 100% / 100% / 100% | ceilinged |
+| | QMD v15.1 | SR@5 | 100% | also ceilinged |
+
+**Takeaways:**
+
+1. **On the one metric that discriminates — LoCoMo dialog-level DR@50 — QMD v15.1 matches MemPalace's own pipeline to within 0.1pp on the same data (74.9 vs 74.8).** Parity.
+2. **SR@K on LME oracle is useless as a discriminator** — MemPalace's own benchmark scores 100% because the haystack is pre-filtered to relevant sessions. The metric is ceilinged at 100% by construction. Our previous "v15.1 SR@5 = 100%" was not a win, just a ceiling.
+3. **MemPalace's published 96.6% is on `longmemeval_s_cleaned`**, not oracle. That dataset has the full unfiltered haystack with distractor sessions. Comparing QMD to their 96.6% requires a future run on `_s`.
+
+### New metric hierarchy
+
+All eval reports now lead with:
+
+- **Primary retrieval**: R@5 (single-pass), R@10 (multi-pass), MRR (rank quality)
+- **Primary answer quality**: F1 (fuzzy), EM (strict), SH (substring-hit — catches F1's blind spot on short numeric/name answers like "27" vs "27 years old")
+- **MemPalace-compat reference only**: SR@K + DR@K on a single demoted line with a "take with salt" note
+
+See `docs/EVAL.md` "Metric hierarchy" section for the full definitions and why each metric lives where it lives.
+
+### v16.1 validation — augment-not-replace reflect + diversity + KG (n=304 LoCoMo, 200 LME)
+
+| Run | LoCoMo F1 | LoCoMo R@5 | LME F1 | LME R@5 | Multi-session F1 |
+|---|---|---|---|---|---|
+| v15.1 baseline | **58.6%** | 50.0% | **50.6%** | **87.0%** | 30.4% |
+| v16 diversity only | 58.9% ✓ | **50.9%** ✓ | — | — | — |
+| v16-full (reflect BROKEN) | 52.2% ⚠️ | 48.8% | 29.9% 🔴 | 84.0% | 18.6% 🔴 |
+| v16.1 (reflect augment + div + KG) | 55.9% | 51.3% ✓ | 49.4% | 84.5% | **35.3%** ✓ |
+
+**v16.1 findings:**
+
+- **Multi-session F1 +4.9pp** (30.4 → 35.3) — the target bottleneck moved. Reflect is doing real work on the worst LME category when it augments rather than replaces.
+- **LME F1 −1.2pp, LME R@5 −2.5pp** — reflect has a small average cost on cases where synthesis doesn't help. Not worth as default.
+- **LoCoMo conv-26 per-category**: single-hop F1 −7.2pp, multi-hop F1 +5.8pp, temporal F1 −4.4pp. **Reflect helps compound queries, hurts simple ones.** Smart gating is the obvious follow-up.
+- **Diversity alone** continues to produce small but consistent retrieval wins (R@5 +0.9pp cross-conv) with ≈flat F1.
+
+**Recommended default stack going forward:**
+
+```
+QMD_RECALL_DIVERSIFY=on   # small consistent retrieval win
+QMD_RECALL_KG=on          # strictly gated, costs nothing when FTS is strong
+QMD_RECALL_REFLECT=off    # defer until smart-gating per question type lands
+QMD_PROMPT_RULES=v11.1    # LME temporal win, small LoCoMo cost
+```
+
+---
+
 ## 🚀 v15.1 — apples-to-apples + temporal answer fix (2026-04-12)
 
 **Two changes from v15-final, validated on LME oracle:**

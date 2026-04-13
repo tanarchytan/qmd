@@ -215,7 +215,39 @@ Watch by category:
 
 ---
 
+## Metric hierarchy
+
+QMD's evals now report six primary metrics and four MemPalace-compat reference metrics:
+
+### Primary (lead with these)
+
+| Metric | Axis | Definition |
+|---|---|---|
+| **R@5** | Retrieval (single-pass) | ≥50% of ground-truth tokens appear in any single top-5 memory, OR ≥70% across all top-5 combined |
+| **R@10** | Retrieval (multi-pass) | Same, K=10 |
+| **MRR** | Retrieval (rank quality) | `1 / rank_of_first_relevant_memory`, 0 if not in top-10. Rewards putting the answer at rank 1 vs rank 3 |
+| **F1** | Answer quality (fuzzy) | SQuAD-style token overlap between prediction and truth |
+| **EM** | Answer quality (strict) | Exact tokenized match |
+| **SH** | Answer quality (substring) | Normalized truth ⊂ normalized prediction. Catches "27" vs "27 years old" false negatives that F1 scores 0 |
+
+### MemPalace-compat (reference only — take with a grain of salt)
+
+| Metric | Definition | Discriminates? |
+|---|---|---|
+| `SR@K` | Any top-K memory's `source_session_id` ∈ evidence sessions (MemPalace `recall_any`) | Ceilinged on LME oracle (both QMD and MemPalace score 100% at every K) |
+| `DR@K` | `found_dialog_ids / len(evidence)` (MemPalace `compute_retrieval_recall`) | Honest on LoCoMo; not computable on LME |
+
+K ∈ {5, 10, 15, 50}. **Why grain of salt:**
+
+- **On LME oracle**, MemPalace's own benchmark scored `Recall@1 = Recall@5 = Recall@50 = 100%`. The oracle dataset is pre-filtered to relevant sessions, so any retriever that returns any memory at all trivially passes. The metric doesn't discriminate pipelines on this dataset — it's a ceiling.
+- **On LoCoMo session granularity**, same thing: 19 docs per conversation with top-50 retrieval means every session is always in top-K. MemPalace's own run scored 100% on all 304 questions.
+- **LoCoMo dialog granularity is the one honest comparison**: QMD v15.1 DR@50 = 74.9% vs MemPalace own run DR@50 = 74.8% — parity on their metric with their own pipeline on the same data.
+
+The take-home: **SR@K and DR@K have strong caveats and should never be reported as headline numbers**. Lead with R@K (discriminates real retriever changes) plus F1/EM/SH (measure synthesis quality).
+
 ## SOTA Reference (LongMemEval published scores)
+
+All published LongMemEval scores below are on `longmemeval_s_cleaned` (the large unfiltered haystack), **not** the `oracle` dataset QMD's day-to-day benchmarks use. Comparing QMD numbers to these figures requires running on `_s`.
 
 | System | LME Score | Architecture |
 |--------|-----------|--------------|
@@ -223,28 +255,26 @@ Watch by category:
 | SuperMemory | 81.6% | Memory graph + RAG + auto contradiction resolution |
 | Zep / Graphiti | 63.8% | Temporal KG with bitemporal validity |
 | Mem0 | 49.0% | Vector + KG dual-store, atomic extraction |
-| QMD v15.1 | **SR@5 100% / F1 52.9%** (n=50 oracle, temporal-only subset) | BM25 + vec + RRF + LLM rerank + merged extraction + synthesis + v11.1 temporal prompt |
+| MemPalace (raw) | 96.6% | ChromaDB + all-MiniLM-L6-v2 + session granularity + raw verbatim |
+| QMD v15.1 (oracle) | R@5 87.0% · F1 50.6% | BM25 + vec + RRF + LLM rerank + merged extraction + synthesis + v11.1 temporal prompt |
 
-**QMD v15.1 LME apples-to-apples (2026-04-12, oracle, n=50, temporal-reasoning):**
-- **SR@5 / SR@10 = 100.0%** (MemPalace `recall_any`, session-id match)
-- Legacy R@5 = 86.0%, R@10 = 92.0% (token-overlap — mismeasures short numeric answers)
-- F1 = 52.9%, EM = 28.0%
+**QMD vs MemPalace verified on same data** (2026-04-13):
 
-The SR@K number is directly comparable to MemPalace's 96.6%. The first baseline's "R@5 = 80%" was a token-overlap metric artifact, not a retrieval gap. **Caveat:** still only temporal-reasoning (dataset ordering); full-distribution run on `--limit 200` needed before calling any number representative.
+| Benchmark | Pipeline | Metric | Score |
+|---|---|---|---|
+| LME oracle n=200 | QMD v15.1 | R@5 / R@10 | 87.0% / 93.0% |
+| LME oracle n=200 | MemPalace own run | Recall@5 / Recall@10 | 100% / 100% (ceilinged) |
+| LoCoMo conv-26+30 | QMD v15.1 | DR@50 | 74.9% |
+| LoCoMo conv-26+30 | MemPalace own run | DR@50 | 74.8% |
 
-## Apples-to-apples metrics (MemPalace alignment)
+**Running MemPalace on our data** (reproduces both rows above):
 
-Both evals now store session/dialog metadata at ingest and report recall at four K values:
+```sh
+./evaluate/run-mempalace-baseline.sh
+python3 evaluate/summarize-mempalace.py
+```
 
-| Metric | Definition | Where |
-|---|---|---|
-| `SR@K` | Session-id any-match (`recall_any`) — any top-K memory's `source_session_id` in the QA's evidence sessions | LME, LoCoMo |
-| `DR@K` | Dialog-level fractional recall — `found_dialog_ids / len(evidence)`; direct port of MemPalace `compute_retrieval_recall` | LoCoMo only (LME has no dialog IDs) |
-| `R@K` | Legacy token-overlap — kept for backward comparison, known to mismeasure short numeric answers | both |
-
-K ∈ {5, 10, 15, 50}. MemPalace's default is 50, but SR@5 / DR@5 are the honest numbers — K=50 is essentially "did we put it anywhere in a half-conversation window" and should be treated as a retrieval ceiling, not a headline score.
-
-See `ROADMAP.md` for full architectural delta vs Hindsight and v16 candidate optimizations.
+Results land in `~/external/mempalace-results/`.
 
 ---
 

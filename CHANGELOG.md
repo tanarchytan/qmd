@@ -2,6 +2,61 @@
 
 ## [Unreleased]
 
+### MemPalace ground-truth comparison (2026-04-13)
+
+Cloned MemPalace develop branch to `~/external/mempalace` and ran
+their own `benchmarks/locomo_bench.py` and
+`benchmarks/longmemeval_bench.py` on the exact same datasets QMD's
+evals use. Instead of comparing to their published number via our
+reimplementation of their metric, we ran their pipeline directly.
+
+Key findings:
+
+- **LoCoMo dialog-level DR@50 parity**: QMD v15.1 = 74.9%, MemPalace's
+  own run on the same conv-26+conv-30 slice = 74.8%. On the one
+  discriminating metric, we match.
+- **LME oracle is ceilinged for session-recall metrics**: MemPalace's
+  own benchmark scored `Recall@1 = Recall@5 = Recall@50 = 100%` on
+  oracle because the dataset is pre-filtered to relevant sessions.
+  Our SR@5 = 100% was not a win, just the same ceiling.
+- **MemPalace's published 96.6% headline is on `longmemeval_s_cleaned`**,
+  not oracle. A future run on `_s` is needed for direct comparison.
+
+Tooling added:
+- `evaluate/run-mempalace-baseline.sh` — sequential launcher (they race
+  on the ONNX model download if run in parallel).
+- `evaluate/summarize-mempalace.py` — parses their JSONL output into a
+  compact table.
+
+### New primary metric hierarchy — R@K + F1/EM/SH + MRR leading
+
+Both LongMemEval and LoCoMo evals now lead their reports with R@K
+(token-overlap recall) and F1/EM/SH (answer quality), demoting
+SR@K and DR@K to a single reference-only line with a "take with
+salt" caveat. Two new metrics added:
+
+- **Substring-Hit (SH)**: 1 if normalized truth is a substring of
+  normalized prediction, else 0. Catches F1's blind spot on short
+  numeric / name answers — "27" ⊂ "27 years old" now scores 1.0
+  where F1 previously scored 0.
+- **MRR** over the top-10 memories using the same 50% token-overlap
+  relevance definition as R@K. Rewards rank quality: rank 1 = 1.0,
+  rank 3 = 0.33, not in top-10 = 0.
+
+Motivation: v15.1 showed SR@5 was pinned at 100% on LME oracle
+regardless of changes — the oracle is pre-filtered, so any retriever
+trivially passes. MemPalace running their own benchmark confirmed
+this (they hit 100% too). SR/DR on pre-filtered haystacks is a no-op
+measurement and cannot discriminate pipeline quality. R@K (token
+overlap against ground truth) directly tests "does the answer reach
+the model" and moves with real changes.
+
+Report ordering:
+    Retrieval (primary):       R@5 / R@10 / MRR
+    Answer quality (primary):  F1 / EM / SH
+    MemPalace-compat (ref):    DR@K (LoCoMo only) / SR@K
+Per-category tables updated to match.
+
 ### Memory v16 — roadmap category closeouts (2026-04-13)
 
 Seven partial-status roadmap categories closed as part of the v16
