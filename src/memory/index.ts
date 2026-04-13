@@ -636,6 +636,55 @@ export async function memoryStoreBatch(
 }
 
 /**
+ * Adaptive vector-similarity acceptance gate.
+ *
+ * Replaces the legacy fixed 0.3 cosine cutoff. Two-pass:
+ *   1. Compute a floor as max(absFloor, top1 × relRatio)
+ *   2. Accept results in rank order. Anything ≥ floor passes; below the
+ *      floor we still keep up to `minKeep` results so a low-signal query
+ *      doesn't end up with an empty vector pool (BM25 then fills the gap).
+ *
+ * QMD_VEC_MIN_SIM:
+ *   unset / "adaptive" → adaptive (default)
+ *   "0"               → take everything (most permissive)
+ *   "<number>"        → legacy fixed-threshold behaviour
+ *
+ * Exported for unit testing — the runtime path inlines the logic above.
+ */
+export function pickVectorMatches<T extends { similarity: number }>(
+  results: T[],
+  options: {
+    absFloor?: number;
+    relRatio?: number;
+    minKeep?: number;
+    fixedFloorEnv?: string;
+  } = {}
+): T[] {
+  const ABS_FLOOR = options.absFloor ?? 0.05;
+  const REL_RATIO = options.relRatio ?? 0.5;
+  const MIN_KEEP = options.minKeep ?? 5;
+  const envValue = options.fixedFloorEnv ?? process.env.QMD_VEC_MIN_SIM;
+
+  const sorted = [...results].sort((a, b) => b.similarity - a.similarity);
+
+  const fixedFloor = envValue && envValue !== "adaptive" && !isNaN(Number(envValue))
+    ? Number(envValue)
+    : null;
+  const top1 = sorted[0]?.similarity ?? 0;
+  const adaptiveFloor = Math.max(ABS_FLOOR, top1 * REL_RATIO);
+  const floor = fixedFloor !== null ? fixedFloor : adaptiveFloor;
+
+  const out: T[] = [];
+  for (const r of sorted) {
+    const passes = r.similarity >= floor;
+    const keepAnyway = out.length < MIN_KEEP;
+    if (!passes && !keepAnyway) continue;
+    out.push(r);
+  }
+  return out;
+}
+
+/**
  * Extract capitalized multi-word entities from the query as a rough
  * proper-noun filter. Used to decide whether the KG-in-recall injection
  * should fire. Very conservative — matches "Caroline", "London",
@@ -871,20 +920,12 @@ export async function memoryRecall(
         `SELECT id, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?`
       ).all(new Float32Array(queryEmbedding), limit * 3) as { id: string; distance: number }[];
 
-      // Cosine threshold: legacy default was 0.3 to filter "obviously
-      // unrelated" matches. In RAW mode we drop the filter entirely to
-      // match MemPalace's "top-K unconditional" recipe — the LME _s
-      // n=500 baseline showed multi-session R@5 dragging at 80% (vs
-      // MemPalace 100%) because legitimate matches at 0.15-0.25 cosine
-      // were being filtered out. Configurable via QMD_VEC_MIN_SIM.
-      const minSim = RAW
-        ? 0
-        : Number(process.env.QMD_VEC_MIN_SIM ?? "0.3");
-      for (const r of vecResults) {
-        const similarity = 1 - r.distance;
-        if (similarity < minSim) continue;
+      // Adaptive vector acceptance — pickVectorMatches handles the
+      // floor calculation. See its docstring for the full rationale.
+      const withSim = vecResults.map(r => ({ ...r, similarity: 1 - r.distance }));
+      for (const r of pickVectorMatches(withSim)) {
         const mem = getById.get(r.id) as Memory | null;
-        if (mem) addResult(mem, similarity);
+        if (mem) addResult(mem, r.similarity);
       }
     } catch {
       // memories_vec may not exist
