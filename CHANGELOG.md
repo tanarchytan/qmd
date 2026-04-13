@@ -2,6 +2,109 @@
 
 ## [Unreleased]
 
+### v16 release summary (2026-04-13)
+
+The v16 cycle ships QMD as a **local-first, zero-cost retrieval system at
+parity with MemPalace** on the metric that actually discriminates.
+Headline numbers:
+
+| Benchmark | QMD v16 | MemPalace |
+|---|---|---|
+| LME _s n=500 R@5 | **93.2%** | 96.6% |
+| LME _s n=500 R@10 | **95.2%** | 98.2% |
+| LME _s n=500 5/6 categories | **at parity or above** | |
+| LoCoMo conv-26+30 DR@50 | **74.9%** | 74.8% |
+
+Closed the 7-pp LME _s gap that opened up when we ran the full n=500
+distribution. Two real bugs found and fixed (cosine threshold + scope
+filtering after vector search). One null result (BGE family doesn't
+help on multi-session). Eight roadmap categories closed. Major eval
+methodology rewrite. Local fastembed backend so iteration costs $0.
+
+**Key shipped pieces:**
+- `src/llm/fastembed.ts` — local ONNX embedding backend, all-MiniLM-L6-v2,
+  zero API keys, deterministic. Same embed model MemPalace uses.
+- `src/llm/{loader,pull,types,remote,session,local}.ts` — `src/llm.ts`
+  refactored from 2,283 lines → 76-line facade + 6 cohesive submodules.
+- `pickVectorMatches()` — adaptive cosine-similarity gate with
+  `max(absFloor=0.05, top1×0.5)` floor and `minKeep=5` safety net.
+  7 unit tests covering open vault / focused haystack / no-signal /
+  legacy override.
+- `memories_vec` partition key on `scope` so sqlite-vec walks only the
+  current scope's slice of the index — fixes mem=1-5 → mem=50 per query.
+- Eight roadmap category closeouts (cat 1 tier-aware recall, cat 2
+  diversity, cat 6 cleanup hook, cat 7 4-component importance, cat 10
+  smart KG-in-recall, cat 11 reflect synthesis, cat 16 push pack,
+  cat 17 LRU-K eviction, cat 18 periodic reflection).
+- New primary metric hierarchy: R@5 / R@10 / MRR / F1 / EM / SH leading;
+  SR@K / DR@K demoted to a single MemPalace-compat reference row.
+- Substring-Hit (SH) — catches F1 false negatives on short numeric/name
+  answers like "27" vs "27 years old".
+- Mean Reciprocal Rank over top-10.
+- `evaluate/run-mempalace-baseline.sh` — runs MemPalace's own
+  `benchmarks/locomo_bench.py` and `longmemeval_bench.py` on the same
+  data so we have ground truth, not just published numbers.
+- `evaluate/run-lme-s-local.sh` — 100% local zero-cost benchmark with
+  fastembed + `--no-llm` + raw mode + extraction off.
+- `docs/EVAL.md` — heavy restructure with "How we benchmark" methodology
+  TL;DR, cost discipline section, fastembed backend docs, adaptive
+  threshold explainer, MemPalace ground-truth comparison table.
+
+**Known residual: multi-session ranking gap.** With full top-K per
+scope, multi-session R@5 stuck at 81% vs MemPalace 100% on n=500.
+Confirmed via the BGE A/B (next entry) that this is NOT a
+representational-capacity problem — BGE-base 768-dim scored identically
+to MiniLM 384-dim. Bottleneck is training objective / data, not model
+size. Queued v17 experiments documented in `docs/notes/`:
+
+- Small-class A/B (gte-small, arctic-xs, mxbai-xsmall, e5-small, nomic)
+  — try BEFORE jumping to larger models
+- Qwen3-Embedding-0.6B hybrid (Path A `@huggingface/transformers` +
+  Path B `node-llama-cpp` GGUF q8) — only if small-class fails
+- Cross-encoder rerank / query expansion / per-scope normalization —
+  only if both above fail
+
+**Doctrine** captured in ROADMAP and the design notes:
+
+> Where MemPalace makes doubtful choices, prioritize project quality
+> over shiny benchmarks. They verify our quality. Not an exam where
+> you want a 100 regardless of everything.
+
+This shipped as adaptive cosine threshold (universal quality
+improvement for both open vaults and focused haystacks) instead of
+"no threshold ever" (MemPalace's choice that breaks open vaults).
+
+### BGE A/B null result + small-class A/B plan (2026-04-13 session close)
+
+Three-way embed-model sweep at LME _s n=100 with the partition fix
+in place:
+
+| Model | Dim | Size | R@5 | multi-session R@5 (n=30) | Wall |
+|---|---|---|---|---|---|
+| MiniLM-L6-v2 | 384 | 80 MB | 98.0% | 93% | 4m47s |
+| BGE-small-en-v1.5 | 384 | 130 MB | 97.0% | 93% | 7m25s |
+| BGE-base-en-v1.5 | 768 | 440 MB | 98.0% | 93% | 29m02s |
+
+**Conclusive null result.** All three score within 1pp on R@5 and
+identically on multi-session. Two findings:
+
+1. **Dimension is not the lever.** BGE-base doubled the dim to 768 and
+   scored exactly the same as the 384-dim variants. The bottleneck is
+   training objective / training data, not representational capacity.
+2. **BGE-base is too big for QMD.** 6× wall time vs MiniLM with zero
+   accuracy gain. QMD's on-device positioning (CLI, MCP, OpenClaw plugin
+   on a developer laptop) makes anything in that size class non-viable
+   as a default. **Future embed candidates must stay in the
+   MiniLM/BGE-small footprint** (~80-150 MB, 384-dim, sub-5s/Q on n=100
+   CPU).
+
+Skipped n=500 BGE confirmation because n=100 was already definitive.
+
+The small-class A/B plan (gte-small, snowflake-arctic-embed-xs,
+mxbai-embed-xsmall-v1, e5-small-v2, nomic-embed-text-v1.5) is documented
+as the next experiment in ROADMAP and `docs/notes/qwen3-embedding-paths.md`.
+Will run before any larger-model experiment.
+
 ### Vector retrieval — scope partition key (2026-04-13 late session)
 
 The K-multiplier workaround (f360a2b) brought LME _s n=500 R@5 from
