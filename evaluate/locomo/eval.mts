@@ -726,12 +726,17 @@ async function main() {
       // --- OPTIONAL REFLECT (roadmap cat 11): pre-filter memories into a
       // compressed fact list before the answer call. Opt-in via
       // QMD_RECALL_REFLECT=on. Adds one extra LLM call per question.
+      //
+      // v16.1 fix: AUGMENT the memory list with the reflection block at
+      // the top — don't REPLACE it. v16-full shipped replacement and lost
+      // ~20pp F1 on LME because the compressed bullets dropped exact
+      // wording the answer model needed for date arithmetic and ordering.
       let answerMemories = memories.map(m => m.text);
       if (process.env.QMD_RECALL_REFLECT === "on" && memories.length > 0 && useLLM) {
         try {
           const reflected = await memoryReflect(qa.question, memories, { maxFacts: 8 });
           if (reflected) {
-            answerMemories = [reflected];
+            answerMemories = [`[reflected facts]\n${reflected}`, ...answerMemories];
           }
         } catch { /* fall back to raw memories */ }
       }
