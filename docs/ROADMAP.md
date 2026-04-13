@@ -22,6 +22,21 @@
 
 **Working tree clean** as of compaction. All session work committed.
 
+## 🛣 Planned: Qwen3-Embedding-0.6B via two parallel paths
+
+Surfaced 2026-04-13. The LME _s multi-session gap (81% vs MemPalace 100% at R@5) is now a **ranking** problem — full top-K per scope is being retrieved, but MiniLM's 384-dim embeddings don't put the right multi-hop answer in the top-5 often enough. The targeted fix is a stronger embed model.
+
+**Plan:** ship two integrations of Qwen3-Embedding-0.6B as opt-in alternatives, picked by `QMD_EMBED_BACKEND`:
+
+- **Path A — `@huggingface/transformers`**: pure Node, native Qwen3 support via `pipeline("feature-extraction", "onnx-community/Qwen3-Embedding-0.6B-ONNX")`. Same shape as `src/llm/fastembed.ts`. ~120 lines. Works in any Node env including OpenClaw plugin path that disables native builds.
+- **Path B — `node-llama-cpp` GGUF**: zero new code — re-enable `QMD_LOCAL=yes` in the eval env and set `QMD_EMBED_MODEL=hf:Qwen/Qwen3-Embedding-0.6B-GGUF/...`. The existing `LlamaCpp` class handles it. Native cmake-built ORT, fastest on CPU/GPU.
+
+Both ship as first-class options. Different infrastructure constraints select different paths. Full analysis + activation snippets + test plan in [`docs/notes/qwen3-embedding-paths.md`](notes/qwen3-embedding-paths.md).
+
+**Trigger:** revisit if BGE A/B (in flight at session close) doesn't close the multi-session gap. BGE-base is the cheapest experiment to try first — if it lands at 95%+ R@5 on multi-session, Qwen3 is unnecessary. If it doesn't, both Qwen3 paths are queued ready to implement.
+
+---
+
 ## 🅿 Parked: pluggable storage backend
 
 Surfaced 2026-04-13. Question was: should QMD migrate to Postgres + pgvector now, like Mem0 / Zep / Letta? Honest answer captured in [`docs/notes/pluggable-storage.md`](notes/pluggable-storage.md).
