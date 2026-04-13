@@ -240,6 +240,12 @@ function parseTimeReference(query: string): TimeReference | null {
  */
 let _onnxBackend: any = null;
 async function getFastEmbedBackend(): Promise<any> {
+  // Opt-in only via QMD_EMBED_BACKEND=transformers to avoid loading the
+  // @huggingface/transformers native onnxruntime-node binding (and its
+  // sharp dep) for callers that only want FTS+remote. The native binding
+  // can crash hard on some Windows test environments — we only pay that
+  // cost when the user has explicitly opted in.
+  if (process.env.QMD_EMBED_BACKEND !== "transformers") return null;
   if (_onnxBackend) return _onnxBackend;
   try {
     const mod = await import("../llm/transformers-embed.js");

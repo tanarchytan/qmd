@@ -353,10 +353,13 @@ export async function searchVec(db: Database, query: string, model: string, limi
 // Embeddings helpers
 // =============================================================================
 
-// Cached singleton of the local transformers embed backend. Lazy to avoid
-// eager npm dep load when only remote is used.
+// Cached singleton of the local transformers embed backend. Opt-in only
+// via QMD_EMBED_BACKEND=transformers — the native onnxruntime-node binding
+// it pulls in (plus sharp) can crash on Windows test envs, and callers that
+// only use remote embed should not pay the load cost.
 let _localEmbed: any = null;
 async function getLocalEmbedBackend(): Promise<any> {
+  if (process.env.QMD_EMBED_BACKEND !== "transformers") return null;
   if (_localEmbed) return _localEmbed;
   try {
     _localEmbed = await createTransformersEmbedBackend();

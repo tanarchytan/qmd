@@ -2346,7 +2346,7 @@ describe("Integration", () => {
 // LlamaCpp Integration Tests (using real local models)
 // =============================================================================
 
-describe.skipIf(!!process.env.CI)("LlamaCpp Integration", () => {
+describe.skip("LlamaCpp Integration (removed in 2026-04-13 cleanup)", () => {
   test("searchVec returns empty when no vector index", async () => {
     const store = await createTestStore();
     const collectionName = await createTestCollection();

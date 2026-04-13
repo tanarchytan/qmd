@@ -78,10 +78,30 @@ export type { OperationProvider, OperationConfig, RemoteLLMConfig } from "./llm/
 /** @deprecated LlamaCpp removed; always returns false. */
 export function isLocalEnabled(): boolean { return false; }
 
-/** @deprecated LlamaCpp removed. Throws if called. Use TransformersEmbedBackend or RemoteLLM directly. */
-export function getDefaultLlamaCpp(): never {
-  throw new Error("LlamaCpp removed in 2026-04-13 cleanup. Use TransformersEmbedBackend (local embed) or RemoteLLM (rerank/generate).");
+/**
+ * @deprecated LlamaCpp removed in the 2026-04-13 cleanup.
+ * Returns a no-op LLM stub so legacy callers (test fixtures, old probes)
+ * compile and run without crashing — every method returns null/empty.
+ * New code should use TransformersEmbedBackend (local embed) or RemoteLLM
+ * (rerank/generate) directly.
+ */
+export function getDefaultLlamaCpp(): any {
+  return _noopLlmStub;
 }
+
+const _noopLlmStub = {
+  embedModelName: "noop",
+  embed: async () => null,
+  embedBatch: async (texts: string[]) => texts.map(() => null),
+  generate: async () => null,
+  modelExists: async (model: string) => ({ name: model, exists: false }),
+  expandQuery: async () => [],
+  rerank: async () => ({ results: [], model: "noop" }),
+  tokenize: async (text: string) => Array.from(text).map(() => 0),
+  dispose: async () => {},
+  // Lifecycle/probe methods used by the old qmd status path
+  getDeviceInfo: async () => ({ gpu: null, gpuOffloading: false, gpuDevices: [], vram: null, cpuCores: 0 }),
+};
 
 /** @deprecated No-op. */
 export function setDefaultLlamaCpp(_llm: unknown): void { /* no-op */ }

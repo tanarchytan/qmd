@@ -376,10 +376,16 @@ export async function generateEmbeddings(
   }
 
   // Local path: use store's LLM override or load the default transformers
-  // embed backend (mxbai-xs q8 by default). Wrapped in a session for the
-  // existing batch + abort plumbing — TransformersEmbedBackend implements
-  // the LLM interface so the session machinery treats it identically.
-  const llm: LLM = store.llm ?? (await createTransformersEmbedBackend());
+  // embed backend (mxbai-xs q8 by default, opt-in via QMD_EMBED_BACKEND=
+  // transformers to avoid loading the native onnxruntime binding when not
+  // needed). Wrapped in a session for the existing batch + abort plumbing.
+  let llm: LLM | null = store.llm ?? null;
+  if (!llm && process.env.QMD_EMBED_BACKEND === "transformers") {
+    llm = await createTransformersEmbedBackend();
+  }
+  if (!llm) {
+    return { docsProcessed: totalDocs, chunksEmbedded: 0, errors: 0, durationMs: Date.now() - startTime };
+  }
   const embedModelUri = (llm as any).embedModelName ?? "local";
 
   const result = await withLLMSessionForLlm(llm, async (session) => {

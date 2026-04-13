@@ -23,6 +23,10 @@ import { dirname } from "path";
 // Set INDEX_PATH before importing store to prevent using global index
 const tempDir = mkdtempSync(join(tmpdir(), "qmd-eval-"));
 process.env.INDEX_PATH = join(tempDir, "eval.sqlite");
+// Opt into the transformers local embed backend for this test suite.
+// Production callers set this in env; tests need it set before any store
+// or memory module decides whether to lazy-load the native binding.
+process.env.QMD_EMBED_BACKEND = "transformers";
 
 import {
   createStore,
@@ -36,7 +40,7 @@ import {
   DEFAULT_EMBED_MODEL,
   type RankedResult,
 } from "../src/store";
-import { getDefaultLlamaCpp, formatDocForEmbedding, disposeDefaultLlamaCpp } from "../src/llm";
+import { formatDocForEmbedding, createTransformersEmbedBackend } from "../src/llm";
 
 // Eval queries with expected documents
 const evalQueries: {
@@ -178,9 +182,12 @@ describe.skipIf(!!process.env.CI)("Vector Search", () => {
       }
     }
 
-    // Generate embeddings for test documents
-    const llm = getDefaultLlamaCpp();
-    store.ensureVecTable(768); // embeddinggemma uses 768 dimensions
+    // Generate embeddings for test documents using the production
+    // transformers backend (mxbai-xs q8 default, 384d). Vec table dim is
+    // derived from the first actual embedding so it stays in sync with
+    // whatever model QMD_EMBED_MODEL points at.
+    const llm = await createTransformersEmbedBackend();
+    let vecDim: number | null = null;
 
     const evalDocsDir = join(dirname(fileURLToPath(import.meta.url)), "eval-docs");
     const files = readdirSync(evalDocsDir).filter(f => f.endsWith(".md"));
@@ -198,15 +205,18 @@ describe.skipIf(!!process.env.CI)("Vector Search", () => {
         const formatted = formatDocForEmbedding(chunk.text, title);
         const result = await llm.embed(formatted, { model: DEFAULT_EMBED_MODEL, isQuery: false });
         if (result?.embedding) {
-          // Convert to Float32Array for sqlite-vec
+          if (vecDim === null) {
+            vecDim = result.embedding.length;
+            store.ensureVecTable(vecDim);
+          }
           const embedding = new Float32Array(result.embedding);
           const now = new Date().toISOString();
           insertEmbedding(db, hash, seq, chunk.pos, embedding, DEFAULT_EMBED_MODEL, now);
         }
       }
     }
-    hasEmbeddings = true;
-  }, 120000); // 2 minute timeout for embedding generation
+    hasEmbeddings = vecDim !== null;
+  }, 180000); // 3 minute timeout for embedding generation (cold-load model + embed)
 
   afterAll(() => {
     store.close();
@@ -411,6 +421,6 @@ describe.skipIf(!!process.env.CI)("Hybrid Search (RRF)", () => {
 
 afterAll(async () => {
   // Ensure native resources are released to avoid ggml-metal asserts on process exit.
-  await disposeDefaultLlamaCpp();
+  // disposeDefaultLlamaCpp removed in cleanup — transformers backend is GC'd
   rmSync(tempDir, { recursive: true, force: true });
 });
