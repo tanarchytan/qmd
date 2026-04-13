@@ -22,6 +22,14 @@
 
 **Working tree clean** as of compaction. All session work committed.
 
+## 🅿 Parked: pluggable storage backend
+
+Surfaced 2026-04-13. Question was: should QMD migrate to Postgres + pgvector now, like Mem0 / Zep / Letta? Honest answer captured in [`docs/notes/pluggable-storage.md`](notes/pluggable-storage.md).
+
+**TL;DR:** not now. SQLite + sqlite-vec is the right call for QMD's local-first positioning (CLI, MCP server, OpenClaw plugin all assume zero ops). The right architecture if/when scale demands it is a pluggable backend layer (`MemoryBackend` interface) so sqlite-vec and pgvector can both ship as first-class options. Triggers that would move this from parked to scheduled: multi-tenant deployment, 1M+ memories per scope, concurrent write contention, or a customer running their own Postgres. None of those are real today.
+
+---
+
 ## 🔬 LME _s n=500 — full distribution diagnosis (2026-04-13 late session)
 
 The earlier "QMD 97.0% R@5" win was on n=100 (first 100 questions) which happened to be all single-session-user — the easy categories. Running on the full n=500 dataset exposed the real picture and a real bug.
