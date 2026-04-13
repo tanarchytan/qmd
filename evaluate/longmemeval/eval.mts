@@ -149,18 +149,56 @@ function computeEM(prediction: string, groundTruth: string): number {
   return tokenize(prediction).join(" ") === tokenize(groundTruth).join(" ") ? 1 : 0;
 }
 
+/**
+ * Substring-Hit — lenient answer-quality check that catches F1's blind
+ * spot on short numeric / name answers. "27" ⊂ "27 years old" → 1.
+ * Uses the same tokenization as F1/EM so "30 days" matches "30 days."
+ * and "Tom" matches "Tom, I met him first".
+ */
+function computeSubstringHit(prediction: string, groundTruth: string): number {
+  const p = tokenize(prediction).join(" ");
+  const t = tokenize(groundTruth).join(" ");
+  if (t.length === 0) return 1;
+  if (p.length === 0) return 0;
+  return p.includes(t) ? 1 : 0;
+}
+
+/** Returns true iff the memory text covers ≥50% of the ground-truth tokens. */
+function memoryHitsTruth(text: string, truthTokens: string[]): boolean {
+  if (truthTokens.length === 0) return true;
+  const memTokens = new Set(tokenize(text));
+  const hits = truthTokens.filter(t => memTokens.has(t)).length;
+  return hits / truthTokens.length >= 0.5;
+}
+
 function computeRecallAtK(memories: { text: string }[], groundTruth: string, k: number): number {
   const truthTokens = tokenize(groundTruth);
   if (truthTokens.length === 0) return 1;
   const topK = memories.slice(0, k);
   for (const m of topK) {
-    const memTokens = new Set(tokenize(m.text));
-    const hits = truthTokens.filter(t => memTokens.has(t)).length;
-    if (hits / truthTokens.length >= 0.5) return 1;
+    if (memoryHitsTruth(m.text, truthTokens)) return 1;
   }
   const allTokens = new Set(topK.flatMap(m => tokenize(m.text)));
   const totalHits = truthTokens.filter(t => allTokens.has(t)).length;
   return totalHits / truthTokens.length >= 0.7 ? 1 : 0;
+}
+
+/**
+ * MRR — Mean Reciprocal Rank over the first top-K memories, using the
+ * same token-overlap relevance definition as R@K. Rewards rank quality:
+ * finding the answer at rank 1 scores 1.0, rank 3 scores 0.33, not in
+ * top-K scores 0.
+ */
+function computeMRR(memories: { text: string }[], groundTruth: string, k: number): number {
+  const truthTokens = tokenize(groundTruth);
+  if (truthTokens.length === 0) return 1;
+  const topK = memories.slice(0, k);
+  for (let i = 0; i < topK.length; i++) {
+    if (memoryHitsTruth(topK[i]!.text, truthTokens)) {
+      return 1 / (i + 1);
+    }
+  }
+  return 0;
 }
 
 /**
@@ -428,8 +466,10 @@ async function main() {
     const gt = String(inst.answer || "");
     const f1 = computeF1(prediction, gt);
     const em = computeEM(prediction, gt);
+    const sh = computeSubstringHit(prediction, gt);
     const r5 = computeRecallAtK(memories, gt, 5);
     const r10 = computeRecallAtK(memories, gt, 10);
+    const mrr = computeMRR(memories, gt, 10);
     const sr5 = computeSessionRecallAtK(memories, inst.answer_session_ids || [], 5);
     const sr10 = computeSessionRecallAtK(memories, inst.answer_session_ids || [], 10);
     const sr15 = computeSessionRecallAtK(memories, inst.answer_session_ids || [], 15);
@@ -444,7 +484,7 @@ async function main() {
       answer: gt,
       prediction: prediction.slice(0, 300),
       memoriesFound: memories.length,
-      f1, em, r5, r10, sr5, sr10, sr15, sr50,
+      f1, em, sh, r5, r10, mrr, sr5, sr10, sr15, sr50,
       searchMs, answerMs,
     });
 
@@ -474,8 +514,10 @@ async function main() {
   const n = allResults.length;
   const avgF1 = allResults.reduce((s, r) => s + r.f1, 0) / n;
   const avgEM = allResults.reduce((s, r) => s + r.em, 0) / n;
+  const avgSH = allResults.reduce((s, r) => s + r.sh, 0) / n;
   const avgR5 = allResults.reduce((s, r) => s + r.r5, 0) / n;
   const avgR10 = allResults.reduce((s, r) => s + r.r10, 0) / n;
+  const avgMRR = allResults.reduce((s, r) => s + r.mrr, 0) / n;
   const avgSR5 = allResults.reduce((s, r) => s + r.sr5, 0) / n;
   const avgSR10 = allResults.reduce((s, r) => s + r.sr10, 0) / n;
   const avgSR15 = allResults.reduce((s, r) => s + r.sr15, 0) / n;
@@ -484,28 +526,28 @@ async function main() {
   console.log(`${"=".repeat(64)}`);
   console.log(`  LONGMEMEVAL FINAL  (ds=${dsName}, n=${n})`);
   console.log(`${"=".repeat(64)}`);
-  console.log(`  APPLES-TO-APPLES — Session-id recall (MemPalace recall_any, primary metric):`);
-  console.log(`    SR@5:  ${(avgSR5 * 100).toFixed(1)}%`);
-  console.log(`    SR@10: ${(avgSR10 * 100).toFixed(1)}%`);
-  console.log(`    SR@15: ${(avgSR15 * 100).toFixed(1)}%`);
-  console.log(`    SR@50: ${(avgSR50 * 100).toFixed(1)}%  ← MemPalace default top_k`);
-  console.log(`  Legacy token-overlap recall (QMD metric):`);
-  console.log(`    R@5:  ${(avgR5 * 100).toFixed(1)}%`);
-  console.log(`    R@10: ${(avgR10 * 100).toFixed(1)}%`);
-  console.log(`  Answer quality:`);
-  console.log(`    F1:   ${(avgF1 * 100).toFixed(1)}%`);
-  console.log(`    EM:   ${(avgEM * 100).toFixed(1)}%`);
+  console.log(`  Retrieval (primary — what actually matters):`);
+  console.log(`    R@5:    ${(avgR5 * 100).toFixed(1)}%   (single-pass)`);
+  console.log(`    R@10:   ${(avgR10 * 100).toFixed(1)}%   (multi-pass)`);
+  console.log(`    MRR:    ${avgMRR.toFixed(3)}    (rank quality, 1/rank of first hit)`);
+  console.log(`  Answer quality (primary):`);
+  console.log(`    F1:     ${(avgF1 * 100).toFixed(1)}%   (token overlap, fuzzy)`);
+  console.log(`    EM:     ${(avgEM * 100).toFixed(1)}%   (exact match, strict)`);
+  console.log(`    SH:     ${(avgSH * 100).toFixed(1)}%   (substring hit — catches short-answer EM false negatives)`);
+  console.log(`  MemPalace-compat (reference only, session-id recall — hits ceiling easily on oracle):`);
+  console.log(`    SR@5 / SR@10 / SR@15 / SR@50 = ${(avgSR5 * 100).toFixed(1)}% / ${(avgSR10 * 100).toFixed(1)}% / ${(avgSR15 * 100).toFixed(1)}% / ${(avgSR50 * 100).toFixed(1)}%`);
   console.log(`  Time: ${elapsed(globalStart)}`);
 
-  console.log(`\n  By question type:`);
+  console.log(`\n  By question type (R@5 / R@10 / F1 / EM / SH):`);
   const types = [...new Set(allResults.map(r => r.question_type))].sort();
   for (const qt of types) {
     const qrs = allResults.filter(r => r.question_type === qt);
     const f1 = qrs.reduce((s, r) => s + r.f1, 0) / qrs.length;
     const em = qrs.reduce((s, r) => s + r.em, 0) / qrs.length;
-    const sr5 = qrs.reduce((s, r) => s + r.sr5, 0) / qrs.length;
-    const sr10 = qrs.reduce((s, r) => s + r.sr10, 0) / qrs.length;
-    console.log(`    ${qt.padEnd(30)} (n=${String(qrs.length).padStart(4)}): SR@5=${(sr5 * 100).toFixed(0).padStart(3)}%  SR@10=${(sr10 * 100).toFixed(0).padStart(3)}%  F1=${(f1 * 100).toFixed(1).padStart(5)}%  EM=${(em * 100).toFixed(1).padStart(5)}%`);
+    const sh = qrs.reduce((s, r) => s + r.sh, 0) / qrs.length;
+    const r5 = qrs.reduce((s, r) => s + r.r5, 0) / qrs.length;
+    const r10 = qrs.reduce((s, r) => s + r.r10, 0) / qrs.length;
+    console.log(`    ${qt.padEnd(24)} (n=${String(qrs.length).padStart(4)}): R@5=${(r5 * 100).toFixed(0).padStart(3)}%  R@10=${(r10 * 100).toFixed(0).padStart(3)}%  F1=${(f1 * 100).toFixed(1).padStart(5)}%  EM=${(em * 100).toFixed(1).padStart(5)}%  SH=${(sh * 100).toFixed(1).padStart(5)}%`);
   }
 
   // Save
@@ -513,7 +555,13 @@ async function main() {
   const outPath = join(QMD_DIR, "evaluate/longmemeval", outName);
   writeFileSync(outPath, JSON.stringify({
     config: { ds: dsName, useLLM, model: useLLM ? LLM_CONFIG[activeLLM].model : "none", llm: activeLLM, limit, questionTypeFilter, ablation },
-    summary: { avgSR5, avgSR10, avgSR15, avgSR50, avgR5, avgR10, avgF1, avgEM, total: n },
+    summary: {
+      // Primary metrics
+      avgR5, avgR10, avgMRR, avgF1, avgEM, avgSH,
+      // MemPalace-compat reference (demoted)
+      avgSR5, avgSR10, avgSR15, avgSR50,
+      total: n,
+    },
     results: allResults,
   }, null, 2));
   console.log(`\n  Saved: ${outPath}`);

@@ -265,6 +265,35 @@ function computeExactMatch(prediction: string, groundTruth: string): number {
 }
 
 /**
+ * Substring-Hit — lenient answer-quality check that catches F1's blind
+ * spot on short numeric / name answers. "27" ⊂ "27 years old" → 1.
+ */
+function computeSubstringHit(prediction: string, groundTruth: string): number {
+  const p = tokenize(prediction).join(" ");
+  const t = tokenize(groundTruth).join(" ");
+  if (t.length === 0) return 1;
+  if (p.length === 0) return 0;
+  return p.includes(t) ? 1 : 0;
+}
+
+/**
+ * MRR — Mean Reciprocal Rank over the top-K memories, using the same
+ * token-overlap relevance definition as R@K. Finds the first memory
+ * that covers ≥50% of the ground-truth tokens and returns 1/rank.
+ */
+function computeMRR(memories: { text: string }[], groundTruth: string, k: number): number {
+  const truthTokens = tokenize(groundTruth);
+  if (truthTokens.length === 0) return 1;
+  const topK = memories.slice(0, k);
+  for (let i = 0; i < topK.length; i++) {
+    const memTokens = new Set(tokenize(topK[i]!.text));
+    const hits = truthTokens.filter(t => memTokens.has(t)).length;
+    if (hits / truthTokens.length >= 0.5) return 1 / (i + 1);
+  }
+  return 0;
+}
+
+/**
  * Collect the set of source IDs present in the top-K memories.
  * Returns both dialog IDs ("D1:3") and session IDs ("D1") extracted from metadata.
  */
@@ -522,8 +551,10 @@ async function main() {
     memoriesFound: number;
     f1: number;
     em: number;
+    sh: number;   // substring-hit (catches F1 short-answer blind spot)
     r5: number;
     r10: number;
+    mrr: number;  // mean reciprocal rank over top-10 token-overlap hits
     sr5: number;
     sr10: number;
     sr15: number;
@@ -763,15 +794,17 @@ async function main() {
       const answer = qa.answer != null ? String(qa.answer) : "undefined";
       const f1 = computeF1(prediction, answer);
       const em = computeExactMatch(prediction, answer);
+      const sh = computeSubstringHit(prediction, answer);
       const r5 = computeRecallAtK(memories, answer, 5);
       const r10 = computeRecallAtK(memories, answer, 10);
-      // Session-level any-match (coarse, MemPalace "session" granularity)
+      const mrr = computeMRR(memories, answer, 10);
+      // Session-level any-match (MemPalace-compat, coarse — kept for reference)
       const evidenceIds = (qa as any).evidence as string[] | undefined;
       const sr5 = computeSessionRecallAtK(memories, evidenceIds, 5);
       const sr10 = computeSessionRecallAtK(memories, evidenceIds, 10);
       const sr15 = computeSessionRecallAtK(memories, evidenceIds, 15);
       const sr50 = computeSessionRecallAtK(memories, evidenceIds, 50);
-      // Dialog-level fractional recall (MemPalace compute_retrieval_recall) — PRIMARY apples-to-apples metric
+      // Dialog-level fractional recall (MemPalace compute_retrieval_recall)
       const dr5 = computeDialogRecallAtK(memories, evidenceIds, 5);
       const dr10 = computeDialogRecallAtK(memories, evidenceIds, 10);
       const dr15 = computeDialogRecallAtK(memories, evidenceIds, 15);
@@ -786,7 +819,7 @@ async function main() {
         prediction: prediction.slice(0, 300),
         memories: memories.map(m => m.text.slice(0, 120)),
         memoriesFound: memories.length,
-        f1, em, r5, r10, sr5, sr10, sr15, sr50, dr5, dr10, dr15, dr50,
+        f1, em, sh, r5, r10, mrr, sr5, sr10, sr15, sr50, dr5, dr10, dr15, dr50,
         category: qa.category,
         categoryName: CATEGORY_NAMES[qa.category] || "unknown",
         searchMs, answerMs,
@@ -831,29 +864,26 @@ async function main() {
   const avgDR10 = allResults.reduce((s, r) => s + r.dr10, 0) / n;
   const avgDR15 = allResults.reduce((s, r) => s + r.dr15, 0) / n;
   const avgDR50 = allResults.reduce((s, r) => s + r.dr50, 0) / n;
+  const avgSH = allResults.reduce((s, r) => s + r.sh, 0) / n;
+  const avgMRR = allResults.reduce((s, r) => s + r.mrr, 0) / n;
   const avgSearch = allResults.reduce((s, r) => s + r.searchMs, 0) / n;
   const avgAnswer = allResults.reduce((s, r) => s + r.answerMs, 0) / n;
   const avgMemories = allResults.reduce((s, r) => s + r.memoriesFound, 0) / n;
 
   console.log(`\n${"=".repeat(64)}`);
-  console.log(`  FINAL RESULTS`);
+  console.log(`  FINAL RESULTS  (n=${n})`);
   console.log(`${"=".repeat(64)}`);
-  console.log(`  Questions:    ${n}`);
-  console.log(`  APPLES-TO-APPLES — MemPalace compute_retrieval_recall (dialog-level fractional):`);
-  console.log(`    DR@5:       ${(avgDR5 * 100).toFixed(1)}%`);
-  console.log(`    DR@10:      ${(avgDR10 * 100).toFixed(1)}%`);
-  console.log(`    DR@15:      ${(avgDR15 * 100).toFixed(1)}%`);
-  console.log(`    DR@50:      ${(avgDR50 * 100).toFixed(1)}%  ← MemPalace default top_k`);
-  console.log(`  Session-level any-match (coarse):`);
-  console.log(`    SR@5:       ${(avgSR5 * 100).toFixed(1)}%`);
-  console.log(`    SR@10:      ${(avgSR10 * 100).toFixed(1)}%`);
-  console.log(`    SR@15:      ${(avgSR15 * 100).toFixed(1)}%`);
-  console.log(`    SR@50:      ${(avgSR50 * 100).toFixed(1)}%`);
-  console.log(`  Legacy token-overlap:`);
-  console.log(`    R@5:        ${(avgR5 * 100).toFixed(1)}%`);
-  console.log(`    R@10:       ${(avgR10 * 100).toFixed(1)}%`);
-  console.log(`  F1:           ${(avgF1 * 100).toFixed(1)}%  (LLM answer quality)`);
-  console.log(`  Exact Match:  ${(avgEM * 100).toFixed(1)}%`);
+  console.log(`  Retrieval (primary):`);
+  console.log(`    R@5:    ${(avgR5 * 100).toFixed(1)}%   (single-pass)`);
+  console.log(`    R@10:   ${(avgR10 * 100).toFixed(1)}%   (multi-pass)`);
+  console.log(`    MRR:    ${avgMRR.toFixed(3)}    (rank quality, 1/rank of first hit)`);
+  console.log(`  Answer quality (primary):`);
+  console.log(`    F1:     ${(avgF1 * 100).toFixed(1)}%   (token overlap, fuzzy)`);
+  console.log(`    EM:     ${(avgEM * 100).toFixed(1)}%   (exact match, strict)`);
+  console.log(`    SH:     ${(avgSH * 100).toFixed(1)}%   (substring hit — catches short-answer EM false negatives)`);
+  console.log(`  MemPalace-compat (reference only, take with salt — SR ceilings easily, DR depends on ground-truth quality):`);
+  console.log(`    DR@5 / DR@10 / DR@15 / DR@50 = ${(avgDR5 * 100).toFixed(1)}% / ${(avgDR10 * 100).toFixed(1)}% / ${(avgDR15 * 100).toFixed(1)}% / ${(avgDR50 * 100).toFixed(1)}%`);
+  console.log(`    SR@5 / SR@10 / SR@15 / SR@50 = ${(avgSR5 * 100).toFixed(1)}% / ${(avgSR10 * 100).toFixed(1)}% / ${(avgSR15 * 100).toFixed(1)}% / ${(avgSR50 * 100).toFixed(1)}%`);
   console.log(`  Avg memories: ${avgMemories.toFixed(1)} per question`);
   console.log(`  Avg search:   ${avgSearch.toFixed(0)}ms`);
   if (useLLM) console.log(`  Avg answer:   ${avgAnswer.toFixed(0)}ms`);
@@ -874,7 +904,8 @@ async function main() {
     const cem = cr.reduce((s, r) => s + r.em, 0) / cr.length;
     const cr5 = cr.reduce((s, r) => s + r.r5, 0) / cr.length;
     const cr10 = cr.reduce((s, r) => s + r.r10, 0) / cr.length;
-    console.log(`    ${(CATEGORY_NAMES[cat] || String(cat)).padEnd(12)} (n=${String(cr.length).padStart(4)}): R@5=${(cr5 * 100).toFixed(0).padStart(3)}%  R@10=${(cr10 * 100).toFixed(0).padStart(3)}%  F1=${(cf1 * 100).toFixed(1).padStart(5)}%  EM=${(cem * 100).toFixed(1).padStart(5)}%`);
+    const csh = cr.reduce((s, r) => s + r.sh, 0) / cr.length;
+    console.log(`    ${(CATEGORY_NAMES[cat] || String(cat)).padEnd(12)} (n=${String(cr.length).padStart(4)}): R@5=${(cr5 * 100).toFixed(0).padStart(3)}%  R@10=${(cr10 * 100).toFixed(0).padStart(3)}%  F1=${(cf1 * 100).toFixed(1).padStart(5)}%  EM=${(cem * 100).toFixed(1).padStart(5)}%  SH=${(csh * 100).toFixed(1).padStart(5)}%`);
   }
 
   if (conversations.length > 1) {
@@ -882,7 +913,9 @@ async function main() {
     for (const cid of [...new Set(allResults.map(r => r.sample_id))]) {
       const cr = allResults.filter(r => r.sample_id === cid);
       const cf1 = cr.reduce((s, r) => s + r.f1, 0) / cr.length;
-      console.log(`    ${cid} (n=${cr.length}): F1=${(cf1 * 100).toFixed(1)}%`);
+      const cr5 = cr.reduce((s, r) => s + r.r5, 0) / cr.length;
+      const cr10 = cr.reduce((s, r) => s + r.r10, 0) / cr.length;
+      console.log(`    ${cid} (n=${cr.length}): R@5=${(cr5 * 100).toFixed(1)}% R@10=${(cr10 * 100).toFixed(1)}% F1=${(cf1 * 100).toFixed(1)}%`);
     }
   }
 
@@ -904,7 +937,15 @@ async function main() {
   const outPath = join(QMD_DIR, "evaluate/locomo", resultsName);
   writeFileSync(outPath, JSON.stringify({
     config: { useLLM, model: useLLM ? LLM_CONFIG[activeLLM].model : "none", llm: activeLLM, limit, convFilter },
-    summary: { avgDR5, avgDR10, avgDR15, avgDR50, avgSR5, avgSR10, avgSR15, avgSR50, avgR5, avgR10, avgF1, avgEM, avgSearch, avgAnswer, avgMemories, total: n },
+    summary: {
+      // Primary metrics (lead with these)
+      avgR5, avgR10, avgMRR, avgF1, avgEM, avgSH,
+      // MemPalace-compat reference (demoted — take with a grain of salt)
+      avgDR5, avgDR10, avgDR15, avgDR50,
+      avgSR5, avgSR10, avgSR15, avgSR50,
+      // Timing
+      avgSearch, avgAnswer, avgMemories, total: n,
+    },
     results: allResults,
   }, null, 2));
   console.log(`\n  Results saved: ${outPath}`);
