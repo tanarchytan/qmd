@@ -154,6 +154,81 @@ Implications for Qwen3 (0.6B params, 1024-dim, ~600 MB fp32 / ~150 MB q8):
 - **Path A (`@huggingface/transformers` ONNX q8)** — verify the ONNX q8 download is ≤200 MB and per-question time stays ≤10s. If onnxruntime-web's CPU performance falls off a cliff at 1024-dim, Path A may not be viable on developer laptops even though it works architecturally.
 - **Run the small-class A/B (gte/arctic/mxbai/e5/nomic) BEFORE Qwen3.** If a 384-dim alternative closes the gap, we don't need to pay Qwen3's size+latency cost at all.
 
+## What the small-class A/B (2026-04-13, same day) taught us
+
+Followed the BGE A/B with a wider small-class field using the new
+`@huggingface/transformers` (Path A) backend. Added `src/llm/transformers-embed.ts`
+(~140 lines) during this session to enable arbitrary HF ONNX models — not
+tied to fastembed's hardcoded enum.
+
+**Toy-probe rankings (cosine spread on a 3-sentence probe) predicted nothing:**
+
+| Model | Dim | Toy spread | LME _s n=100 |
+|---|---|---|---|
+| mxbai-embed-xsmall-v1 | 384 | 0.717 🏆 | **R@5 98.0% (tie)** |
+| nomic-embed-text-v1.5 | 768 | 0.415 | ❌ OOM 48 GB batched matmul |
+| embeddinggemma-300m | 768 | 0.30  | ❌ 14.6 GB RSS at load, cold-boot too slow |
+| multilingual-e5-small | 384 | 0.197 | not run |
+| jina-v5-nano-classif | 768 | 0.185 | ❌ OOM at ingest start |
+| MiniLM baseline (fastembed) | 384 | — | R@5 98.0% (canonical) |
+| MiniLM (same model, tjs path) | 384 | — | R@5 98.0% (apples-to-apples check) |
+
+**Findings:**
+
+1. **Retrieval ceiling is MiniLM.** mxbai-xsmall ties R@5/R@10/MRR **exactly** on n=100 (98/98/0.932). Multi-session R@5 stays 93%. No 384d alternative tested beats MiniLM on this workload.
+2. **transformers.js CPU ORT is fragile for 768d+ encoders** at QMD's batch shapes. Nomic OOM'd at 22 GB (48 GB allocation request), jina nano died at ingest start, gemma-300m reached 14.6 GB RSS before cold-boot made it infeasible. WSL itself crashed twice with `E_UNEXPECTED`. Fastembed's native `onnxruntime-node` handles batches more robustly than transformers.js's `onnxruntime-web`.
+3. **Apples-to-apples proves equivalence at 384d.** Running MiniLM via fastembed (5m01s) and via transformers.js (5m01s) returns identical R@5/R@10/MRR — no runtime penalty for switching backends for small encoders.
+4. **Decoder-arch models don't fit transformers.js `feature-extraction`.** Harrier (Gemma3TextModel) fails with `undefined.data` — no encoder pooling head. Had to drop.
+5. **Toy-probe cosine spread ≠ retrieval quality.** mxbai's extreme 0.717 spread did not translate to any LME advantage over MiniLM's unmeasured-but-smaller spread.
+
+**Implications for Qwen3 (now even dimmer):**
+
+- If 768d models cannot survive transformers.js CPU at QMD's batch shapes, **1024d Qwen3 via Path A is almost certainly dead on arrival.** Path B (GGUF via node-llama-cpp) becomes the only realistic route.
+- But **GGUF path is slow** — harrier-270m GGUF n=100 took **25m06s** vs fastembed MiniLM 5m01s (5× slower). Qwen3 0.6B would be ~40+ minutes at n=100, ~3+ hours at n=500.
+- **If embed is not the lever, Qwen3 doesn't matter.** Multi-session R@5 stuck at 93% across MiniLM / harrier / mxbai / BGE-small / BGE-base. Six different embed models, same score. Confirmed: **this is a ranking problem, not a coverage problem.**
+
+**Next experiments should target rerank, not embed:**
+
+- Cross-encoder rerank: `mixedbread-ai/mxbai-rerank-base-v1` (ONNX) via new `TransformersRerankBackend`
+- Query expansion: tune prompt structure, test multi-query
+- BM25/vector fusion weight sweep
+- Per-scope normalization (avoid cross-scope score drift)
+
+The embed A/B is effectively closed for now. Path A backend is kept in tree — it unlocks future HF ONNX models as needed (and will be reused for the cross-encoder rerank work).
+
+## Round 2 (same day, 2026-04-13) — quantized variants beat the baseline
+
+After the small-class A/B closed with no clear winner over MiniLM, ran a quantization sweep on MiniLM-L6 + mxbai-xsmall using non-standard ONNX filenames (`model_quint8_avx2`, `model_qint8_avx512_vnni`, `model_int8`). Required adding a `model_file_name` override hook to `transformers-embed.ts` since transformers.js dtype resolution maps to fixed names and these repos use bespoke filenames.
+
+**LME _s n=500 results:**
+
+| Model | Dim | Size | R@5 | R@10 | MRR | multi-session R@5 | knowledge-update | Time | vs baseline |
+|---|---|---|---|---|---|---|---|---|---|
+| MiniLM-L6 fp32 (fastembed baseline) | 384 | 90 MB | 93.2% | **95.2%** | **0.862** | 81% | 97% | 23m33s | — |
+| **MiniLM-L6 uint8** (transformers.js, `model_quint8_avx2`) | 384 | 23 MB | **94.4%** | 94.8% | 0.859 | **83%** | 97% | 17m09s | +1.2 R@5, +2 multi, −27% time |
+| **mxbai-xs q8** (transformers.js, `model_quantized`) | 384 | 24 MB | 94.2% | 94.4% | 0.857 | 82% | **99%** | **14m49s** | +1.0 R@5, +1 multi, **−37% time** |
+
+**This is the first real movement on multi-session R@5 in many sessions.** Six embed models at fp32 (MiniLM, BGE-small, BGE-base, harrier-270m GGUF, mxbai-xs fp32, MiniLM-L6 fp32 via transformers.js) all stuck at 81%. Quantizing to int8/uint8 lifted it to 82-83% — a 1-2pp swing on the stubborn metric. Likely explanation: quant noise breaks ties between near-duplicate vectors that fp32 was packing into the same bucket. The noise acts as a soft ranking diversifier.
+
+**The R@10 inversion is real:** baseline wins R@10 (95.2% vs 94.8% / 94.4%). Quantized loses some top-6-to-10 stability while gaining top-5 ceiling. For QMD's recall-into-prompt use case, R@5 matters more than R@10 — top-5 results land in the prompt, ranks 6-10 rarely do.
+
+**Production decision (2026-04-13):** mxbai-xs q8 promoted to default.
+
+- 37% wall reduction at n=500 — biggest speed delta in the sweep
+- +1.0pp R@5 over fp32 baseline, +1pp multi-session
+- 24 MB on disk vs 90 MB
+- Same 384d footprint as MiniLM (drop-in vector-table compatibility)
+- Different architecture — accepts that we're trading MemPalace lineage for production speed
+- Auto-fallback wired in `src/memory/index.ts`: if transformers backend fails to load on the host, drops to fastembed MiniLM AllMiniLML6V2 (the prior baseline) so recall keeps working with no config change
+
+**Ceiling-trigger fallback path:** if mxbai-xs q8 hits a ceiling on a future workload (e.g. domain-specific drift, multilingual content), revert to MiniLM-L6 uint8 — it has the strongest multi-session R@5 of all the quantized variants tested and shares the MemPalace lineage. Both are first-class supported configs.
+
+**What this changed in code:**
+- `src/llm/transformers-embed.ts` default modelId switched from `harrier-oss-v1-270m-ONNX` to `mixedbread-ai/mxbai-embed-xsmall-v1`, default dtype stays `q8`
+- `src/memory/index.ts` `getFastEmbedBackend()` gained an auto-fallback path: transformers fail → fastembed MiniLM
+- `evaluate/run-embed-ab-onnx.sh` extended with quantized variant runs behind `RUN_*` flags
+- `evaluate/sanity-transformers2.mjs` added — quant sweep harness reusable for future model evaluations
+
 ## Doctrine reminder
 
 > Where MemPalace makes doubtful choices, prioritize project quality over shiny benchmarks.

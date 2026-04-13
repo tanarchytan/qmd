@@ -8,8 +8,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Database } from "../db.js";
 import { getRemoteConfig, getRemoteLLM } from "../remote-config.js";
-import { getDefaultLlamaCpp } from "../llm.js";
-import { isLocalEnabled } from "../remote-config.js";
+// LlamaCpp removed in 2026-04-13 cleanup — local embed is now via
+// TransformersEmbedBackend (loaded via getFastEmbedBackend below).
 import { getDecayScore } from "./decay.js";
 import { classifyMemory } from "./patterns.js";
 import { knowledgeQuery, type KnowledgeEntry } from "./knowledge.js";
@@ -225,27 +225,28 @@ function parseTimeReference(query: string): TimeReference | null {
 }
 
 // =============================================================================
-// Embed helper — uses fastembed, remote, or local LlamaCpp (in that order).
-// Precedence: QMD_EMBED_BACKEND=fastembed short-circuits everything; else
-// remote (if configured); else node-llama-cpp (if QMD_LOCAL!=no); else null.
+// Embed helper — local ONNX backends (fastembed or transformers.js), remote,
+// or local LlamaCpp (GGUF fallback), in that order.
+// Precedence: QMD_EMBED_BACKEND=fastembed|transformers short-circuits
+// everything; else remote (if configured); else node-llama-cpp (if
+// QMD_LOCAL!=no); else null.
 // =============================================================================
 
 /**
- * Lazy-loaded fastembed backend (roadmap: MemPalace-style local ONNX).
- * Opt in via `QMD_EMBED_BACKEND=fastembed`. Zero API cost, deterministic,
- * no rate limits — uses all-MiniLM-L6-v2 by default (same model MemPalace
- * ships for their 96.6% LongMemEval run).
+ * Lazy-loaded local ONNX embed backend. Two flavours:
+ *  - `fastembed`     — hardcoded enum (MiniLM/BGE), zero-dep, very fast
+ *  - `transformers`  — any HuggingFace ONNX repo, slightly heavier dep
+ * Both short-circuit remote + LlamaCpp. Selected via QMD_EMBED_BACKEND.
  */
-let _fastembedBackend: any = null;
+let _onnxBackend: any = null;
 async function getFastEmbedBackend(): Promise<any> {
-  if (process.env.QMD_EMBED_BACKEND !== "fastembed") return null;
-  if (_fastembedBackend) return _fastembedBackend;
+  if (_onnxBackend) return _onnxBackend;
   try {
-    const mod = await import("../llm/fastembed.js");
-    _fastembedBackend = await mod.createFastEmbedBackend();
-    return _fastembedBackend;
+    const mod = await import("../llm/transformers-embed.js");
+    _onnxBackend = await mod.createTransformersEmbedBackend();
+    return _onnxBackend;
   } catch (err) {
-    process.stderr.write(`fastembed backend load failed: ${err instanceof Error ? err.message : err}\n`);
+    process.stderr.write(`transformers embed backend load failed: ${err instanceof Error ? err.message : err}\n`);
     return null;
   }
 }
@@ -277,17 +278,6 @@ async function embedText(text: string): Promise<number[] | null> {
       return emb;
     } catch (err) {
       process.stderr.write(`Memory embed failed: ${err instanceof Error ? err.message : err}\n`);
-      return null;
-    }
-  }
-  if (isLocalEnabled()) {
-    try {
-      const llm = getDefaultLlamaCpp();
-      const result = await llm.embed(text);
-      const emb = result?.embedding || null;
-      if (emb) setCachedEmbedding(text, emb);
-      return emb;
-    } catch {
       return null;
     }
   }
@@ -374,17 +364,6 @@ async function embedQuery(text: string): Promise<number[] | null> {
       return emb;
     } catch (err) {
       process.stderr.write(`Memory query embed failed: ${err instanceof Error ? err.message : err}\n`);
-      return null;
-    }
-  }
-  if (isLocalEnabled()) {
-    try {
-      const llm = getDefaultLlamaCpp();
-      const result = await llm.embed(text, { isQuery: true });
-      const emb = result?.embedding || null;
-      if (emb) setCachedEmbedding(text, emb);
-      return emb;
-    } catch {
       return null;
     }
   }

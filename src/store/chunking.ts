@@ -2,8 +2,10 @@
 // Smart Chunking - Break Point Detection
 // =============================================================================
 
-import { getDefaultLlamaCpp } from "../llm.js";
-import { isLocalEnabled } from "../remote-config.js";
+// Tokenizer-aware chunking removed in 2026-04-13 cleanup along with LlamaCpp.
+// Now uses a 3-chars/token heuristic for all chunk sizing — sufficient for
+// vector indexing (chunks rarely hit the embed model's hard token limit and
+// the heuristic is conservative, especially for prose+code mixed content).
 import {
   CHUNK_SIZE_CHARS,
   CHUNK_OVERLAP_CHARS,
@@ -300,48 +302,17 @@ export async function chunkDocumentByTokens(
   const windowChars = windowTokens * avgCharsPerToken;
 
   // Chunk in character space with conservative estimate
-  let charChunks = await chunkDocumentAsync(content, maxChars, overlapChars, windowChars, filepath, chunkStrategy);
+  const charChunks = await chunkDocumentAsync(content, maxChars, overlapChars, windowChars, filepath, chunkStrategy);
 
-  // When local LLM is disabled, use char-based approximation for token counts
-  if (!isLocalEnabled()) {
-    return charChunks.map(chunk => ({
-      text: chunk.text,
-      pos: chunk.pos,
-      tokens: Math.ceil(chunk.text.length / avgCharsPerToken),
-    }));
-  }
-
-  const llm = getDefaultLlamaCpp();
-
-  // Tokenize and split any chunks that still exceed limit
-  const results: { text: string; pos: number; tokens: number }[] = [];
-
-  for (const chunk of charChunks) {
-    // Respect abort signal to avoid runaway tokenization
-    if (signal?.aborted) break;
-
-    const tokens = await llm.tokenize(chunk.text);
-
-    if (tokens.length <= maxTokens) {
-      results.push({ text: chunk.text, pos: chunk.pos, tokens: tokens.length });
-    } else {
-      // Chunk is still too large - split it further
-      const actualCharsPerToken = chunk.text.length / tokens.length;
-      const safeMaxChars = Math.floor(maxTokens * actualCharsPerToken * 0.95); // 5% safety margin
-
-      const subChunks = chunkDocument(chunk.text, safeMaxChars, Math.floor(overlapChars * actualCharsPerToken / 2), Math.floor(windowChars * actualCharsPerToken / 2));
-
-      for (const subChunk of subChunks) {
-        if (signal?.aborted) break;
-        const subTokens = await llm.tokenize(subChunk.text);
-        results.push({
-          text: subChunk.text,
-          pos: chunk.pos + subChunk.pos,
-          tokens: subTokens.length,
-        });
-      }
-    }
-  }
-
-  return results;
+  // Post-cleanup (no LlamaCpp tokenizer): use char-based approximation for
+  // token counts. The chunker already keeps chars below maxChars = maxTokens *
+  // avgCharsPerToken so we never exceed the budget in the common case. If a
+  // pathological chunk still busts maxTokens (e.g. dense Asian text), the
+  // embed model's own tokenizer will simply truncate at its context limit.
+  void signal; // accepted for API compat; no async tokenize loop to abort
+  return charChunks.map(chunk => ({
+    text: chunk.text,
+    pos: chunk.pos,
+    tokens: Math.ceil(chunk.text.length / avgCharsPerToken),
+  }));
 }

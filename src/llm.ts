@@ -1,24 +1,24 @@
 /**
  * llm.ts — Facade for the LLM abstraction layer.
  *
- * Real implementations live under src/llm/:
- *   - loader.ts    lazy node-llama-cpp module loader
- *   - types.ts     LLM + ILLMSession interfaces, default model URIs, format helpers
- *   - pull.ts      HF model-pull utilities
- *   - local.ts     LlamaCpp class + default-singleton session coordination
- *   - remote.ts    RemoteLLM cloud-provider implementation
- *   - session.ts   LLMSessionManager / LLMSession generic session machinery
+ * After the 2026-04-13 cleanup, QMD has exactly two LLM providers:
  *
- * This file is kept for backwards compatibility — every historical
- * `import ... from "./llm.js"` resolves here and forwards to the right
- * submodule. New code should import from the submodules directly.
+ *   - RemoteLLM (src/llm/remote.ts)        — cloud APIs (ZE, Gemini, OpenAI, etc.)
+ *   - TransformersEmbedBackend             — local ONNX embed via @huggingface/transformers
+ *     (src/llm/transformers-embed.ts)
+ *
+ * node-llama-cpp (LlamaCpp) and fastembed-js were removed in the same cleanup —
+ * neither was actually exercised in production (.env had QMD_LOCAL=no, embed
+ * went through fastembed which only loaded a fixed enum of 4 models, rerank +
+ * generate always went through RemoteLLM). The transformers backend now covers
+ * arbitrary HF ONNX embed models with a much smaller dep footprint and zero
+ * cmake build burden.
+ *
+ * Rerank + generate are remote-only. There is no local fallback for them —
+ * if no remote provider is configured, those operations return null/skip.
  */
 
-// Model pull utilities (src/llm/pull.ts)
-export { pullModels, DEFAULT_MODEL_CACHE_DIR } from "./llm/pull.js";
-export type { PullResult } from "./llm/pull.js";
-
-// Shared types, default URIs, and embedding format helpers (src/llm/types.ts)
+// Shared types, default URIs, embedding format helpers (src/llm/types.ts)
 export {
   DEFAULT_EMBED_MODEL,
   DEFAULT_RERANK_MODEL,
@@ -26,8 +26,6 @@ export {
   DEFAULT_EMBED_MODEL_URI,
   DEFAULT_RERANK_MODEL_URI,
   DEFAULT_GENERATE_MODEL_URI,
-  LFM2_GENERATE_MODEL,
-  LFM2_INSTRUCT_MODEL,
   isQwen3EmbeddingModel,
   formatQueryForEmbedding,
   formatDocForEmbedding,
@@ -50,18 +48,11 @@ export type {
   RerankDocument,
 } from "./llm/types.js";
 
-// Local (LlamaCpp) implementation + default-singleton session coordination
-// (src/llm/local.ts)
+// Local embed backend (src/llm/transformers-embed.ts)
 export {
-  LlamaCpp,
-  isLocalEnabled,
-  getDefaultLlamaCpp,
-  setDefaultLlamaCpp,
-  disposeDefaultLlamaCpp,
-  withLLMSession,
-  canUnloadLLM,
-} from "./llm/local.js";
-export type { LlamaCppConfig } from "./llm/local.js";
+  TransformersEmbedBackend,
+  createTransformersEmbedBackend,
+} from "./llm/transformers-embed.js";
 
 // Generic session machinery (src/llm/session.ts)
 export {
@@ -74,3 +65,37 @@ export {
 // Remote (cloud-provider) implementation (src/llm/remote.ts)
 export { RemoteLLM } from "./llm/remote.js";
 export type { OperationProvider, OperationConfig, RemoteLLMConfig } from "./llm/remote.js";
+
+// =============================================================================
+// Default-singleton helpers — kept as no-op stubs for backwards compat.
+// Pre-cleanup, these returned a LlamaCpp instance + managed an idle timer.
+// Post-cleanup, there is no singleton: TransformersEmbedBackend is constructed
+// per-call inside src/memory/index.ts and the document search pipeline routes
+// through RemoteLLM directly. These stubs exist so external callers that still
+// import the symbols compile cleanly.
+// =============================================================================
+
+/** @deprecated LlamaCpp removed; always returns false. */
+export function isLocalEnabled(): boolean { return false; }
+
+/** @deprecated LlamaCpp removed. Throws if called. Use TransformersEmbedBackend or RemoteLLM directly. */
+export function getDefaultLlamaCpp(): never {
+  throw new Error("LlamaCpp removed in 2026-04-13 cleanup. Use TransformersEmbedBackend (local embed) or RemoteLLM (rerank/generate).");
+}
+
+/** @deprecated No-op. */
+export function setDefaultLlamaCpp(_llm: unknown): void { /* no-op */ }
+
+/** @deprecated No-op. */
+export async function disposeDefaultLlamaCpp(): Promise<void> { /* no-op */ }
+
+/** @deprecated Always true (no model to unload). */
+export function canUnloadLLM(): boolean { return true; }
+
+/** @deprecated Stub — sessions are no longer scoped to a singleton. */
+export async function withLLMSession<T>(_opts: unknown, fn: (session: any) => Promise<T>): Promise<T> {
+  return fn(null);
+}
+
+/** @deprecated Type alias kept for backwards compat. Was LlamaCppConfig. */
+export type LlamaCppConfig = Record<string, never>;

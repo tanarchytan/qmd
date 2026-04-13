@@ -9,22 +9,20 @@
 // Default model URIs
 // =============================================================================
 
-// HuggingFace model URIs for node-llama-cpp
-// Format: hf:<user>/<repo>/<file>
-// Override via QMD_EMBED_MODEL env var (e.g. hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf)
-export const DEFAULT_EMBED_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
-export const DEFAULT_RERANK_MODEL = "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf";
-// const DEFAULT_GENERATE_MODEL = "hf:ggml-org/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf";
-export const DEFAULT_GENERATE_MODEL = "hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf";
+// Default local embed model — HuggingFace repo id for @huggingface/transformers
+// (Path A backend in src/llm/transformers-embed.ts). Promoted 2026-04-13 after
+// LME _s n=500 A/B: 94.2% R@5 in 14m49s vs MiniLM fp32 baseline 93.2% / 23m33s.
+// Override via QMD_EMBED_MODEL.
+export const DEFAULT_EMBED_MODEL = "mixedbread-ai/mxbai-embed-xsmall-v1";
 
-// Alternative generation models for query expansion:
-// LiquidAI LFM2 — hybrid architecture optimized for edge/on-device inference.
-// Use these as base for fine-tuning with configs/sft_lfm2.yaml.
-export const LFM2_GENERATE_MODEL = "hf:LiquidAI/LFM2-1.2B-GGUF/LFM2-1.2B-Q4_K_M.gguf";
-export const LFM2_INSTRUCT_MODEL = "hf:LiquidAI/LFM2.5-1.2B-Instruct-GGUF/LFM2.5-1.2B-Instruct-Q4_K_M.gguf";
+// Rerank + generate have no local backend — they require a remote provider
+// (RemoteLLM, configured via QMD_RERANK_PROVIDER / QMD_QUERY_EXPANSION_PROVIDER).
+// These constants are kept only as informational defaults; the actual model
+// routing happens through the remote provider's own model selection.
+export const DEFAULT_RERANK_MODEL = "zerank-1";
+export const DEFAULT_GENERATE_MODEL = "gemini-2.0-flash";
 
-// Legacy *_URI aliases kept for any external consumers that import the
-// original names from "./llm.js".
+// Legacy *_URI aliases kept for backwards compat with any external consumers.
 export const DEFAULT_EMBED_MODEL_URI = DEFAULT_EMBED_MODEL;
 export const DEFAULT_RERANK_MODEL_URI = DEFAULT_RERANK_MODEL;
 export const DEFAULT_GENERATE_MODEL_URI = DEFAULT_GENERATE_MODEL;
@@ -170,7 +168,7 @@ export type LLMSessionOptions = {
 };
 
 /**
- * Abstract LLM interface — implemented by LlamaCpp (local) and RemoteLLM (cloud).
+ * Abstract LLM interface — implemented by RemoteLLM (cloud) and TransformersEmbedBackend (local embed).
  */
 export interface LLM {
   /** Get embeddings for text */

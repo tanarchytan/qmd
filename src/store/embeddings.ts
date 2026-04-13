@@ -6,11 +6,11 @@ import { readFileSync, statSync } from "node:fs";
 import fastGlob from "fast-glob";
 import type { Database } from "../db.js";
 import {
-  LlamaCpp,
-  getDefaultLlamaCpp,
   formatDocForEmbedding,
   withLLMSessionForLlm,
+  createTransformersEmbedBackend,
 } from "../llm.js";
+import type { LLM } from "../llm.js";
 import { getRemoteConfig, getRemoteLLM } from "../remote-config.js";
 import { DEFAULT_EMBED_MODEL, DEFAULT_EMBED_MAX_DOCS_PER_BATCH, DEFAULT_EMBED_MAX_BATCH_BYTES } from "./constants.js";
 import { getRealPath, resolve } from "./path.js";
@@ -375,9 +375,12 @@ export async function generateEmbeddings(
     return { docsProcessed: totalDocs, chunksEmbedded, errors, durationMs: Date.now() - startTime };
   }
 
-  // Local path: use store's LlamaCpp or global singleton, wrapped in a session
-  const llm = store.llm ?? getDefaultLlamaCpp();
-  const embedModelUri = llm.embedModelName;
+  // Local path: use store's LLM override or load the default transformers
+  // embed backend (mxbai-xs q8 by default). Wrapped in a session for the
+  // existing batch + abort plumbing — TransformersEmbedBackend implements
+  // the LLM interface so the session machinery treats it identically.
+  const llm: LLM = store.llm ?? (await createTransformersEmbedBackend());
+  const embedModelUri = (llm as any).embedModelName ?? "local";
 
   const result = await withLLMSessionForLlm(llm, async (session) => {
     let chunksEmbedded = 0;

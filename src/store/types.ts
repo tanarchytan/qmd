@@ -3,7 +3,7 @@
 // =============================================================================
 
 import type { Database } from "../db.js";
-import type { LlamaCpp, ILLMSession } from "../llm.js";
+import type { LLM, ILLMSession } from "../llm.js";
 
 export type { Database } from "../db.js";
 
@@ -155,8 +155,10 @@ export type ChunkStrategy = "auto" | "regex";
 export type Store = {
   db: Database;
   dbPath: string;
-  /** Optional LlamaCpp instance for this store (overrides the global singleton) */
-  llm?: LlamaCpp;
+  /** Optional LLM instance for this store (overrides the per-call default).
+   * Post-cleanup this is typically a RemoteLLM (rerank/generate/embed via cloud)
+   * or a TransformersEmbedBackend wrapped via the LLM interface. */
+  llm?: LLM;
   close: () => void;
   ensureVecTable: (dimensions: number) => void;
 

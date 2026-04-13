@@ -3,11 +3,11 @@
 // =============================================================================
 
 import type { Database } from "../db.js";
-import type { LlamaCpp, RerankDocument, ILLMSession } from "../llm.js";
+import type { LLM, RerankDocument, ILLMSession } from "../llm.js";
 import {
-  getDefaultLlamaCpp,
   formatQueryForEmbedding,
   formatDocForEmbedding,
+  createTransformersEmbedBackend,
 } from "../llm.js";
 import { getRemoteConfig, getRemoteLLM } from "../remote-config.js";
 import {
@@ -353,7 +353,21 @@ export async function searchVec(db: Database, query: string, model: string, limi
 // Embeddings helpers
 // =============================================================================
 
-async function getEmbedding(text: string, model: string, isQuery: boolean, session?: ILLMSession, llmOverride?: LlamaCpp): Promise<number[] | null> {
+// Cached singleton of the local transformers embed backend. Lazy to avoid
+// eager npm dep load when only remote is used.
+let _localEmbed: any = null;
+async function getLocalEmbedBackend(): Promise<any> {
+  if (_localEmbed) return _localEmbed;
+  try {
+    _localEmbed = await createTransformersEmbedBackend();
+    return _localEmbed;
+  } catch (err) {
+    process.stderr.write(`local embed backend load failed: ${err instanceof Error ? err.message : err}\n`);
+    return null;
+  }
+}
+
+async function getEmbedding(text: string, model: string, isQuery: boolean, session?: ILLMSession, llmOverride?: LLM): Promise<number[] | null> {
   const remoteConfig = getRemoteConfig();
   if (remoteConfig?.embed) {
     try {
@@ -365,9 +379,17 @@ async function getEmbedding(text: string, model: string, isQuery: boolean, sessi
     }
   }
   const formattedText = isQuery ? formatQueryForEmbedding(text, model) : formatDocForEmbedding(text, undefined, model);
-  const result = session
-    ? await session.embed(formattedText, { model, isQuery })
-    : await (llmOverride ?? getDefaultLlamaCpp()).embed(formattedText, { model, isQuery });
+  if (session) {
+    const result = await session.embed(formattedText, { model, isQuery });
+    return result?.embedding || null;
+  }
+  if (llmOverride) {
+    const result = await llmOverride.embed(formattedText, { model, isQuery });
+    return result?.embedding || null;
+  }
+  const local = await getLocalEmbedBackend();
+  if (!local) return null;
+  const result = await local.embed(formattedText, { model, isQuery });
   return result?.embedding || null;
 }
 
@@ -411,7 +433,7 @@ export function insertEmbedding(
 // Query expansion
 // =============================================================================
 
-export async function expandQuery(query: string, model: string = DEFAULT_QUERY_MODEL, db: Database, intent?: string, llmOverride?: LlamaCpp): Promise<ExpandedQuery[]> {
+export async function expandQuery(query: string, model: string = DEFAULT_QUERY_MODEL, db: Database, intent?: string, llmOverride?: LLM): Promise<ExpandedQuery[]> {
   const cacheKey = getCacheKey("expandQuery", { query, model, ...(intent && { intent }) });
   const cached = getCachedResult(db, cacheKey);
   if (cached) {
@@ -444,25 +466,31 @@ export async function expandQuery(query: string, model: string = DEFAULT_QUERY_M
     }
   }
 
-  const llm = llmOverride ?? getDefaultLlamaCpp();
-  const results = await llm.expandQuery(query, { intent });
-
-  const expanded: ExpandedQuery[] = results
-    .filter(r => r.text !== query)
-    .map(r => ({ type: r.type, query: r.text }));
-
-  if (expanded.length > 0) {
-    setCachedResult(db, cacheKey, JSON.stringify(expanded));
+  // No remote query expansion configured, no local backend for expansion
+  // (transformers.js does not do generation). Skip — caller falls back to
+  // the raw query, which is the same behaviour as a one-shot non-expanded run.
+  if (llmOverride) {
+    try {
+      const results = await llmOverride.expandQuery(query, { context: intent });
+      const expanded: ExpandedQuery[] = results
+        .filter(r => r.text !== query)
+        .map(r => ({ type: r.type, query: r.text }));
+      if (expanded.length > 0) {
+        setCachedResult(db, cacheKey, JSON.stringify(expanded));
+      }
+      return expanded;
+    } catch {
+      // fall through
+    }
   }
-
-  return expanded;
+  return [];
 }
 
 // =============================================================================
 // Reranking
 // =============================================================================
 
-export async function rerank(query: string, documents: { file: string; text: string }[], model?: string, db?: Database, intent?: string, llmOverride?: LlamaCpp): Promise<{ file: string; score: number }[]> {
+export async function rerank(query: string, documents: { file: string; text: string }[], model?: string, db?: Database, intent?: string, llmOverride?: LLM): Promise<{ file: string; score: number }[]> {
   const rerankQuery = intent ? `${intent}\n\n${query}` : query;
   const effectiveModel = model ?? DEFAULT_RERANK_MODEL;
 
@@ -500,25 +528,31 @@ export async function rerank(query: string, documents: { file: string; text: str
     }
   }
 
-  if (uncachedDocsByChunk.size > 0) {
-    const llm = llmOverride ?? getDefaultLlamaCpp();
+  if (uncachedDocsByChunk.size > 0 && llmOverride) {
     const uncachedDocs = [...uncachedDocsByChunk.values()];
-    const rerankResult = await llm.rerank(rerankQuery, uncachedDocs, { model: effectiveModel });
-
-    if (db) {
-      const textByFile = new Map(uncachedDocs.map(d => [d.file, d.text]));
-      for (const result of rerankResult.results) {
-        const chunk = textByFile.get(result.file) || "";
-        const cacheKey = getCacheKey("rerank", { query: rerankQuery, model: effectiveModel, chunk });
-        setCachedResult(db, cacheKey, result.score.toString());
-        cachedResults.set(chunk, result.score);
+    try {
+      const rerankResult = await llmOverride.rerank(rerankQuery, uncachedDocs, { model: effectiveModel });
+      if (db) {
+        const textByFile = new Map(uncachedDocs.map(d => [d.file, d.text]));
+        for (const result of rerankResult.results) {
+          const chunk = textByFile.get(result.file) || "";
+          const cacheKey = getCacheKey("rerank", { query: rerankQuery, model: effectiveModel, chunk });
+          setCachedResult(db, cacheKey, result.score.toString());
+          cachedResults.set(chunk, result.score);
+        }
+      } else {
+        for (const result of rerankResult.results) {
+          cachedResults.set(result.file, result.score);
+        }
       }
-    } else {
-      for (const result of rerankResult.results) {
-        cachedResults.set(result.file, result.score);
-      }
+    } catch (err) {
+      process.stderr.write(`llmOverride rerank failed: ${err instanceof Error ? err.message : err}\n`);
     }
   }
+  // If no remote rerank and no llmOverride, the uncached docs simply get a
+  // score of 0 and fall to the bottom of the list — but the cached/already-
+  // ranked docs (from FTS+vector RRF) still come through, so search continues
+  // to work. This is the post-cleanup graceful-degradation path.
 
   return documents
     .map(doc => ({ file: doc.file, score: cachedResults.get(doc.text) || 0 }))
@@ -783,10 +817,12 @@ export interface StructuredSearchOptions {
 }
 
 /**
- * Get the LlamaCpp instance for a store.
+ * Get the LLM instance for a store, if any. Post-cleanup this is typically a
+ * RemoteLLM (cloud rerank/generate) or a TransformersEmbedBackend (local embed).
+ * May return null — callers must handle no-LLM gracefully (skip rerank/expand).
  */
-function getLlm(store: Store): LlamaCpp {
-  return store.llm ?? getDefaultLlamaCpp();
+function getLlm(store: Store): LLM | null {
+  return store.llm ?? null;
 }
 
 // =============================================================================
@@ -879,9 +915,16 @@ export async function hybridQuery(
       const textsToEmbed = vecQueries.map(q => q.text);
       embeddings = await remote.embedBatch(textsToEmbed);
     } else {
-      const llm = getLlm(store);
-      const textsToEmbed = vecQueries.map(q => formatQueryForEmbedding(q.text, llm.embedModelName));
-      embeddings = await llm.embedBatch(textsToEmbed);
+      // Local path: use store-provided LLM if any, otherwise lazy-load
+      // the default transformers embed backend.
+      const localLlm = getLlm(store) ?? (await getLocalEmbedBackend());
+      if (!localLlm) {
+        embeddings = vecQueries.map(() => null);
+      } else {
+        const modelName = (localLlm as any).embedModelName ?? "local";
+        const textsToEmbed = vecQueries.map(q => formatQueryForEmbedding(q.text, modelName));
+        embeddings = await localLlm.embedBatch(textsToEmbed);
+      }
     }
     hooks?.onEmbedDone?.(Date.now() - embedStart);
 
@@ -1209,9 +1252,14 @@ export async function structuredSearch(
         const textsToEmbed = vecSearches.map(s => s.query);
         embeddings = await remote.embedBatch(textsToEmbed);
       } else {
-        const llm = getLlm(store);
-        const textsToEmbed = vecSearches.map(s => formatQueryForEmbedding(s.query, llm.embedModelName));
-        embeddings = await llm.embedBatch(textsToEmbed);
+        const localLlm = getLlm(store) ?? (await getLocalEmbedBackend());
+        if (!localLlm) {
+          embeddings = vecSearches.map(() => null);
+        } else {
+          const modelName = (localLlm as any).embedModelName ?? "local";
+          const textsToEmbed = vecSearches.map(s => formatQueryForEmbedding(s.query, modelName));
+          embeddings = await localLlm.embedBatch(textsToEmbed);
+        }
       }
       hooks?.onEmbedDone?.(Date.now() - embedStart);
 

@@ -64,10 +64,8 @@ import {
   type EmbedResult,
   type ChunkStrategy,
 } from "./store.js";
-import {
-  LlamaCpp,
-} from "./llm.js";
-import { isLocalEnabled } from "./remote-config.js";
+// LlamaCpp + isLocalEnabled removed in 2026-04-13 cleanup.
+// Local embed now via TransformersEmbedBackend, lazy-loaded by store/embeddings.ts.
 import {
   setConfigSource,
   loadConfig,
@@ -366,19 +364,9 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
   }
   // else: DB-only mode — no external config, use existing store_collections
 
-  // Create a per-store LlamaCpp instance — lazy-loads models on first use,
-  // auto-unloads after 5 min inactivity to free VRAM.
-  // Skipped when QMD_LOCAL=no (remote-only mode).
-  if (isLocalEnabled()) {
-    const llm = new LlamaCpp({
-      embedModel: config?.models?.embed,
-      generateModel: config?.models?.generate,
-      rerankModel: config?.models?.rerank,
-      inactivityTimeoutMs: 5 * 60 * 1000,
-      disposeModelsOnInactivity: true,
-    });
-    internal.llm = llm;
-  }
+  // No per-store LLM instantiation post-cleanup. Local embed loads on first
+  // use inside store/embeddings.ts via createTransformersEmbedBackend(); rerank
+  // and generate route through RemoteLLM (configured via QMD_*_PROVIDER env).
 
   const store: QMDStore = {
     internal,

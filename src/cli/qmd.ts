@@ -80,7 +80,7 @@ import {
   type ReindexResult,
   type ChunkStrategy,
 } from "../store.js";
-import { disposeDefaultLlamaCpp, getDefaultLlamaCpp, setDefaultLlamaCpp, LlamaCpp, pullModels, DEFAULT_EMBED_MODEL_URI, DEFAULT_GENERATE_MODEL_URI, DEFAULT_RERANK_MODEL_URI, DEFAULT_MODEL_CACHE_DIR } from "../llm.js";
+import { disposeDefaultLlamaCpp, DEFAULT_EMBED_MODEL_URI, DEFAULT_GENERATE_MODEL_URI, DEFAULT_RERANK_MODEL_URI } from "../llm.js";
 import {
   formatSearchResults,
   formatDocuments,
@@ -123,13 +123,8 @@ function getStore(): ReturnType<typeof createStore> {
     try {
       const config = loadConfig();
       syncConfigToDb(store.db, config);
-      if (config.models && isLocalEnabled()) {
-        setDefaultLlamaCpp(new LlamaCpp({
-          embedModel: config.models.embed,
-          generateModel: config.models.generate,
-          rerankModel: config.models.rerank,
-        }));
-      }
+      // LlamaCpp removed — config.models.embed/generate/rerank now informational
+      // only. Local embed model is selected via QMD_EMBED_MODEL env var.
     } catch {
       // Config may not exist yet — that's fine, DB works without it
     }
@@ -424,17 +419,13 @@ async function showStatus(): Promise<void> {
     console.log(`\n${c.dim}No collections. Run 'qmd collection add .' to index markdown files.${c.reset}`);
   }
 
-  // Models / Providers
-  if (isLocalEnabled()) {
-    // hf:org/repo/file.gguf → https://huggingface.co/org/repo
-    const hfLink = (uri: string) => {
-      const match = uri.match(/^hf:([^/]+\/[^/]+)\//);
-      return match ? `https://huggingface.co/${match[1]}` : uri;
-    };
-    console.log(`\n${c.bold}Models${c.reset}`);
-    console.log(`  Embedding:   ${hfLink(DEFAULT_EMBED_MODEL_URI)}`);
-    console.log(`  Reranking:   ${hfLink(DEFAULT_RERANK_MODEL_URI)}`);
-    console.log(`  Generation:  ${hfLink(DEFAULT_GENERATE_MODEL_URI)}`);
+  // Models — local embed via @huggingface/transformers (TransformersEmbedBackend).
+  // Rerank/generate are remote-only post-cleanup.
+  console.log(`\n${c.bold}Local Embed${c.reset}`);
+  console.log(`  Model:       ${process.env.QMD_EMBED_MODEL ?? DEFAULT_EMBED_MODEL_URI}`);
+  console.log(`  Dtype:       ${process.env.QMD_EMBED_DTYPE ?? "q8"}`);
+  if (process.env.QMD_EMBED_FILE) {
+    console.log(`  File:        ${process.env.QMD_EMBED_FILE}`);
   }
 
   // Show remote providers when configured (always, not just when local is off)
@@ -448,39 +439,8 @@ async function showStatus(): Promise<void> {
     }
   }
 
-  // Device / GPU info — skip when local is disabled
-  if (isLocalEnabled()) {
-    try {
-      const llm = getDefaultLlamaCpp();
-      const device = await llm.getDeviceInfo();
-      console.log(`\n${c.bold}Device${c.reset}`);
-      if (device.gpu) {
-        console.log(`  GPU:      ${c.green}${device.gpu}${c.reset} (offloading: ${device.gpuOffloading ? 'yes' : 'no'})`);
-        if (device.gpuDevices.length > 0) {
-          const counts = new Map<string, number>();
-          for (const name of device.gpuDevices) {
-            counts.set(name, (counts.get(name) || 0) + 1);
-          }
-          const deviceStr = Array.from(counts.entries())
-            .map(([name, count]) => count > 1 ? `${count}× ${name}` : name)
-            .join(', ');
-          console.log(`  Devices:  ${deviceStr}`);
-        }
-        if (device.vram) {
-          console.log(`  VRAM:     ${formatBytes(device.vram.free)} free / ${formatBytes(device.vram.total)} total`);
-        }
-      } else {
-        console.log(`  GPU:      ${c.yellow}none${c.reset} (running on CPU — models will be slow)`);
-        console.log(`  ${c.dim}Tip: Install CUDA, Vulkan, or Metal support for GPU acceleration.${c.reset}`);
-      }
-      console.log(`  CPU:      ${device.cpuCores} math cores`);
-    } catch {
-      // Don't fail status if LLM init fails
-    }
-  } else {
-    console.log(`\n${c.bold}Device${c.reset}`);
-    console.log(`  Local LLM: ${c.dim}disabled${c.reset} (QMD_LOCAL=no)`);
-  }
+  // GPU/device probing removed with LlamaCpp — transformers.js manages its
+  // own runtime selection (onnxruntime-node CPU by default).
 
   // Tips section
   const tips: string[] = [];
@@ -3041,22 +3001,12 @@ if (isMain) {
       break;
 
     case "pull": {
-      const refresh = cli.values.refresh === undefined ? false : Boolean(cli.values.refresh);
-      const models = [
-        DEFAULT_EMBED_MODEL_URI,
-        DEFAULT_GENERATE_MODEL_URI,
-        DEFAULT_RERANK_MODEL_URI,
-      ];
-      console.log(`${c.bold}Pulling models${c.reset}`);
-      const results = await pullModels(models, {
-        refresh,
-        cacheDir: DEFAULT_MODEL_CACHE_DIR,
-      });
-      for (const result of results) {
-        const size = formatBytes(result.sizeBytes);
-        const note = result.refreshed ? "refreshed" : "cached/checked";
-        console.log(`- ${result.model} -> ${result.path} (${size}, ${note})`);
-      }
+      // Model pulling removed with LlamaCpp/node-llama-cpp. Local embed via
+      // @huggingface/transformers downloads on first use into ~/.cache/qmd/transformers/.
+      console.log(`${c.bold}qmd pull is deprecated${c.reset}`);
+      console.log(`Local embed via @huggingface/transformers downloads on first use.`);
+      console.log(`Default model: ${DEFAULT_EMBED_MODEL_URI}`);
+      console.log(`Override via QMD_EMBED_MODEL / QMD_EMBED_DTYPE / QMD_EMBED_FILE.`);
       break;
     }
 
