@@ -40,16 +40,26 @@ const embedders = new Map<string, Promise<FastEmbedBackend>>();
  * added when needed.
  */
 function resolveModelEnum(modelName: string, EmbeddingModel: any): unknown {
-  const normalized = modelName.toLowerCase();
-  if (normalized.includes("minilm") || normalized === "default" || normalized === "all-minilm-l6-v2" || normalized === "fast-all-minilm-l6-v2") {
+  // Strip non-alphanumerics so "BGE-Small-EN-v1.5", "BGESmallENV15",
+  // "bge_small_en_v15", and "fast-bge-small-en-v1.5" all collapse to
+  // the same canonical key.
+  const canon = modelName.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  if (canon.includes("minilm") || canon === "default") {
     return EmbeddingModel.AllMiniLML6V2;
   }
-  if (normalized.includes("bge-small-en-v1.5")) return EmbeddingModel.BGESmallENV15;
-  if (normalized.includes("bge-base-en-v1.5")) return EmbeddingModel.BGEBaseENV15;
-  if (normalized.includes("bge-small-en")) return EmbeddingModel.BGESmallEN;
-  if (normalized.includes("bge-base-en")) return EmbeddingModel.BGEBaseEN;
+  // BGE v1.5 variants (canonical: "bgesmallenv15", "bgebaseenv15")
+  if (canon === "bgesmallenv15" || canon.includes("bgesmallenv15")) return EmbeddingModel.BGESmallENV15;
+  if (canon === "bgebaseenv15"  || canon.includes("bgebaseenv15"))  return EmbeddingModel.BGEBaseENV15;
+  // BGE non-v1.5 variants
+  if (canon === "bgesmallen" || canon.includes("bgesmallen")) return EmbeddingModel.BGESmallEN;
+  if (canon === "bgebaseen"  || canon.includes("bgebaseen"))  return EmbeddingModel.BGEBaseEN;
+  // Multilingual E5 large
+  if (canon.includes("mle5") || canon.includes("multilinguale5") || canon.includes("e5large")) {
+    return EmbeddingModel.MLE5Large;
+  }
   throw new Error(
-    `Unknown fastembed model "${modelName}". Supported: AllMiniLML6V2 (default), BGESmallENV15, BGEBaseENV15, BGESmallEN, BGEBaseEN.`
+    `Unknown fastembed model "${modelName}". Supported: AllMiniLML6V2, BGESmallENV15, BGEBaseENV15, BGESmallEN, BGEBaseEN, MLE5Large.`
   );
 }
 
