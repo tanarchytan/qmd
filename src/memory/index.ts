@@ -916,9 +916,26 @@ export async function memoryRecall(
   const queryEmbedding = await embeddingPromise;
   if (queryEmbedding) {
     try {
+      // ── k-multiplier for scope-filter overshoot ─────────────────────
+      //
+      // The vec0 KNN query has no scope filter — it returns the K most
+      // similar memories across the ENTIRE index. We then drop anything
+      // outside the caller's scope inside addResult(). On a shared-DB
+      // benchmark setup like LME _s (500 scopes × ~50 memories =
+      // 25,000 total in one table) the K nearest neighbors are spread
+      // across all scopes; only ~K/scopes hits land in the right one.
+      // K = limit*3 = 150 then degrades to mem≈1-5 per question.
+      //
+      // Override the multiplier with QMD_VEC_K_MULTIPLIER. The proper
+      // fix is a partition-key vec table (vec0 supports it) so the
+      // index only walks the current scope — that's a separate commit
+      // because it requires a schema migration.
+      const kMultiplier = Number(process.env.QMD_VEC_K_MULTIPLIER ?? "20");
+      const vecK = Math.max(limit * 3, limit * kMultiplier);
+
       const vecResults = db.prepare(
         `SELECT id, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?`
-      ).all(new Float32Array(queryEmbedding), limit * 3) as { id: string; distance: number }[];
+      ).all(new Float32Array(queryEmbedding), vecK) as { id: string; distance: number }[];
 
       // Adaptive vector acceptance — pickVectorMatches handles the
       // floor calculation. See its docstring for the full rationale.
