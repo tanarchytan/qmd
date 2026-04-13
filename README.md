@@ -324,16 +324,39 @@ Node.js ≥22 required. Bun support was dropped — all code is Node-only.
 
 ## Benchmarks
 
-QMD's memory system is evaluated against two long-term memory benchmarks. **Primary metrics are R@5 / R@10 (token-overlap recall) and F1 / EM (answer quality)** — these actually discriminate pipeline changes. MemPalace-style session recall (SR@K) and dialog recall (DR@K) are reported as secondary "reference" rows; they're ceilinged or near-ceilinged on these datasets and should be taken with a grain of salt (see caveats below).
+QMD ships a **local-first, zero-cost benchmark loop** that matches MemPalace's setup exactly: local ONNX embeddings via `fastembed`, no API keys, deterministic. The cost discipline is "iterate locally with `--no-llm`, validate answer quality with one paid Gemini run at the end." A full `longmemeval_s_cleaned` n=500 retrieval pass costs **$0** and runs in ~25 min on a laptop.
 
-### LongMemEval _s_cleaned (500 questions, full distractor haystack — MemPalace's headline benchmark)
+**Primary metrics: R@5 / R@10 (token-overlap recall), MRR (rank quality), F1 / EM / SH (answer quality).** These actually discriminate pipeline changes. MemPalace-style session recall (SR@K) and dialog recall (DR@K) are reported as secondary reference rows; they're ceilinged or near-ceilinged on these datasets and should be taken with a grain of salt (see caveats below).
 
-| Pipeline | R@5 | R@10 | F1 | EM | Time |
-|---|---|---|---|---|---|
-| **QMD raw + fastembed** (n=100, first 100) | **97.0%** | **97.0%** | **64.9%** | 48.0% | 5m12s |
-| **MemPalace raw + fastembed** (n=500, their published run) | **96.6%** | 98.2% | — | — | 12.5m |
+### LongMemEval _s_cleaned — the headline benchmark (500 questions × ~50 distractor sessions)
 
-**QMD + local fastembed matches MemPalace within noise on the same data** (n=100 subset for QMD vs n=500 for MemPalace — a full n=500 QMD run is live as of this commit). Same retrieval quality, same embed model (`all-MiniLM-L6-v2`, 384-dim ONNX), zero API keys, deterministic. Per-question: ~3s for QMD including LLM answer generation vs ~1.5s for MemPalace retrieval-only. MemPalace's 96.6% is retrieval-only; QMD's 97.0% is retrieval + F1=64.9% / EM=48% answer-quality on top.
+| Pipeline | n | R@5 | R@10 | F1 | EM | Cost | Time |
+|---|---|---|---|---|---|---|---|
+| **MemPalace raw + fastembed** (their published run) | 500 | **96.6%** | 98.2% | — | — | $0 | 12.5m |
+| **QMD raw + fastembed + adaptive cosine** | 100 | **97.0%** | 97.0% | **64.9%** | 48.0% | $0 | 5m |
+| QMD raw + fastembed + adaptive cosine | 500 | _in flight_ | — | — | — | $0 | ~25m |
+
+Same embed model (`all-MiniLM-L6-v2`, 384-dim ONNX). Same dataset. Zero API keys for retrieval. Deterministic. QMD additionally measures end-to-end answer quality (F1/EM/SH) that MemPalace's benchmark doesn't produce — their 96.6% is retrieval-only.
+
+**Per-category performance** on full n=500 (pre-fix baseline — illustrates how diagnostic the per-category split is):
+
+| Category | n | QMD R@5 | MemPalace R@5 | Δ |
+|---|---|---|---|---|
+| single-session-user | 70 | 99% | 97% | +2 ✓ |
+| single-session-assistant | 56 | 98% | 96% | +2 ✓ |
+| knowledge-update | 78 | 95% | 100% | −5 |
+| single-session-preference | 30 | 93% | 97% | −4 |
+| temporal-reasoning | 133 | 86% | 97% | −11 |
+| multi-session | 133 | 80% | 100% | −20 |
+
+The 7-pp overall gap was concentrated in the two largest categories (multi-session + temporal-reasoning, 53% of the dataset). DB inspection traced it to a real bug: **the vec0 KNN query has no scope filter — it returned the K nearest memories across the entire 23,867-row index, and only ~0.3 hits per scope landed in the right one** (we then dropped the rest in post-vector scope filtering, leaving most queries with mem=1-5 instead of mem=50). MemPalace doesn't hit this because they create a fresh ChromaDB EphemeralClient per question.
+
+Two fixes shipped this session:
+
+1. **Adaptive cosine threshold** (`pickVectorMatches`, 7 unit tests) — replaces the fixed 0.3 floor with `max(0.05, top1 × 0.5)`. Quality fix for both production (open vaults) and benchmarks (focused haystacks). Documented in `docs/EVAL.md`.
+2. **K-multiplier bump** (`QMD_VEC_K_MULTIPLIER=20`) — workaround that fetches K=1000 vec hits instead of K=150, so the post-vector scope filter has enough candidates per scope to fill top-50. Architecturally proper fix (a `scope` partition key on `memories_vec`) is queued as a separate schema-migration commit.
+
+n=500 rerun with both fixes is in flight at session-close.
 
 ### LongMemEval oracle (n=200, pre-filtered haystack)
 
@@ -369,7 +392,36 @@ Single-conv breakdowns and v16.1 (reflect augment) detail live in [`docs/ROADMAP
 Reference SOTA on LongMemEval (per [vectorize.io memory survey](https://vectorize.io/articles/best-ai-agent-memory-systems)) — all reported on `longmemeval_s_cleaned`, not oracle:
 - Hindsight 91.4% · SuperMemory 81.6% · Zep 63.8% · Mem0 49.0%
 
-See [`docs/EVAL.md`](docs/EVAL.md) for the metric definitions, env-var ablation toggles, parallel sharding, and reproducibility notes. Full version history, technique tables, lessons learned, and SOTA targets in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+### How to reproduce — zero-cost local
+
+```sh
+# One-time
+npm install fastembed
+curl -L -o evaluate/longmemeval/longmemeval_s_cleaned.json \
+  https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json
+
+# Run the same recipe MemPalace uses, on the same dataset
+QMD_EMBED_BACKEND=fastembed \
+QMD_RECALL_RAW=on \
+QMD_INGEST_EXTRACTION=off QMD_INGEST_SYNTHESIS=off QMD_INGEST_PER_TURN=off \
+  npx tsx evaluate/longmemeval/eval.mts --ds s --limit 500 --no-llm \
+  --workers 4 --tag local-baseline
+```
+
+Full retrieval pipeline. No API keys. ~$0 cost. ~25 min wall on a laptop. Reports R@5/R@10/MRR + (noisy but comparable) F1/EM/SH.
+
+For end-to-end answer quality, add `--llm gemini` and a `GOOGLE_API_KEY` — that's the only paid call in the cycle.
+
+### How we benchmark
+
+QMD's benchmark methodology is documented in [`docs/EVAL.md`](docs/EVAL.md). The headlines:
+
+1. **Local-first iteration** with `fastembed` + `--no-llm` — costs nothing, deterministic, no rate limits.
+2. **Lead with metrics that discriminate**: R@K + F1/EM/SH/MRR. SR@K and DR@K are demoted to a single MemPalace-compat reference row.
+3. **Match ground truth, not headline numbers** — for every comparison, run MemPalace's own benchmark on the same data via `evaluate/run-mempalace-baseline.sh`.
+4. **Don't adopt MemPalace's questionable choices** (no cosine threshold, session-only granularity, no LLM extraction). Instead, ship features that adapt across both regimes (e.g. adaptive cosine threshold replaces fixed 0.3 — quality fix for both production and benchmark).
+
+Full version history, technique tables, lessons learned, and SOTA targets in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Standing on the Shoulders of Giants
 

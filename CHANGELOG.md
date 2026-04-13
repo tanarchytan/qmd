@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### Vector retrieval — adaptive threshold + scope-aware K (2026-04-13 late session)
+
+The LME _s n=500 baseline exposed two related retrieval bugs. Both
+shipped as fixes; one as a quality improvement, one as an acknowledged
+workaround pending a schema migration.
+
+**Bug 1 — fixed 0.3 cosine threshold dropped legitimate matches in
+focused haystacks.** Adaptive replacement in `pickVectorMatches`
+(`src/memory/index.ts`):
+
+  floor = max(absFloor=0.05, top1 × relRatio=0.5)
+  accept r if r.similarity ≥ floor; minKeep=5 safety net
+
+This is a quality fix for both regimes — open vault (top1=0.85
+→ floor 0.425, long tail correctly pruned) and focused haystack
+(top1=0.32 → floor 0.16, low-cosine matches survive). 7 unit tests
+in `test/pick-vector-matches.test.ts`. Override via
+`QMD_VEC_MIN_SIM=adaptive|0|<number>`.
+
+**Bug 2 — `memories_vec` (vec0) has no scope filter.** The KNN query
+returned the K=150 most similar memories across the entire 23,867-row
+index. After post-vector scope filtering inside addResult(), most
+queries had only 1-5 memories left. Diagnosed via DB inspection: 500
+distinct scopes × ~48 memories each = correct ingest, but K=150
+across 500 scopes ≈ 0.3 hits per scope on average.
+
+Quick fix: bump K via `QMD_VEC_K_MULTIPLIER` (default 20) so vecK =
+max(limit*3, limit*20) = 1000. Fetches enough overshoot that the
+post-vector scope filter has full top-50 candidates for most queries.
+Workaround, not the proper fix — linear scan cost grows with K.
+
+**Proper fix (queued, separate commit, schema migration):** add
+`scope TEXT PARTITION KEY` to memories_vec so sqlite-vec walks only
+the current scope's slice of the index. Removes the K-multiplier
+hack and matches MemPalace's per-EphemeralClient isolation
+architecturally.
+
 ### LongMemEval _s head-to-head with MemPalace (2026-04-13)
 
 Running QMD against the full `longmemeval_s_cleaned` dataset (500

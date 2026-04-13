@@ -22,6 +22,84 @@
 
 **Working tree clean** as of compaction. All session work committed.
 
+## 🔬 LME _s n=500 — full distribution diagnosis (2026-04-13 late session)
+
+The earlier "QMD 97.0% R@5" win was on n=100 (first 100 questions) which happened to be all single-session-user — the easy categories. Running on the full n=500 dataset exposed the real picture and a real bug.
+
+### The n=500 baseline (broken — pre-fix)
+
+| Pipeline | n | R@5 | R@10 | MRR | Time |
+|---|---|---|---|---|---|
+| MemPalace raw + fastembed | 500 | 96.6% | 98.2% | — | 12.5 min |
+| **QMD raw + fastembed (broken)** | **500** | **89.4%** | **89.4%** | **0.838** | 22.7 min |
+
+7-pp gap. Per-category breakdown showed it concentrated in two specific types:
+
+| Category | n | QMD R@5 | MemPalace R@5 | Δ |
+|---|---|---|---|---|
+| single-session-user | 70 | 99% | 97% | +2 ✓ |
+| single-session-assistant | 56 | 98% | 96% | +2 ✓ |
+| knowledge-update | 78 | 95% | 100% | −5 |
+| single-session-preference | 30 | 93% | 97% | −4 |
+| **temporal-reasoning** | 133 | **86%** | 97% | **−11** |
+| **multi-session** | 133 | **80%** | 100% | **−20** |
+
+Multi-session + temporal = 53% of the dataset and the source of nearly all the gap.
+
+### Root cause — vec0 KNN has no scope filter
+
+DB inspection (`evaluate/inspect-lme-db.mjs`):
+
+```
+total memories: 23,867
+distinct scopes: 500
+~48 memories per scope (matches MemPalace's "53 sessions per question")
+```
+
+So ingest was correct: ~50 memories per question scope. But the eval logs showed `mem=1..5` per query — only 1-5 memories making it through retrieval per question.
+
+The bug: **`memories_vec` (sqlite-vec vec0 table) has no scope column.** The KNN query returns the K most similar memories across the **entire 23,867-row index**. We then drop everything outside the caller's scope inside `addResult()`. With K = `limit*3 = 150` spread across 500 scopes, each scope contributes ~0.3 hits on average — explains the `mem=1..5` directly.
+
+MemPalace doesn't have this problem because they create a fresh `ChromaDB.EphemeralClient()` per question with only that scope's memories ingested. Per-scope isolation is implicit.
+
+### Two fixes shipped (and why they're complementary)
+
+**Quality fix — adaptive cosine threshold** (`pickVectorMatches`, `f5f98b5e`):
+- Replaces the legacy 0.3 fixed cutoff with `floor = max(absFloor=0.05, top1 × 0.5)` and a `minKeep=5` safety net.
+- Right thing for both regimes:
+  - Open vault (top1 ≈ 0.85 → floor 0.425): trims long tail like the old threshold.
+  - Focused haystack (top1 ≈ 0.32 → floor 0.16): keeps low-cosine legitimate matches.
+  - Weak signal (everything < absFloor): minKeep keeps top-5 + BM25 fills the gap.
+- 7 unit tests in `test/pick-vector-matches.test.ts` lock the algorithm down.
+- `QMD_VEC_MIN_SIM=adaptive|0|<number>` env override.
+- **Quality fix that helps real production**, not a benchmark hack.
+
+**Workaround — K-multiplier bump** (`f360a2b`):
+- `vecK = max(limit*3, limit * QMD_VEC_K_MULTIPLIER)` (default multiplier 20)
+- Default K=1000 instead of 150 → ~2 hits per scope on average → most queries get full top-50 after filter.
+- `QMD_VEC_K_MULTIPLIER=200` for K=10000 (~40% of 23k index, near-guarantee of full scope coverage)
+- **This is a workaround, not the proper fix.** Linear scan cost grows with K. Won't scale to large vaults.
+
+**Proper fix (queued) — `scope` partition key on `memories_vec`:**
+
+```sql
+CREATE VIRTUAL TABLE memories_vec USING vec0(
+  scope TEXT PARTITION KEY,
+  id TEXT PRIMARY KEY,
+  embedding float[384] distance_metric=cosine
+)
+```
+
+Then queries: `SELECT id, distance FROM memories_vec WHERE scope = ? AND embedding MATCH ? AND k = ?`. sqlite-vec walks only the current scope's slice of the index. This is the architecturally correct match for MemPalace's per-EphemeralClient isolation, and it removes the K-multiplier hack entirely. Schema migration commit, separate from the benchmark validation cycle.
+
+### Doctrine going forward
+
+> Where MemPalace makes doubtful choices, prioritize project quality over shiny benchmarks. They verify our quality. Not an exam where you want a 100 regardless of everything.
+
+This shipped as adaptive cosine threshold (universal quality improvement) + K-bump (acknowledged workaround) + queued partition key (proper fix). MemPalace's "no threshold + per-question ephemeral DB" combo gives them headline numbers but trades production behavior for benchmark numbers. We do both — adaptive in the recall-side, partition key on the storage-side.
+
+---
+
 ## 🏆 LME _s head-to-head: QMD matches MemPalace's 96.6%
 
 **2026-04-13:** QMD + local fastembed backend + raw mode hits **R@5 = 97.0%** on `longmemeval_s_cleaned` first 100 questions. MemPalace's published 96.6% headline is retrieval-only on the same 500-question dataset. We're at parity on the benchmark that defines "state of the art" for LongMemEval retrieval.

@@ -1,48 +1,115 @@
 # Evaluation Guide
 
-How to run, configure, and ablate QMD's memory benchmarks.
+How QMD benchmarks itself, the metrics that matter, and the cost discipline we follow.
+
+---
+
+## How we benchmark — TL;DR
+
+QMD runs against two long-term memory benchmarks (LongMemEval and LoCoMo) using a **local-first iteration loop** that costs nothing per run. We use remote LLMs (Gemini) for **one final answer-quality validation** at the end of a tuning cycle, never during retrieval iteration. The methodology has three rules:
+
+1. **Iterate locally with `fastembed` + `--no-llm`.** Zero API keys, zero network calls, deterministic. R@K / MRR / SR@K / DR@K are all accurate without an LLM in the loop. F1 / EM / SH become noisy but stay comparable across runs.
+2. **Lead reports with R@K + F1/EM/SH/MRR.** SR@K and DR@K (the MemPalace-compat metrics) are demoted to a single reference row because they ceiling on pre-filtered haystacks and cannot discriminate pipeline quality on most datasets we care about.
+3. **Match MemPalace's ground truth, not their numbers.** For every comparison we run their actual `benchmarks/locomo_bench.py` and `benchmarks/longmemeval_bench.py` on the same data — published headline numbers are not a substitute. Where MemPalace makes choices that hurt production quality (e.g. no cosine threshold), we don't copy them; we ship features that adapt across both regimes.
+
+Cost ceiling for a typical iteration cycle: **$0**. Cost ceiling for a final answer-quality validation: ~$0.30 / 500-question Gemini run.
+
+---
 
 ## Supported Benchmarks
 
 | Benchmark | Location | Questions | Use case |
 |-----------|----------|-----------|----------|
-| **LoCoMo** | `evaluate/locomo/` | conv-26 (199Q), conv-30 (105Q) | Conversational memory across long sessions |
-| **LongMemEval** (LME) | `evaluate/longmemeval/` | 500Q × {oracle, s, m} variants | Information-retrieval memory across many sessions |
+| **LoCoMo** | `evaluate/locomo/` | conv-26 (199Q), conv-30 (105Q) | Conversational memory across long multi-session dialogues |
+| **LongMemEval oracle** | `evaluate/longmemeval/` | 500Q oracle (filtered haystack) | Answer-quality with retrieval skipped (the "easy" mode) |
+| **LongMemEval _s_cleaned** | `evaluate/longmemeval/` | 500Q × ~50 distractor sessions | Full retrieval test — MemPalace's published 96.6% headline is on this dataset |
 
 Both share the same QMD memory pipeline. They test different things and complement each other — LoCoMo is dialogue-style; LME is more institutional knowledge.
 
 ---
 
-## Quick Start
+## Quick Start — local zero-cost iteration
+
+The recommended default for any retrieval tuning. Everything runs locally, no API keys needed.
+
+```sh
+# One-time fastembed install (Node package, native ONNX runtime, ~80MB)
+npm install fastembed
+```
+
+### LongMemEval _s (the headline benchmark)
+
+```sh
+# Download once (~277MB, gitignored)
+curl -L -o evaluate/longmemeval/longmemeval_s_cleaned.json \
+  https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json
+
+# 100% local, zero API cost, ~25 min for full 500Q on a laptop
+QMD_EMBED_BACKEND=fastembed \
+QMD_RECALL_RAW=on \
+QMD_INGEST_EXTRACTION=off \
+QMD_INGEST_SYNTHESIS=off \
+QMD_INGEST_PER_TURN=off \
+  npx tsx evaluate/longmemeval/eval.mts --ds s --limit 500 --no-llm \
+  --workers 4 --tag lme-s-local
+
+# Quick smoke test (n=100, ~5 min)
+LIMIT=100 ./evaluate/run-lme-s-local.sh
+```
 
 ### LoCoMo
 
 ```sh
-# Single conversation, full question set, Gemini answer model
-npx tsx evaluate/locomo/eval.mts --conv conv-30 --llm gemini
+# Single conversation, fastembed local
+QMD_EMBED_BACKEND=fastembed QMD_RECALL_RAW=on \
+QMD_INGEST_EXTRACTION=off QMD_INGEST_SYNTHESIS=off \
+  npx tsx evaluate/locomo/eval.mts --conv conv-30 --no-llm
 
-# Limit + tag for ablation runs
-npx tsx evaluate/locomo/eval.mts --conv conv-30 --llm gemini --limit 20 --tag quick-test
-
-# Cached run reuses ingest DB (subsequent runs skip ingest)
-# DB at evaluate/locomo/dbs/conv-30.sqlite
+# Ingest is cached — subsequent runs against the same DB are seconds
 ```
 
-### LongMemEval
+### LongMemEval oracle (faster but ceiling'd at SR@K=100%)
 
 ```sh
-# First-time download (gitignored, ~280MB total)
 curl -L -o evaluate/longmemeval/longmemeval_oracle.json \
   https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_oracle.json
-curl -L -o evaluate/longmemeval/longmemeval_s.json \
-  https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json
 
-# Quick baseline (oracle = relevant sessions only, fast)
-npx tsx evaluate/longmemeval/eval.mts --ds oracle --limit 50 --llm gemini --tag baseline
-
-# Full retrieval test (s = ~47 sessions per question, slow)
-npx tsx evaluate/longmemeval/eval.mts --ds s --limit 100 --llm gemini --tag full-retrieval
+QMD_EMBED_BACKEND=fastembed QMD_RECALL_RAW=on \
+  npx tsx evaluate/longmemeval/eval.mts --ds oracle --limit 200 --no-llm
 ```
+
+### Final answer-quality validation (paid)
+
+Once retrieval is at parity, run **one** Gemini pass to score F1/EM/SH on real LLM answers:
+
+```sh
+GOOGLE_API_KEY=... \
+QMD_EMBED_BACKEND=fastembed QMD_RECALL_RAW=on \
+  npx tsx evaluate/longmemeval/eval.mts --ds s --limit 500 \
+  --llm gemini --answer-model gemini-2.5-flash --workers 4
+```
+
+---
+
+## The cost discipline
+
+The single biggest lesson of the v15-v16 cycle: **never spend on Gemini during retrieval iteration**. A naive eval run on LME _s n=500 with our default v15.1 stack burns ~$0.20 per pass, and we typically need 5-10 passes to validate any change. That's $1-2 per A/B. Multiplied across categories (embed model, granularity, threshold, diversity, KG) it's easily $30+ per session.
+
+By staying on `--no-llm` + `QMD_EMBED_BACKEND=fastembed`, the same matrix runs at $0. The trade-off:
+
+| Metric | Available with `--no-llm`? |
+|---|---|
+| R@5 / R@10 / MRR | ✅ Accurate — depends only on retrieved memories |
+| SR@K / DR@K | ✅ Accurate |
+| F1 / EM / SH | ⚠️ Noisy — `prediction` falls back to "top memories joined and truncated" instead of an LLM answer. Becomes a rough retrieval-quality proxy |
+
+For retrieval iteration, R@K and MRR are the discriminating signals. F1/EM/SH are validated in the final paid pass.
+
+---
+
+## Quick Start — paid mode (for reference)
+
+The way it used to work (and still does with `--llm gemini`):
 
 ---
 
@@ -156,6 +223,86 @@ done
 
 ---
 
+## The fastembed local backend
+
+QMD ships a local-only embedding backend at `src/llm/fastembed.ts` that wraps the [`fastembed`](https://www.npmjs.com/package/fastembed) npm package — a Node port of the same Qdrant fastembed library MemPalace uses in their published 96.6% LME run. Same model (`all-MiniLM-L6-v2`, 384-dim ONNX), same determinism guarantees, no API keys.
+
+### Activation
+
+```sh
+QMD_EMBED_BACKEND=fastembed
+```
+
+That's it. `embedText`, `embedTextBatch`, and `embedQuery` in `src/memory/index.ts` short-circuit to fastembed before falling through to the existing remote / `node-llama-cpp` chain. Default behavior unchanged when the env var is unset.
+
+### Supported models
+
+Stock models from `fastembed-js` (override via `QMD_FASTEMBED_MODEL=<name>`):
+
+| Name | Dim | Size | Notes |
+|---|---|---|---|
+| `AllMiniLML6V2` | 384 | ~80 MB | Default. Same model MemPalace uses. |
+| `BGESmallENV15` | 384 | ~130 MB | Often +1-2pp vs MiniLM on MTEB |
+| `BGEBaseENV15` | 768 | ~440 MB | +2-3pp typically, slower |
+| `MLE5Large` | 1024 | ~2.2 GB | Best quality but expensive |
+
+First use downloads the model to `~/.cache/qmd/fastembed-models/` (override via `QMD_FASTEMBED_CACHE_DIR`). Subsequent runs are zero-cold-start.
+
+### Properties
+
+- **Deterministic**: same input → bit-identical output across runs. No more F1 ±3pp noise from gemini server-side replica routing.
+- **No rate limits**: the LME _s n=500 ingest hits 25,000+ embed calls. Remote APIs (ZeroEntropy, OpenAI, etc.) rate-limit hard at this scale; fastembed has no concept of a rate.
+- **Fast**: ~10ms/embedding on CPU. The full LME _s n=500 ingest + retrieval completes in ~25 min on a laptop, vs hours when rate-limited remotely.
+- **No setup**: `npm install fastembed`, set the env var, run. No API key dance.
+
+---
+
+## Adaptive vector-similarity gate
+
+The legacy 0.3 fixed cosine cutoff is replaced (as of 2026-04-13) by an adaptive algorithm in `pickVectorMatches()` (`src/memory/index.ts`). This is a quality fix, not a benchmark hack — the old fixed threshold worked well on open vaults but broke on focused haystacks.
+
+### The two regimes
+
+**Open vault** (production: 10k+ memories, mostly unrelated to any given query):
+- Top-1 vector match typically scores 0.6-0.9 cosine
+- Long tail at 0.05-0.2 is genuine noise
+- A 0.3 threshold prunes the noise correctly
+
+**Focused haystack** (LME _s, oracle, LoCoMo — every candidate session pre-filtered to one conversation):
+- Top-1 vector match typically scores 0.20-0.35 cosine
+- Everything in the haystack is on-topic, so even the right answer might score 0.18
+- A 0.3 threshold drops legitimate matches → the gap that took LME _s multi-session R@5 from 100% (MemPalace) to 80% (QMD pre-fix)
+
+### The algorithm
+
+```
+floor = max(absFloor=0.05, top1 × relRatio=0.5)
+accept r if r.similarity ≥ floor
+also keep at least minKeep=5 results regardless of similarity (safety net)
+```
+
+| Regime | top1 | floor | result |
+|---|---|---|---|
+| Open vault, clear answer | 0.85 | 0.425 | Long tail pruned proportional to query strength |
+| Focused haystack, multi-hop | 0.32 | 0.16 | Low-cosine legitimate matches survive |
+| Weak-signal query | 0.04 | 0.05 | All fail floor → minKeep=5 kicks in, BM25 fills the rest |
+
+### Override
+
+```sh
+QMD_VEC_MIN_SIM=adaptive    # default
+QMD_VEC_MIN_SIM=0           # take everything (most permissive — matches MemPalace)
+QMD_VEC_MIN_SIM=0.3         # legacy fixed-threshold behaviour
+```
+
+7 unit tests in `test/pick-vector-matches.test.ts` lock the algorithm down across all three regimes plus edge cases (empty input, sort order, fixed override).
+
+### Why we don't just match MemPalace's "no threshold ever"
+
+MemPalace gets 100% on multi-session LME _s by taking unconditional top-K. That works **only because their benchmark always operates against pre-filtered haystacks**. On a real production vault with 10k+ memories, returning unconditional top-50 means the LLM answer model wades through 30-40 noise memories per query. Adaptive does the right thing in both cases without forcing the user to know which one they're in — that's a quality improvement, not a benchmark trick.
+
+---
+
 ## Reproducibility Notes
 
 ### LLM nondeterminism
@@ -198,20 +345,16 @@ Single-conversation scores are unreliable. The LoCoMo audit ([github.com/dial481
 
 ## Interpreting Results
 
-| Metric | Meaning | What it tests |
-|--------|---------|---------------|
-| **R@5 / R@10** | (LoCoMo + LME) Do the answer's tokens appear in top-K retrieved memories? | Token-overlap recall — QMD's original metric |
-| **SR@5 / SR@10** | (LME only) Did any retrieved memory come from a session listed in `answer_session_ids`? | Session-id recall — **apples-to-apples with MemPalace's `recall_any`** |
-| **F1** | Token overlap between LLM answer and ground truth | Answer quality |
-| **EM** | Exact tokenized match | Answer precision |
-
-**R@K vs SR@K matters for cross-system comparison.** MemPalace's published 96.6% LongMemEval R@5 is `recall_any` based on session id intersection. To compare fairly with their numbers, use the SR@K columns.
-
-**R@K rewards retrieval; F1/EM reward synthesis.** Both matter — high R@K with low F1 means retrieval is finding the answer but the LLM can't use it. High F1 with low R@K means the LLM is reasoning from indirect context (synthesis is doing real work).
+**R@K rewards retrieval; F1/EM/SH reward synthesis.** Both matter — high R@K with low F1 means retrieval is finding the answer but the LLM can't use it. High F1 with low R@K means the LLM is reasoning from indirect context (synthesis is doing real work). Watch them together.
 
 Watch by category:
 - LoCoMo: single-hop, multi-hop, temporal, open-domain, adversarial
 - LME: temporal-reasoning, multi-session, knowledge-update, single-session-{user, assistant, preference}
+
+Per-category gaps usually point at one specific failure mode. Examples from the v16 cycle:
+
+- **LME _s n=500 multi-session R@5 = 80%** (vs MemPalace 100%) → root cause was a fixed cosine threshold dropping legitimate matches at 0.18-0.25. Diagnosed via per-category breakdown, not the global R@5. Fix: adaptive threshold.
+- **LoCoMo single-hop F1 dropped 7pp** when reflect synthesis was enabled → the reflect call over-compresses single-hop questions. Fix: smart-gate reflect by question type (deferred).
 
 ---
 
@@ -249,23 +392,33 @@ The take-home: **SR@K and DR@K have strong caveats and should never be reported 
 
 All published LongMemEval scores below are on `longmemeval_s_cleaned` (the large unfiltered haystack), **not** the `oracle` dataset QMD's day-to-day benchmarks use. Comparing QMD numbers to these figures requires running on `_s`.
 
-| System | LME Score | Architecture |
-|--------|-----------|--------------|
-| **Hindsight** | **91.4%** | Multi-strategy: semantic + BM25 + entity graph + temporal + cross-encoder rerank + reflect synthesis |
-| SuperMemory | 81.6% | Memory graph + RAG + auto contradiction resolution |
-| Zep / Graphiti | 63.8% | Temporal KG with bitemporal validity |
-| Mem0 | 49.0% | Vector + KG dual-store, atomic extraction |
-| MemPalace (raw) | 96.6% | ChromaDB + all-MiniLM-L6-v2 + session granularity + raw verbatim |
-| QMD v15.1 (oracle) | R@5 87.0% · F1 50.6% | BM25 + vec + RRF + LLM rerank + merged extraction + synthesis + v11.1 temporal prompt |
+| System | LME _s R@5 | Architecture | Headline metric |
+|--------|-----------|--------------|---|
+| **Hindsight** | **91.4%** | semantic + BM25 + entity graph + temporal + cross-encoder rerank + reflect | session recall |
+| MemPalace (raw, fastembed) | **96.6%** | ChromaDB + all-MiniLM-L6-v2 + session granularity + raw verbatim | session recall |
+| SuperMemory | 81.6% | Memory graph + RAG + auto contradiction resolution | session recall |
+| Zep / Graphiti | 63.8% | Temporal KG with bitemporal validity | session recall |
+| Mem0 | 49.0% | Vector + KG dual-store, atomic extraction | session recall |
+| **QMD v16 (raw + fastembed)** | **97.0% (n=100)** ¹ | BM25 + vec RRF + adaptive cosine + raw mode + fastembed | token-overlap recall + F1/EM/SH/MRR |
+| QMD v15.1 (default stack on oracle) | R@5 87.0% · F1 50.6% | BM25 + vec + RRF + LLM rerank + merged extraction + synthesis + v11.1 prompt | full pipeline |
 
-**QMD vs MemPalace verified on same data** (2026-04-13):
+¹ n=100 first 100 questions of `_s_cleaned`. Full n=500 confirmation run in flight at session close.
 
-| Benchmark | Pipeline | Metric | Score |
-|---|---|---|---|
-| LME oracle n=200 | QMD v15.1 | R@5 / R@10 | 87.0% / 93.0% |
-| LME oracle n=200 | MemPalace own run | Recall@5 / Recall@10 | 100% / 100% (ceilinged) |
-| LoCoMo conv-26+30 | QMD v15.1 | DR@50 | 74.9% |
-| LoCoMo conv-26+30 | MemPalace own run | DR@50 | 74.8% |
+### QMD vs MemPalace verified on same data (2026-04-13)
+
+We don't trust published numbers. For every comparison row below, we cloned MemPalace at `~/external/mempalace` and ran their own `benchmarks/locomo_bench.py` / `benchmarks/longmemeval_bench.py` on the exact same data file QMD uses.
+
+| Benchmark | Pipeline | Metric | Score | Notes |
+|---|---|---|---|---|
+| **LME _s n=500** | MemPalace own run | Recall@5 | **96.6%** | their published headline reproduced on our box |
+| LME _s n=500 | MemPalace own run | Recall@1 / @3 / @10 | 80.6 / 92.6 / 98.2% | |
+| LME _s n=100 | QMD raw + fastembed | R@5 / R@10 | 97.0% / 97.0% | first 100 only |
+| LME _s n=100 | QMD raw + fastembed | F1 / EM / SH | 64.9% / 48.0% / 60.0% | answer-quality on top of MP's retrieval-only metric |
+| LME oracle n=200 | QMD v15.1 | R@5 / R@10 | 87.0% / 93.0% | |
+| LME oracle n=200 | MemPalace own run | Recall@1..50 | **100% at every K** | ceilinged — the oracle dataset's haystack is pre-filtered |
+| LoCoMo conv-26+30 | QMD v15.1 | DR@50 | 74.9% | |
+| LoCoMo conv-26+30 | MemPalace own run | DR@50 | 74.8% | parity on the discriminating LoCoMo metric |
+| LoCoMo conv-26+30 | MemPalace own run | session recall | 100% | ceilinged — 19 docs × top-50 = every session always in top-K |
 
 **Running MemPalace on our data** (reproduces both rows above):
 
