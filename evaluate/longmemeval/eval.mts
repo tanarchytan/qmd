@@ -325,7 +325,15 @@ async function main() {
     process.exit(1);
   }
 
-  const dataPath = join(QMD_DIR, "evaluate/longmemeval", dsName === "s" ? "longmemeval_s.json" : "longmemeval_oracle.json");
+  // --ds s now prefers the huggingface-released longmemeval_s_cleaned.json
+  // (277 MB, 500 questions with full distractor haystack). Falls back to the
+  // original longmemeval_s.json if cleaned isn't present.
+  const sPreferred = join(QMD_DIR, "evaluate/longmemeval", "longmemeval_s_cleaned.json");
+  const sFallback = join(QMD_DIR, "evaluate/longmemeval", "longmemeval_s.json");
+  const sPath = existsSync(sPreferred) ? sPreferred : sFallback;
+  const dataPath = dsName === "s"
+    ? sPath
+    : join(QMD_DIR, "evaluate/longmemeval", "longmemeval_oracle.json");
   console.log(`\n  Loading ${dataPath}...`);
   const data: LMEInstance[] = JSON.parse(readFileSync(dataPath, "utf-8"));
   console.log(`  Loaded ${data.length} instances`);

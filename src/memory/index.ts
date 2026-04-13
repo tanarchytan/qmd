@@ -225,12 +225,47 @@ function parseTimeReference(query: string): TimeReference | null {
 }
 
 // =============================================================================
-// Embed helper — uses remote or local
+// Embed helper — uses fastembed, remote, or local LlamaCpp (in that order).
+// Precedence: QMD_EMBED_BACKEND=fastembed short-circuits everything; else
+// remote (if configured); else node-llama-cpp (if QMD_LOCAL!=no); else null.
 // =============================================================================
+
+/**
+ * Lazy-loaded fastembed backend (roadmap: MemPalace-style local ONNX).
+ * Opt in via `QMD_EMBED_BACKEND=fastembed`. Zero API cost, deterministic,
+ * no rate limits — uses all-MiniLM-L6-v2 by default (same model MemPalace
+ * ships for their 96.6% LongMemEval run).
+ */
+let _fastembedBackend: any = null;
+async function getFastEmbedBackend(): Promise<any> {
+  if (process.env.QMD_EMBED_BACKEND !== "fastembed") return null;
+  if (_fastembedBackend) return _fastembedBackend;
+  try {
+    const mod = await import("../llm/fastembed.js");
+    _fastembedBackend = await mod.createFastEmbedBackend();
+    return _fastembedBackend;
+  } catch (err) {
+    process.stderr.write(`fastembed backend load failed: ${err instanceof Error ? err.message : err}\n`);
+    return null;
+  }
+}
 
 async function embedText(text: string): Promise<number[] | null> {
   const cached = getCachedEmbedding(text);
   if (cached) return cached;
+
+  const fe = await getFastEmbedBackend();
+  if (fe) {
+    try {
+      const result = await fe.embed(text);
+      const emb = result?.embedding || null;
+      if (emb) setCachedEmbedding(text, emb);
+      return emb;
+    } catch (err) {
+      process.stderr.write(`fastembed embed failed: ${err instanceof Error ? err.message : err}\n`);
+      return null;
+    }
+  }
 
   const remoteConfig = getRemoteConfig();
   if (remoteConfig?.embed) {
@@ -275,6 +310,21 @@ async function embedTextBatch(texts: string[]): Promise<(number[] | null)[]> {
   }
   if (missingTexts.length === 0) return out;
 
+  const fe = await getFastEmbedBackend();
+  if (fe) {
+    try {
+      const results = await fe.embedBatch(missingTexts);
+      for (let j = 0; j < missingTexts.length; j++) {
+        const emb = results[j]?.embedding || null;
+        out[missingIdx[j]!] = emb;
+        if (emb) setCachedEmbedding(missingTexts[j]!, emb);
+      }
+      return out;
+    } catch (err) {
+      process.stderr.write(`fastembed embedBatch failed, falling back: ${err instanceof Error ? err.message : err}\n`);
+    }
+  }
+
   const remoteConfig = getRemoteConfig();
   if (remoteConfig?.embed) {
     try {
@@ -300,6 +350,19 @@ async function embedTextBatch(texts: string[]): Promise<(number[] | null)[]> {
 async function embedQuery(text: string): Promise<number[] | null> {
   const cached = getCachedEmbedding(text);
   if (cached) return cached;
+
+  const fe = await getFastEmbedBackend();
+  if (fe) {
+    try {
+      const result = await fe.embed(text);
+      const emb = result?.embedding || null;
+      if (emb) setCachedEmbedding(text, emb);
+      return emb;
+    } catch (err) {
+      process.stderr.write(`fastembed query failed: ${err instanceof Error ? err.message : err}\n`);
+      return null;
+    }
+  }
 
   const remoteConfig = getRemoteConfig();
   if (remoteConfig?.embed) {
