@@ -333,8 +333,8 @@ QMD ships a **local-first, zero-cost benchmark loop** that matches MemPalace's s
 | Pipeline | n | R@5 | R@10 | F1 | EM | Cost | Time |
 |---|---|---|---|---|---|---|---|
 | **MemPalace raw + fastembed** (their published run) | 500 | **96.6%** | 98.2% | — | — | $0 | 12.5m |
-| **QMD raw + fastembed + adaptive cosine** | 100 | **97.0%** | 97.0% | **64.9%** | 48.0% | $0 | 5m |
-| QMD raw + fastembed + adaptive cosine | 500 | _in flight_ | — | — | — | $0 | ~25m |
+| **QMD raw + fastembed + scope-partitioned vec0** | 500 | **93.2%** | **95.2%** | — | — | $0 | 24m |
+| QMD raw + fastembed + adaptive cosine (n=100 first slice) | 100 | 97.0% | 97.0% | 64.9% | 48.0% | $0 | 5m |
 
 Same embed model (`all-MiniLM-L6-v2`, 384-dim ONNX). Same dataset. Zero API keys for retrieval. Deterministic. QMD additionally measures end-to-end answer quality (F1/EM/SH) that MemPalace's benchmark doesn't produce — their 96.6% is retrieval-only.
 

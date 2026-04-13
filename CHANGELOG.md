@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+### Vector retrieval — scope partition key (2026-04-13 late session)
+
+The K-multiplier workaround (f360a2b) brought LME _s n=500 R@5 from
+89.4% → 92.8% but multi-session R@5 only moved 80% → 81% — it wasn't
+fetching enough hits per scope to fully populate top-K. Replaced with
+the proper architectural fix in a7c1eaf:
+
+  CREATE VIRTUAL TABLE memories_vec USING vec0(
+    scope TEXT PARTITION KEY,
+    id TEXT PRIMARY KEY,
+    embedding float[N] distance_metric=cosine
+  )
+
+sqlite-vec's PARTITION KEY makes the KNN query walk only the current
+scope's slice of the index when WHERE scope = ? is passed. Eliminates
+the need for the K-multiplier overshoot — every scope returns its full
+top-K natively.
+
+Schema migration is automatic: ensureMemoriesVecTable detects the
+missing partition column on existing pre-migration databases and
+drops/recreates the table. memoryStore / memoryStoreBatch /
+memoryUpdate updated to write the scope column on insert.
+
+Result on n=500 rerun:
+
+  Pre-fix:           R@5 89.4%, R@10 89.4%, mem=1-6 per query
+  K-bump workaround: R@5 92.8%, R@10 94.0%, mem=2-6 per query
+  Partition key:     R@5 93.2%, R@10 95.2%, mem=50 per query
+
+The "mem=50 per query" log line is the key signal — full top-K per
+scope, exactly matching MemPalace's per-EphemeralClient isolation
+model architecturally.
+
+The remaining 4-pp R@5 gap to MemPalace's 96.6% is entirely in the
+multi-session category (QMD 81% vs MP 100%). With full top-K per
+scope, this is a RANKING problem, not a coverage problem — MiniLM's
+384-dim embeddings don't rank multi-hop abstract queries highly
+enough to put them in top-5. BGE-base-en-v1.5 (768-dim) A/B is the
+targeted next experiment.
+
 ### Vector retrieval — adaptive threshold + scope-aware K (2026-04-13 late session)
 
 The LME _s n=500 baseline exposed two related retrieval bugs. Both
