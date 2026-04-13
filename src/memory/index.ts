@@ -392,10 +392,23 @@ async function embedQuery(text: string): Promise<number[] | null> {
 }
 
 // =============================================================================
-// Ensure memories_vec table (dynamic dimensions, same pattern as vectors_vec)
+// Ensure memories_vec table (dynamic dimensions, scope-partitioned vec0)
 // =============================================================================
+//
+// memories_vec is created with `scope TEXT PARTITION KEY` so sqlite-vec
+// walks only the current scope's slice of the index when a recall query
+// passes WHERE scope = ?. Without partitioning, the KNN query returns
+// the K nearest memories across the *entire* table and we have to drop
+// non-scope hits in post-processing — which on a shared-DB benchmark
+// like LME _s n=500 (500 scopes × ~50 memories) leaves only ~K/scopes
+// memories per query after the filter.
+//
+// Existing pre-partition databases are auto-migrated by detecting the
+// missing partition column and dropping/recreating the table. The
+// caller (memoryStore / memoryStoreBatch) re-inserts on next write.
 
 let _memoriesVecInitialized = false;
+let _memoriesVecHasPartition = false;
 
 function ensureMemoriesVecTable(db: Database, dimensions: number): void {
   if (_memoriesVecInitialized) return;
@@ -403,19 +416,22 @@ function ensureMemoriesVecTable(db: Database, dimensions: number): void {
     `SELECT sql FROM sqlite_master WHERE type='table' AND name='memories_vec'`
   ).get() as { sql: string } | null;
   if (tableInfo) {
-    const match = tableInfo.sql.match(/float\[(\d+)\]/);
-    const existingDims = match?.[1] ? parseInt(match[1], 10) : null;
-    if (existingDims === dimensions) {
+    const dimMatch = tableInfo.sql.match(/float\[(\d+)\]/);
+    const existingDims = dimMatch?.[1] ? parseInt(dimMatch[1], 10) : null;
+    const hasPartition = /partition\s+key/i.test(tableInfo.sql);
+    if (existingDims === dimensions && hasPartition) {
       _memoriesVecInitialized = true;
+      _memoriesVecHasPartition = true;
       return;
     }
-    // Dimension mismatch — drop and recreate
+    // Dimension mismatch OR missing partition column — drop and recreate.
     db.exec(`DROP TABLE IF EXISTS memories_vec`);
   }
   db.exec(
-    `CREATE VIRTUAL TABLE memories_vec USING vec0(id TEXT PRIMARY KEY, embedding float[${dimensions}] distance_metric=cosine)`
+    `CREATE VIRTUAL TABLE memories_vec USING vec0(scope TEXT PARTITION KEY, id TEXT PRIMARY KEY, embedding float[${dimensions}] distance_metric=cosine)`
   );
   _memoriesVecInitialized = true;
+  _memoriesVecHasPartition = true;
 }
 
 // =============================================================================
@@ -527,7 +543,7 @@ export async function memoryStore(
   if (embedding) {
     try {
       ensureMemoriesVecTable(db, embedding.length);
-      db.prepare(`INSERT INTO memories_vec (id, embedding) VALUES (?, ?)`).run(id, new Float32Array(embedding));
+      db.prepare(`INSERT INTO memories_vec (scope, id, embedding) VALUES (?, ?, ?)`).run(scope, id, new Float32Array(embedding));
     } catch (err) {
       process.stderr.write(`Memory vector insert failed (memory still stored): ${err instanceof Error ? err.message : err}\n`);
     }
@@ -615,9 +631,9 @@ export async function memoryStoreBatch(
         try {
           if (!insertVecRef.stmt) {
             ensureMemoriesVecTable(db, emb.length);
-            insertVecRef.stmt = db.prepare(`INSERT INTO memories_vec (id, embedding) VALUES (?, ?)`);
+            insertVecRef.stmt = db.prepare(`INSERT INTO memories_vec (scope, id, embedding) VALUES (?, ?, ?)`);
           }
-          insertVecRef.stmt.run(id, new Float32Array(emb));
+          insertVecRef.stmt.run(scope, id, new Float32Array(emb));
         } catch { /* dimension mismatch / table failure — memory still stored */ }
       }
 
@@ -912,30 +928,74 @@ export async function memoryRecall(
     // FTS may fail on complex queries
   }
 
+  // Detect partition support on first recall against this DB. The
+  // module-level _memoriesVecHasPartition flag may be unset if no
+  // ingest has run in this process yet (memoryRecall doesn't call
+  // ensureMemoriesVecTable directly because it needs the dimension).
+  if (!_memoriesVecHasPartition) {
+    try {
+      const t = db.prepare(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='memories_vec'`
+      ).get() as { sql: string } | null;
+      if (t && /partition\s+key/i.test(t.sql)) {
+        _memoriesVecHasPartition = true;
+      }
+    } catch { /* table may not exist yet */ }
+  }
+
   // Vector search (await the embedding that started in parallel with FTS)
   const queryEmbedding = await embeddingPromise;
   if (queryEmbedding) {
     try {
-      // ── k-multiplier for scope-filter overshoot ─────────────────────
+      // ── Scope-partitioned vec query ────────────────────────────────
       //
-      // The vec0 KNN query has no scope filter — it returns the K most
-      // similar memories across the ENTIRE index. We then drop anything
-      // outside the caller's scope inside addResult(). On a shared-DB
-      // benchmark setup like LME _s (500 scopes × ~50 memories =
-      // 25,000 total in one table) the K nearest neighbors are spread
-      // across all scopes; only ~K/scopes hits land in the right one.
-      // K = limit*3 = 150 then degrades to mem≈1-5 per question.
+      // memories_vec ships with `scope TEXT PARTITION KEY` so sqlite-vec
+      // walks only the current scope's slice of the index. This makes
+      // KNN return scope-local top-K instead of global top-K — fixes
+      // the 89.4% R@5 ceiling on LME _s n=500 where global top-K only
+      // contributed ~K/500 hits per scope.
       //
-      // Override the multiplier with QMD_VEC_K_MULTIPLIER. The proper
-      // fix is a partition-key vec table (vec0 supports it) so the
-      // index only walks the current scope — that's a separate commit
-      // because it requires a schema migration.
-      const kMultiplier = Number(process.env.QMD_VEC_K_MULTIPLIER ?? "20");
-      const vecK = Math.max(limit * 3, limit * kMultiplier);
+      // Two query paths:
+      //   - scoped: WHERE scope = ? AND embedding MATCH ?  (preferred)
+      //   - global: WHERE embedding MATCH ?               (fallback)
+      // Global path is used when no scope is set OR when querying the
+      // legacy "global" scope (which historically commingled with all
+      // scopes in addResult). Also used for pre-migration databases
+      // where the partition column doesn't exist.
+      //
+      // The K-multiplier override remains for the global path and for
+      // edge cases where partition isolation might filter too aggressively.
+      const kMultiplier = Number(process.env.QMD_VEC_K_MULTIPLIER ?? "3");
+      const vecK = Math.max(limit, limit * kMultiplier);
 
-      const vecResults = db.prepare(
-        `SELECT id, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?`
-      ).all(new Float32Array(queryEmbedding), vecK) as { id: string; distance: number }[];
+      let vecResults: Array<{ id: string; distance: number }>;
+      if (_memoriesVecHasPartition && scope) {
+        // Scoped query — sqlite-vec walks only `scope` partition.
+        // Also union with "global" scope memories which match anywhere.
+        try {
+          vecResults = db.prepare(
+            `SELECT id, distance FROM memories_vec
+             WHERE scope = ? AND embedding MATCH ? AND k = ?`
+          ).all(scope, new Float32Array(queryEmbedding), vecK) as Array<{ id: string; distance: number }>;
+          // Also pull global-scope memories so cross-scope facts surface.
+          const globalResults = db.prepare(
+            `SELECT id, distance FROM memories_vec
+             WHERE scope = ? AND embedding MATCH ? AND k = ?`
+          ).all("global", new Float32Array(queryEmbedding), Math.min(vecK, limit)) as Array<{ id: string; distance: number }>;
+          vecResults = vecResults.concat(globalResults);
+        } catch {
+          // Partition query unsupported on this sqlite-vec version → fall back
+          vecResults = db.prepare(
+            `SELECT id, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?`
+          ).all(new Float32Array(queryEmbedding), vecK * 20) as Array<{ id: string; distance: number }>;
+        }
+      } else {
+        // Global path — pre-partition DB or no scope filter requested.
+        // K bumped to compensate for the post-vector scope filter loss.
+        vecResults = db.prepare(
+          `SELECT id, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?`
+        ).all(new Float32Array(queryEmbedding), vecK * 20) as Array<{ id: string; distance: number }>;
+      }
 
       // Adaptive vector acceptance — pickVectorMatches handles the
       // floor calculation. See its docstring for the full rationale.
@@ -1432,7 +1492,7 @@ export async function memoryUpdate(
     if (embedding) {
       ensureMemoriesVecTable(db, embedding.length);
       try { db.prepare(`DELETE FROM memories_vec WHERE id = ?`).run(options.id); } catch {}
-      db.prepare(`INSERT INTO memories_vec (id, embedding) VALUES (?, ?)`).run(options.id, new Float32Array(embedding));
+      db.prepare(`INSERT INTO memories_vec (scope, id, embedding) VALUES (?, ?, ?)`).run(mem.scope, options.id, new Float32Array(embedding));
     }
     changes.push("text");
   }
