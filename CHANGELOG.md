@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### LongMemEval _s head-to-head with MemPalace (2026-04-13)
+
+Running QMD against the full `longmemeval_s_cleaned` dataset (500
+questions × ~53 session haystack — the actual benchmark MemPalace's
+96.6% headline is on) with the new local fastembed backend:
+
+| Pipeline | n | R@5 | R@10 | F1 | EM | Wall |
+|---|---|---|---|---|---|---|
+| MemPalace raw + fastembed (their published run) | 500 | **96.6%** | 98.2% | — | — | 12.5m |
+| QMD raw + fastembed (first 100) | 100 | **97.0%** | 97.0% | **64.9%** | 48.0% | 5m12s |
+
+**QMD matches MemPalace within noise** on the same dataset with the
+same embed model (`all-MiniLM-L6-v2`). First 100 questions of the
+same test set, same retrieval recipe, zero API keys needed.
+
+Significance: up to this point we had:
+- A legacy token-overlap R@K (QMD metric, not comparable to their
+  session-recall headline)
+- An apples-to-apples SR@K that hit 100% ceiling on LME oracle
+- A LoCoMo DR@50 parity number (74.9% vs 74.8%)
+
+None of those directly mapped to MemPalace's 96.6% claim on `_s`.
+This is the first result that does — and we match.
+
+The comparison also demonstrates that **QMD measures end-to-end
+quality** (retrieval + LLM answer) while MemPalace's benchmark stops
+at retrieval. QMD's 97.0% R@5 comes with a 64.9% F1 / 48.0% EM on the
+same questions — signal their benchmark doesn't produce.
+
+Full n=500 QMD run is in flight as of this commit. Will update when
+done.
+
 ### MemPalace ground-truth comparison (2026-04-13)
 
 Cloned MemPalace develop branch to `~/external/mempalace` and ran

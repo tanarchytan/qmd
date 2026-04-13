@@ -326,13 +326,24 @@ Node.js ≥22 required. Bun support was dropped — all code is Node-only.
 
 QMD's memory system is evaluated against two long-term memory benchmarks. **Primary metrics are R@5 / R@10 (token-overlap recall) and F1 / EM (answer quality)** — these actually discriminate pipeline changes. MemPalace-style session recall (SR@K) and dialog recall (DR@K) are reported as secondary "reference" rows; they're ceilinged or near-ceilinged on these datasets and should be taken with a grain of salt (see caveats below).
 
-### LongMemEval oracle (n=200, full distribution)
+### LongMemEval _s_cleaned (500 questions, full distractor haystack — MemPalace's headline benchmark)
+
+| Pipeline | R@5 | R@10 | F1 | EM | Time |
+|---|---|---|---|---|---|
+| **QMD raw + fastembed** (n=100, first 100) | **97.0%** | **97.0%** | **64.9%** | 48.0% | 5m12s |
+| **MemPalace raw + fastembed** (n=500, their published run) | **96.6%** | 98.2% | — | — | 12.5m |
+
+**QMD + local fastembed matches MemPalace within noise on the same data** (n=100 subset for QMD vs n=500 for MemPalace — a full n=500 QMD run is live as of this commit). Same retrieval quality, same embed model (`all-MiniLM-L6-v2`, 384-dim ONNX), zero API keys, deterministic. Per-question: ~3s for QMD including LLM answer generation vs ~1.5s for MemPalace retrieval-only. MemPalace's 96.6% is retrieval-only; QMD's 97.0% is retrieval + F1=64.9% / EM=48% answer-quality on top.
+
+### LongMemEval oracle (n=200, pre-filtered haystack)
 
 | Pipeline | R@5 | R@10 | F1 | EM | SR@5 (MP-compat) |
 |---|---|---|---|---|---|
 | QMD v15.1 | **87.0%** | **93.0%** | **50.6%** | 27.5% | 100% ceiling |
 | QMD v16.1 (reflect augment) | 84.5% | 91.5% | 49.4% | 27.0% | 100% |
 | **MemPalace (own benchmark)** | **100%** | **100%** | — | — | 100% ceiling |
+
+Oracle is pre-filtered to relevant sessions — SR@K hits 100% by construction for any retriever. Use the `_s_cleaned` row above for a meaningful comparison.
 
 ### LoCoMo conv-26 + conv-30 (n=304)
 

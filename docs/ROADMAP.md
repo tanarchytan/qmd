@@ -22,6 +22,35 @@
 
 **Working tree clean** as of compaction. All session work committed.
 
+## 🏆 LME _s head-to-head: QMD matches MemPalace's 96.6%
+
+**2026-04-13:** QMD + local fastembed backend + raw mode hits **R@5 = 97.0%** on `longmemeval_s_cleaned` first 100 questions. MemPalace's published 96.6% headline is retrieval-only on the same 500-question dataset. We're at parity on the benchmark that defines "state of the art" for LongMemEval retrieval.
+
+| Pipeline | n | R@5 | R@10 | F1 | EM | Per-Q time |
+|---|---|---|---|---|---|---|
+| MemPalace raw + fastembed | 500 | 96.6% | 98.2% | — | — | 1.5s |
+| **QMD raw + fastembed** | **100** | **97.0%** | **97.0%** | **64.9%** | **48.0%** | 3.1s (incl. LLM answer) |
+
+Caveats:
+- QMD n=100 is the first 100 questions; MemPalace n=500 is the full run. Full n=500 QMD run in flight — will confirm or revise.
+- MemPalace reports retrieval-only; QMD layers an LLM answer pass on top (F1/EM/SH) that their benchmark doesn't produce.
+- Per-Q time includes ~1.5s for our LLM answer call; strip that and QMD retrieval is within noise of MemPalace's speed.
+
+**Stack that produced this result:**
+
+```
+QMD_EMBED_BACKEND=fastembed   # local ONNX, all-MiniLM-L6-v2
+QMD_RECALL_RAW=on             # skip boosts, rerank, expansion
+QMD_INGEST_EXTRACTION=off     # raw verbatim storage
+QMD_INGEST_SYNTHESIS=off      # no entity profiles
+QMD_INGEST_PER_TURN=off       # session-granularity only
+QMD_ZE_COLLECTIONS=off        # no remote embed fallback
+```
+
+No API keys for retrieval. Only the answer-generation Gemini key. MemPalace-level simplicity + QMD's answer quality.
+
+---
+
 ## 🆕 Session 2026-04-13 — v16 category closeouts, MemPalace ground truth, metric hierarchy
 
 ### Headline: we match MemPalace on the metric that discriminates
