@@ -15,6 +15,7 @@
 
 import { homedir } from "os";
 import { join } from "path";
+import { mkdirSync } from "fs";
 import type {
   EmbedOptions,
   EmbeddingResult,
@@ -81,9 +82,14 @@ export class FastEmbedBackend implements Pick<LLM, "embed" | "embedBatch" | "dis
       const fastembed = await import("fastembed");
       const { FlagEmbedding, EmbeddingModel } = fastembed as any;
       const modelEnum = resolveModelEnum(modelName, EmbeddingModel);
+      const cacheDir = defaultCacheDir();
+      // fastembed-js tries to mkdir the cache dir but only at the leaf
+      // level — if ~/.cache/qmd doesn't exist yet it raises ENOENT. Ensure
+      // the full path exists before handing off.
+      try { mkdirSync(cacheDir, { recursive: true }); } catch { /* ignore */ }
       const impl = await FlagEmbedding.init({
         model: modelEnum,
-        cacheDir: defaultCacheDir(),
+        cacheDir,
         showDownloadProgress: process.env.QMD_FASTEMBED_QUIET !== "on",
       });
       return new FastEmbedBackend(modelName, impl);
