@@ -132,9 +132,27 @@ Each user's "right" path depends on their infrastructure. Shipping both means we
 
 ## When to revisit
 
-- **If BGE A/B doesn't close the multi-session gap** (today / next session). BGE-base is the cheapest experiment — try it first, before adding new dependencies.
+- **If the small-class A/B (gte-small / arctic-xs / mxbai-xsmall / e5-small / nomic) doesn't close the multi-session gap.** Try the same-size-class alternatives FIRST — they're cheap and stay within the on-device budget. Qwen3 is the heavier-weight option if the small class doesn't break 95% multi-session.
 - **If we want any HuggingFace embed model on demand.** Path A unlocks the entire `onnx-community` org — mxbai-embed-large, jina-embeddings-v3, e5-mistral-7b, etc.
 - **If a user requests Qwen3 explicitly.** Real demand signal trumps speculative perf wins.
+
+## What the BGE A/B (2026-04-13) taught us
+
+The BGE A/B was the gating test for "do we need Qwen3 at all". Result: **dimension is not the lever, training is.**
+
+| Model | Dim | Size | n=100 R@5 | multi-session R@5 (n=30) | Wall (n=100) |
+|---|---|---|---|---|---|
+| MiniLM-L6-v2 | 384 | 80 MB | 98.0% | 93% | 4m47s |
+| BGE-small-en-v1.5 | 384 | 130 MB | 97.0% | 93% | 7m25s |
+| BGE-base-en-v1.5 | 768 | 440 MB | 98.0% | 93% | 29m02s |
+
+All three score identically on multi-session. Doubling the embed dim (BGE-base) bought nothing and cost **6× wall time** vs MiniLM. **BGE-base is too big for QMD's on-device positioning regardless of whether it would have helped.**
+
+Implications for Qwen3 (0.6B params, 1024-dim, ~600 MB fp32 / ~150 MB q8):
+
+- **Path B (node-llama-cpp GGUF) is the only viable Qwen3 path** for QMD. The 0.6B model size is borderline but the GGUF q8 quantization (~150 MB) keeps it in the same disk-footprint class as BGE-small.
+- **Path A (`@huggingface/transformers` ONNX q8)** — verify the ONNX q8 download is ≤200 MB and per-question time stays ≤10s. If onnxruntime-web's CPU performance falls off a cliff at 1024-dim, Path A may not be viable on developer laptops even though it works architecturally.
+- **Run the small-class A/B (gte/arctic/mxbai/e5/nomic) BEFORE Qwen3.** If a 384-dim alternative closes the gap, we don't need to pay Qwen3's size+latency cost at all.
 
 ## Doctrine reminder
 

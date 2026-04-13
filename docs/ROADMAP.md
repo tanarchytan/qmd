@@ -142,6 +142,60 @@ Important: with the partition fix, multi-session R@5 is still 81%. That's NOT a 
 
 **Next step: BGE A/B.** BGE-base-en-v1.5 (768-dim) is known to outperform MiniLM by 2-5pp on multi-hop retrieval. This is the targeted fix for the residual multi-session gap. Local-only, free, ~25 min wall.
 
+### BGE A/B result (2026-04-13 session close)
+
+Three-way sweep at n=100 with partition fix in place:
+
+| Model | R@5 | R@10 | MRR | multi-session R@5 (n=30) | Wall |
+|---|---|---|---|---|---|
+| MiniLM (control) | 98.0% | 98.0% | 0.932 | 93% | 4m47s |
+| BGE-small-en-v1.5 | 97.0% | 98.0% | 0.936 | 93% | 7m25s |
+| **BGE-base-en-v1.5** | **98.0%** | **98.0%** | **0.937** | **93%** | **29m02s** |
+
+**Conclusive null result:** all three score within 1pp of each other on R@5/R@10. Multi-session R@5 is **identical at 93%** across all three — the BGE family doesn't shift the bottleneck. BGE-base is **6× slower** than MiniLM for zero gain.
+
+**Implication:** the multi-session ranking gap is not a BGE-class problem. Different architectures (Qwen3-Embedding-0.6B, e5-mistral, jina-v3) or different scoring layers (cross-encoder rerank, BM25 weight tuning) are the next experiments. **Qwen3 hybrid plan** documented in `docs/notes/qwen3-embedding-paths.md` is the queued experiment.
+
+**Skipped n=500 BGE confirmation** because n=100 was already definitive — no signal to chase.
+
+### What the BGE A/B actually told us
+
+Two important learnings beyond "BGE doesn't help":
+
+**1. Dimension is not the lever.** BGE-base (768-dim) ≈ BGE-small (384-dim) ≈ MiniLM (384-dim) — all three score 97-98% R@5 with identical multi-session 93%. Doubling the embedding dimension changed nothing. The bottleneck isn't representational capacity; it's training objective / data.
+
+**2. BGE-base is too big for QMD's use case.**
+
+| Model | Dim | Size | Wall (n=100) | per-Q time |
+|---|---|---|---|---|
+| MiniLM-L6-v2 | 384 | ~80 MB | 4m47s | 2.9 s |
+| BGE-small-en-v1.5 | 384 | ~130 MB | 7m25s | 4.5 s |
+| BGE-base-en-v1.5 | **768** | **~440 MB** | **29m02s** | **17.4 s** |
+
+BGE-base is **6× slower** than MiniLM with **zero accuracy gain**. The on-device positioning (CLI, MCP, OpenClaw plugin running on a developer's laptop) makes anything in the BGE-base size class a non-starter as a default. Any future embed model must stay in the **MiniLM/BGE-small footprint** (~80-150 MB, 384-dim, sub-5s per question on n=100 CPU).
+
+### Next experiments — same size class, different training
+
+The same-size-class hypothesis: a 384-dim model trained with a different objective or on different data may outperform MiniLM specifically on multi-hop retrieval, without paying BGE-base's wall-time cost. Candidates ranked by promise + availability in `fastembed-js` / `@huggingface/transformers`:
+
+| Model | Dim | Size | Why try it |
+|---|---|---|---|
+| **gte-small-en-v1.5** (Alibaba) | 384 | ~70 MB | Often #1 in MiniLM-class on MTEB. Different training corpus. |
+| **snowflake-arctic-embed-xs** | 384 | ~50 MB | Explicitly optimized for retrieval (not similarity), short queries. |
+| **mxbai-embed-xsmall-v1** (MixedBread) | 384 | ~70 MB | Strong on retrieval benchmarks for its size. |
+| **e5-small-v2** (Microsoft) | 384 | ~120 MB | Trained on weak supervision over CCNet — different distribution. |
+| **nomic-embed-text-v1.5** (matryoshka 256/512/768) | 384* | ~140 MB | Selectable dim — can run at 384 to match constraints, scale up if needed. |
+
+`*` nomic supports matryoshka truncation: store 768-dim, query at 384. Best of both worlds if quality scales with dim retention.
+
+**Test plan when we run this:** sequential A/B at n=100 with current partition + adaptive cosine pipeline. Same `evaluate/run-embed-ab.sh` framework, just add the new models to the loop. ~15-20 min wall total. If any model shows multi-session R@5 ≥ 96% on n=100, queue n=500 confirmation.
+
+**Defer Qwen3 and BGE-base experiments** until we've exhausted the MiniLM-class candidates above. Both 0.6B+ models are only worth running if the small class doesn't break 95% multi-session.
+
+### What this means for v16 ship
+
+The BGE A/B null result doesn't block v16. **v16 ships with the partition-key + adaptive-cosine + fastembed milestone** as the headline. Multi-session bottleneck is a known v17 problem with a clear test plan (small-class A/B above, then Qwen3 if needed).
+
 ### Doctrine going forward
 
 > Where MemPalace makes doubtful choices, prioritize project quality over shiny benchmarks. They verify our quality. Not an exam where you want a 100 regardless of everything.
