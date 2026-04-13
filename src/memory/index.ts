@@ -871,9 +871,18 @@ export async function memoryRecall(
         `SELECT id, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?`
       ).all(new Float32Array(queryEmbedding), limit * 3) as { id: string; distance: number }[];
 
+      // Cosine threshold: legacy default was 0.3 to filter "obviously
+      // unrelated" matches. In RAW mode we drop the filter entirely to
+      // match MemPalace's "top-K unconditional" recipe — the LME _s
+      // n=500 baseline showed multi-session R@5 dragging at 80% (vs
+      // MemPalace 100%) because legitimate matches at 0.15-0.25 cosine
+      // were being filtered out. Configurable via QMD_VEC_MIN_SIM.
+      const minSim = RAW
+        ? 0
+        : Number(process.env.QMD_VEC_MIN_SIM ?? "0.3");
       for (const r of vecResults) {
         const similarity = 1 - r.distance;
-        if (similarity < 0.3) continue;
+        if (similarity < minSim) continue;
         const mem = getById.get(r.id) as Memory | null;
         if (mem) addResult(mem, similarity);
       }
