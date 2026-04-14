@@ -88,6 +88,34 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _find_node_bin_dir() -> str | None:
+    """Locate the directory containing `node` so we can add it to PATH.
+
+    qmd's bin/qmd shell wrapper does `exec node …`. Python subprocess.Popen
+    inherits the parent process env, which on nvm-managed systems does not
+    include node's bin dir unless the parent shell sourced ~/.nvm/nvm.sh.
+    Returns the directory containing the node binary, or None if not found.
+    """
+    # 1. Already on PATH? (system install or pre-sourced shell)
+    found = shutil.which("node")
+    if found:
+        return os.path.dirname(found)
+    # 2. nvm convention: $NVM_BIN points at <node version>/bin
+    nvm_bin = os.environ.get("NVM_BIN")
+    if nvm_bin and os.path.exists(os.path.join(nvm_bin, "node")):
+        return nvm_bin
+    # 3. Last resort: scan ~/.nvm/versions/node/*/bin for the latest
+    home = os.path.expanduser("~")
+    nvm_versions = os.path.join(home, ".nvm", "versions", "node")
+    if os.path.isdir(nvm_versions):
+        candidates = sorted(os.listdir(nvm_versions), reverse=True)
+        for v in candidates:
+            cand = os.path.join(nvm_versions, v, "bin")
+            if os.path.exists(os.path.join(cand, "node")):
+                return cand
+    return None
+
+
 def _wait_for_health(url: str, timeout_s: float = 30.0) -> None:
     """Block until the qmd MCP HTTP server responds, or raise on timeout."""
     deadline = time.monotonic() + timeout_s
@@ -166,22 +194,41 @@ class QmdMemoryProvider(MemoryProvider):
         env = os.environ.copy()
         env.update(_DEFAULT_QMD_ENV)
         env.update(self._env_overrides)
+        # qmd's bin/qmd shell wrapper does `exec node …`. The Python
+        # subprocess inherits AMB's venv environment, which on nvm-managed
+        # systems does not include node's bin dir. Prepend it so the wrapper
+        # can find node.
+        node_dir = _find_node_bin_dir()
+        if node_dir:
+            env["PATH"] = node_dir + os.pathsep + env.get("PATH", "")
         # Isolate qmd's index per provider instance so config sweeps don't
         # share the same sqlite db.
         env.setdefault("QMD_CACHE_DIR", str(self._cache_dir))
 
+        # Pipe qmd's stderr to a per-instance log file so we can debug
+        # startup/runtime failures after the process exits. Writes go to
+        # the cache dir and are cleaned up alongside it.
+        stderr_log = open(self._cache_dir / "qmd-stderr.log", "wb")
+        self._stderr_log = stderr_log
         self._proc = subprocess.Popen(
             [self._binary, "mcp", "--http", "--port", str(self._port)],
             env=env,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=stderr_log,
         )
         self._url = f"http://127.0.0.1:{self._port}"
         try:
             _wait_for_health(self._url, timeout_s=self._startup_timeout_s)
-        except Exception:
+        except Exception as e:
+            # Capture the qmd stderr tail so the caller knows WHY startup failed
+            stderr_tail = ""
+            try:
+                with open(self._cache_dir / "qmd-stderr.log", "r") as f:
+                    stderr_tail = f.read()[-1500:]
+            except Exception:
+                pass
             self.cleanup()
-            raise
+            raise RuntimeError(f"{e}\nqmd stderr (tail):\n{stderr_tail}")
 
     def cleanup(self) -> None:
         if self._proc is not None:
@@ -192,6 +239,10 @@ class QmdMemoryProvider(MemoryProvider):
                 self._proc.kill()
             finally:
                 self._proc = None
+        if getattr(self, "_stderr_log", None) is not None:
+            try: self._stderr_log.close()
+            except Exception: pass
+            self._stderr_log = None
         if self._cache_dir is not None and self._cache_dir.exists():
             shutil.rmtree(self._cache_dir, ignore_errors=True)
             self._cache_dir = None
