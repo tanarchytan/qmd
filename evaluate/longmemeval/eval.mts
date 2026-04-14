@@ -15,7 +15,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { pathToFileURL } from "url";
-import { openCache } from "../_shared/llm-cache.js";
+import { openCache } from "../../src/llm/cache.js";
 
 const LLM_CACHE_PATH = join(process.cwd(), "evaluate/longmemeval/llm-cache.json");
 const llmCache = openCache(LLM_CACHE_PATH);

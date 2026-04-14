@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, rmSync, mkdtempSync, existsSync, mkdirSync
 import { join } from "path";
 import { tmpdir } from "os";
 import { pathToFileURL } from "url";
-import { openCache } from "../_shared/llm-cache.js";
+import { openCache } from "../../src/llm/cache.js";
 
 // Quality fix C: response cache for reproducible re-runs
 const LLM_CACHE_PATH = join(process.cwd(), "evaluate/locomo/llm-cache.json");

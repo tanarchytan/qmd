@@ -397,7 +397,7 @@ export class RemoteLLM implements LLM {
     let cacheSet: ((p: string, m: string, v: string) => void) | null = null;
     if (cachePath && process.env.QMD_LLM_CACHE !== "off") {
       try {
-        const { openCache } = await import("../../evaluate/_shared/llm-cache.js");
+        const { openCache } = await import("./cache.js");
         const cache = openCache(cachePath);
         cacheGet = (p, m) => cache.get({ model: m, temperature: 0, seed: SEED, prompt: p });
         cacheSet = (p, m, v) => cache.set({ model: m, temperature: 0, seed: SEED, prompt: p }, v);
