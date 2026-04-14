@@ -211,7 +211,43 @@ uv run python amb-bench/run.py
   at minimum, possibly hours if TPM throttles. May need paid quota or a smaller
   subset for mem0.
 
-## Risks & open questions
+## Known bug in AMB's mem0 adapter (affects our scoring)
+
+Discovered 2026-04-14 while reading all 11 AMB adapters in source.
+`src/memory_bench/memory/mem0.py` ingests with
+`memory.add(..., metadata={"doc_id": doc.id})` — round-tripping the
+caller's doc_id through mem0's metadata. **But on retrieve it builds
+`Document(id=r["id"], ...)` using mem0's INTERNAL memory id, NOT the
+doc_id from metadata.**
+
+AMB's own runner doesn't care because it scores end-to-end QA accuracy
+via a judge LLM on the generated answer — Document.id is irrelevant
+for that. **Our wrapper, which scores sr5 against `Query.gold_ids`,
+would silently miss every mem0 hit** because mem0's internal IDs never
+match LME's `answer_session_ids`.
+
+Two fixes available when we add mem0 to the cross-bench:
+
+1. **Patch mem0.py locally** in `~/qmd-baselines/amb/src/memory_bench/memory/mem0.py`
+   — change the retrieve loop's last line to:
+   ```python
+   md = r.get("metadata") or {}
+   doc_id = md.get("doc_id") or r["id"]
+   docs.append(Document(id=str(doc_id), content="\n".join(lines)))
+   ```
+   This is a 3-line change. PR upstream as a separate AMB
+   contribution alongside the qmd adapter PR.
+
+2. **Score from raw_response in our wrapper** — read each provider's
+   raw_response per-row and look up `metadata.doc_id` there instead of
+   trusting `Document.id`. More flexible (handles any provider with
+   the same bug) but more code in our wrapper.
+
+We're going with option 1 (patch + PR) when we wire mem0 in. Hindsight
+already does it correctly — both at ingest and retrieve. qmd does it
+correctly via our adapter (`metadata.doc_id` is read back as
+`Document.id`). bm25 doesn't need the trick because it stores
+`Document(id=doc.id)` directly.
 
 1. **mem0 Gemini call volume.** The biggest unknown. mem0's ingest pattern
    makes one LLM call per ingested doc (or chunk). At 5000+ docs per n=500
