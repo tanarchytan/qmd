@@ -71,17 +71,21 @@ def _tokenize(text: str) -> set[str]:
     return {t for t in cleaned.split() if len(t) >= 2}
 
 
-def compute_r5(retrieved: list[Document], gold_answers: list[str]) -> int:
+def compute_r5(retrieved: list[Document], gold_answers: list) -> int:
     """Token-overlap r5: 1 if ≥70% of any gold answer's tokens appear in any
     retrieved doc text, OR any single retrieved doc text contains ≥70% of any
-    gold answer. Mirrors eval.mts r5 logic at session-id metric audit."""
+    gold answer. Mirrors eval.mts r5 logic at session-id metric audit.
+
+    LoCoMo gold answers can be ints/floats/lists, not just strings, so
+    coerce everything to str before tokenizing."""
     if not retrieved or not gold_answers:
         return 0
     retrieved_tokens: set[str] = set()
     for doc in retrieved:
         retrieved_tokens.update(_tokenize(doc.content))
     for gold in gold_answers:
-        gold_tokens = _tokenize(gold)
+        gold_str = str(gold) if not isinstance(gold, str) else gold
+        gold_tokens = _tokenize(gold_str)
         if not gold_tokens:
             continue
         overlap = len(gold_tokens & retrieved_tokens) / len(gold_tokens)
@@ -134,9 +138,19 @@ def run_provider_on_dataset(
     )
     provider.initialize()
     try:
-        # Load dataset
-        documents = dataset.load_documents(split=split, limit=limit)
+        # Load queries first (limit applies here — restricts the question set).
+        # Then load only the documents needed by those queries: AMB's load_documents
+        # supports user_ids filter, and for both LME and LoCoMo the user_id (=
+        # isolation unit) is the question/conversation scope. Without this filter,
+        # passing limit=20 to load_documents caps the TOTAL doc count at 20 which
+        # for LME means we only get 20 of ~25,000 sessions and every right session
+        # falls outside the loaded set → sr5 = 0%.
         queries = dataset.load_queries(split=split, limit=limit)
+        if queries and any(q.user_id for q in queries):
+            user_ids = {q.user_id for q in queries if q.user_id}
+            documents = dataset.load_documents(split=split, user_ids=user_ids)
+        else:
+            documents = dataset.load_documents(split=split, limit=limit)
         print(f"  loaded {len(documents)} docs, {len(queries)} queries")
 
         # Ingest
