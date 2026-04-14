@@ -12,7 +12,7 @@
  * Env: same env-var toggles as locomo eval (QMD_INGEST_REFLECTIONS, QMD_RECALL_MMR, etc.)
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { pathToFileURL } from "url";
 import { openCache } from "../../src/llm/cache.js";
@@ -372,6 +372,27 @@ async function main() {
   let runningF1 = 0;
   let completed = 0;
 
+  // Hoisted output path so per-question loop can incrementally persist
+  // partial results. Final write at end of main() rewrites with full summary.
+  // Atomic via writeFileSync(tmp) + renameSync — safe against kill mid-write.
+  const outName = resultsTag ? `results-${resultsTag}.json` : "results.json";
+  const outPath = join(QMD_DIR, "evaluate/longmemeval", outName);
+  const PARTIAL_SAVE_EVERY = parseInt(process.env.QMD_EVAL_PARTIAL_EVERY || "10", 10);
+
+  function savePartial() {
+    const partial = {
+      partial: true,
+      progress: { completed: allResults.length, total: instances.length },
+      results: allResults,
+    };
+    try {
+      writeFileSync(outPath + ".tmp", JSON.stringify(partial));
+      renameSync(outPath + ".tmp", outPath);
+    } catch (e) {
+      process.stderr.write(`\n[partial-save] failed: ${e}\n`);
+    }
+  }
+
   // Per-question handler — pure function, safe to run concurrently.
   // Workers share the SQLite db; better-sqlite3 calls block the JS thread
   // briefly but await calls (LLM, embed) suspend so other workers run.
@@ -504,6 +525,8 @@ async function main() {
       searchMs, answerMs,
     });
 
+    if (allResults.length % PARTIAL_SAVE_EVERY === 0) savePartial();
+
     process.stdout.write(`\r  ${progressBar(completed, instances.length)} F1=${(runningF1 / completed * 100).toFixed(1)}% mem=${memories.length} search=${searchMs}ms ${elapsed(globalStart)}`);
   }
 
@@ -566,9 +589,8 @@ async function main() {
     console.log(`    ${qt.padEnd(24)} (n=${String(qrs.length).padStart(4)}): R@5=${(r5 * 100).toFixed(0).padStart(3)}%  R@10=${(r10 * 100).toFixed(0).padStart(3)}%  F1=${(f1 * 100).toFixed(1).padStart(5)}%  EM=${(em * 100).toFixed(1).padStart(5)}%  SH=${(sh * 100).toFixed(1).padStart(5)}%`);
   }
 
-  // Save
-  const outName = resultsTag ? `results-${resultsTag}.json` : "results.json";
-  const outPath = join(QMD_DIR, "evaluate/longmemeval", outName);
+  // Final save — outPath already declared above for incremental partial saves.
+  // This rewrites the file with the full summary block (no `partial: true`).
   writeFileSync(outPath, JSON.stringify({
     config: { ds: dsName, useLLM, model: useLLM ? LLM_CONFIG[activeLLM].model : "none", llm: activeLLM, limit, questionTypeFilter, ablation },
     summary: {

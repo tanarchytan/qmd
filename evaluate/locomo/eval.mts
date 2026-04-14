@@ -13,7 +13,7 @@
  *   3. Score answer vs ground truth (F1 + exact match)
  */
 
-import { readFileSync, writeFileSync, rmSync, mkdtempSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, renameSync, rmSync, mkdtempSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { pathToFileURL } from "url";
@@ -569,6 +569,28 @@ async function main() {
     answerMs: number;
   }> = [];
 
+  // Hoisted output path so per-question loop can incrementally persist
+  // partial results. Final write at end of main() rewrites with full summary.
+  // Atomic via writeFileSync(tmp) + renameSync — safe against kill mid-write.
+  const resultsName = resultsTag ? `results-${resultsTag}.json` : "results.json";
+  const outPath = join(QMD_DIR, "evaluate/locomo", resultsName);
+  const PARTIAL_SAVE_EVERY = parseInt(process.env.QMD_EVAL_PARTIAL_EVERY || "10", 10);
+  const totalQuestions = conversations.reduce((s, c: any) => s + (c.qa?.length || 0), 0);
+
+  function savePartial() {
+    const partial = {
+      partial: true,
+      progress: { completed: allResults.length, total: totalQuestions },
+      results: allResults,
+    };
+    try {
+      writeFileSync(outPath + ".tmp", JSON.stringify(partial));
+      renameSync(outPath + ".tmp", outPath);
+    } catch (e) {
+      process.stderr.write(`\n[partial-save] failed: ${e}\n`);
+    }
+  }
+
   // Helper: ingest all sessions for a conversation
   async function ingestConversation(db: Database, c: Record<string, any>, scope: string) {
     let sessionCount = 0;
@@ -825,6 +847,8 @@ async function main() {
         searchMs, answerMs,
       });
 
+      if (allResults.length % PARTIAL_SAVE_EVERY === 0) savePartial();
+
       // Progress every question
       const avgF1 = runningF1 / (i + 1);
       const line = [
@@ -932,9 +956,8 @@ async function main() {
     console.log(`          A: ${r.answer} | P: ${r.prediction.slice(0, 60)}`);
   }
 
-  // Save (results path includes tag for ablation runs)
-  const resultsName = resultsTag ? `results-${resultsTag}.json` : "results.json";
-  const outPath = join(QMD_DIR, "evaluate/locomo", resultsName);
+  // Final save — outPath already declared above for incremental partial saves.
+  // This rewrites the file with the full summary block (no `partial: true`).
   writeFileSync(outPath, JSON.stringify({
     config: { useLLM, model: useLLM ? LLM_CONFIG[activeLLM].model : "none", llm: activeLLM, limit, convFilter },
     summary: {
