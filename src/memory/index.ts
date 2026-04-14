@@ -1126,25 +1126,60 @@ export async function memoryRecall(
   // 5. Sort by combined score (single pool — dual-pass tested + lost in v15)
   let sorted = [...results.values()].sort((a, b) => b.score - a.score);
 
-  // 5b. Optional: rerank top candidates with LLM/dedicated reranker (skip in RAW)
-  if (!RAW && options.rerank !== false && sorted.length > 1) {
+  // 5b. Optional: rerank top candidates. Two paths:
+  //   - legacy (`!RAW && remoteConfig.rerank`): remote LLM/reranker API
+  //     blended 40% original + 60% rerank. Subject to the RAW gate.
+  //   - cross-encoder (`QMD_MEMORY_RERANK=cross-encoder`): local ONNX
+  //     cross-encoder via TransformersRerankBackend. Fires regardless of
+  //     RAW so eval harnesses can A/B rerank as a first-class lever.
+  //     Default model: cross-encoder/ms-marco-MiniLM-L-6-v2, file
+  //     model_quint8_avx2 (~23 MB, ~5-10 ms per pair CPU).
+  const crossEncoderRerank = process.env.QMD_MEMORY_RERANK === "cross-encoder";
+  if ((crossEncoderRerank || (!RAW && options.rerank !== false)) && sorted.length > 1) {
     const rerankCandidates = sorted.slice(0, Math.min(sorted.length, limit * 3));
     try {
-      const remoteConfig = getRemoteConfig();
-      if (remoteConfig?.rerank) {
-        const remote = getRemoteLLM()!;
+      if (crossEncoderRerank) {
+        // Lazy-load the cross-encoder backend on first use.
+        const mod = await import("../llm/transformers-rerank.js");
+        const backend = await mod.createTransformersRerankBackend();
         const docs = rerankCandidates.map(r => ({ file: r.id, text: r.text }));
-        const result = await remote.rerank(query, docs, {});
-        // Merge rerank scores: blend original score with rerank score
-        const rerankMap = new Map(result.results.map(r => [r.file, r.score]));
+        const result = await backend.rerank(query, docs);
+        // Cross-encoder scores are raw logits — higher is better but the
+        // scale differs from cosine. Normalize to [0,1] via min-max across
+        // the batch before blending so the 40/60 blend is meaningful.
+        const rawScores = result.results.map(r => r.score);
+        const minS = Math.min(...rawScores);
+        const maxS = Math.max(...rawScores);
+        const range = maxS - minS;
+        const normMap = new Map<string, number>();
+        for (const r of result.results) {
+          const norm = range > 0 ? (r.score - minS) / range : 0.5;
+          normMap.set(r.file, norm);
+        }
         for (const r of rerankCandidates) {
-          const rerankScore = rerankMap.get(r.id);
+          const rerankScore = normMap.get(r.id);
           if (rerankScore !== undefined) {
-            // Blend: 40% original + 60% rerank (reranker is more precise)
             r.score = 0.4 * r.score + 0.6 * rerankScore;
           }
         }
         sorted = rerankCandidates.sort((a, b) => b.score - a.score);
+      } else {
+        const remoteConfig = getRemoteConfig();
+        if (remoteConfig?.rerank) {
+          const remote = getRemoteLLM()!;
+          const docs = rerankCandidates.map(r => ({ file: r.id, text: r.text }));
+          const result = await remote.rerank(query, docs, {});
+          // Merge rerank scores: blend original score with rerank score
+          const rerankMap = new Map(result.results.map(r => [r.file, r.score]));
+          for (const r of rerankCandidates) {
+            const rerankScore = rerankMap.get(r.id);
+            if (rerankScore !== undefined) {
+              // Blend: 40% original + 60% rerank (reranker is more precise)
+              r.score = 0.4 * r.score + 0.6 * rerankScore;
+            }
+          }
+          sorted = rerankCandidates.sort((a, b) => b.score - a.score);
+        }
       }
     } catch (err) {
       // Rerank failed — fall back to original ranking

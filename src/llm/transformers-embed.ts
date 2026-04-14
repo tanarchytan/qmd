@@ -147,18 +147,53 @@ export class TransformersEmbedBackend implements LLM {
 
 /**
  * Convenience factory. Reads env vars or defaults.
+ *
+ * Two ways to specify the model:
+ *
+ *   QMD_TRANSFORMERS_EMBED — composite HF path, e.g.
+ *     mixedbread-ai/mxbai-embed-xsmall-v1
+ *     mixedbread-ai/mxbai-embed-xsmall-v1/onnx/model_q8
+ *     sentence-transformers/all-MiniLM-L6-v2/onnx/model_quint8_avx2
+ *   (parsed into modelId + optional fileName via parseHfModelPath)
+ *
+ * OR the explicit triple:
+ *   QMD_TRANSFORMERS_MODEL  — HF repo id
+ *   QMD_TRANSFORMERS_DTYPE  — q8 | fp16 | fp32 | q4 | int8 | uint8
+ *   QMD_TRANSFORMERS_FILE   — ONNX file stem (omit .onnx suffix)
+ *
+ * The composite var takes precedence when set.
  */
 export function createTransformersEmbedBackend(
   model?: string,
   dtype?: string,
   fileName?: string,
 ): Promise<TransformersEmbedBackend> {
+  // Composite override (parseHfModelPath lives in transformers-rerank.ts
+  // — re-export there so both backends share the parser).
+  const composite = process.env.QMD_TRANSFORMERS_EMBED;
+  let envModel: string | undefined;
+  let envFile: string | undefined;
+  if (composite) {
+    // Inline parser to avoid a circular import. Same logic as
+    // parseHfModelPath in transformers-rerank.ts.
+    const parts = composite.split("/").filter(Boolean);
+    if (parts.length >= 2) {
+      envModel = `${parts[0]}/${parts[1]}`;
+      const tail = parts.slice(2).filter(p => p !== "onnx");
+      if (tail.length > 0) envFile = tail.join("/").replace(/\.onnx$/, "");
+    } else {
+      envModel = composite;
+    }
+  }
   const m = model
+    ?? envModel
     ?? process.env.QMD_TRANSFORMERS_MODEL
     ?? "mixedbread-ai/mxbai-embed-xsmall-v1";
   const d = dtype
     ?? process.env.QMD_TRANSFORMERS_DTYPE
     ?? "q8";
-  const f = fileName ?? process.env.QMD_TRANSFORMERS_FILE;
+  const f = fileName
+    ?? envFile
+    ?? process.env.QMD_TRANSFORMERS_FILE;
   return TransformersEmbedBackend.create(m, d, f);
 }
