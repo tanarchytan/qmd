@@ -33,7 +33,13 @@ import {
   type IndexStatus,
 } from "../index.js";
 import { getConfigPath } from "../collections.js";
-import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections as storeListCollections, generateEmbeddings, reindexCollection } from "../store.js";
+import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections as storeListCollections, generateEmbeddings, reindexCollection, enableProductionMode } from "../store.js";
+
+// SDK consumers importing this module directly (without going through qmd.ts)
+// would otherwise hit the production-mode guard on getDefaultDbPath. CLI users
+// already get this via src/cli/qmd.ts:110 — calling here is a noop for them
+// and a critical safety net for everyone else. Upstream tobi/qmd 9dd8a73.
+enableProductionMode();
 import { memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, extractAndStore, knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeTimeline, knowledgeStats, MEMORY_CATEGORIES } from "../memory/index.js";
 
 // =============================================================================

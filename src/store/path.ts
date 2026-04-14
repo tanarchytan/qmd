@@ -6,7 +6,10 @@ import { realpathSync, mkdirSync } from "node:fs";
 import type { Database } from "../db.js";
 import { getStoreCollections, getCollectionByName } from "./store-collections.js";
 
-const HOME = process.env.HOME || "/tmp";
+// USERPROFILE fallback for Windows MCP subprocess case (upstream tobi/qmd 77e71d0).
+// MCP clients spawn QMD as a subprocess passing USERPROFILE but not HOME; without
+// the fallback we open an empty /tmp DB instead of the user's actual index.
+const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp";
 
 export function homedir(): string {
   return HOME;
