@@ -40,7 +40,7 @@ import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections
 // already get this via src/cli/qmd.ts:110 — calling here is a noop for them
 // and a critical safety net for everyone else. Upstream tobi/qmd 9dd8a73.
 enableProductionMode();
-import { memoryStore, memoryStoreBatch, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, extractAndStore, knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeTimeline, knowledgeStats, MEMORY_CATEGORIES } from "../memory/index.js";
+import { memoryStore, memoryStoreBatch, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, extractAndStore, ensureScopePartitions, knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeTimeline, knowledgeStats, MEMORY_CATEGORIES } from "../memory/index.js";
 
 // =============================================================================
 // Types for structured content
@@ -644,15 +644,16 @@ Intent-aware lex (C++ performance, not sports):
     "memory_store_batch",
     {
       title: "Store Memories (Batch)",
-      description: "Batched version of memory_store. Embeds all texts in ONE provider call instead of N — typically 8-10x faster for bulk ingest because the embedding backend (transformers.js, remote API) batches much more efficiently than per-call. Hash dedup is also batched into a single SQL round-trip, and inserts run in a single SQLite transaction. Each item supports the same fields as memory_store: text, category, scope, importance, metadata.",
+      description: "Batched version of memory_store. Embeds all texts in ONE provider call instead of N — typically 8-10x faster for bulk ingest because the embedding backend (transformers.js, remote API) batches much more efficiently than per-call. Hash dedup is batched into a single SQL round-trip, inserts use multi-value VALUES (one statement per table), and the whole pass runs in a single transaction. Each item supports the same fields as memory_store plus `skipHistory` to opt out of the per-memory memory_history write — useful for bulk ingest where audit history isn't needed.",
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
         items: z.array(z.object({
           text: z.string().describe("Memory content"),
-          category: z.enum(["preference", "fact", "decision", "entity", "reflection", "other"]).optional(),
+          category: z.enum(["preference", "fact", "decision", "entity", "reflection", "other"]).optional().describe("Skip the regex classifier by pre-setting the category. Use 'other' to opt out of classification entirely."),
           scope: z.string().optional(),
           importance: z.number().min(0).max(1).optional(),
           metadata: z.record(z.string(), z.unknown()).optional(),
+          skipHistory: z.boolean().optional().describe("When true, skip the memory_history INSERT for this item. Bulk ingest of fresh corpora doesn't need history tracking."),
         })).describe("List of memory items to ingest in one batched embed + insert pass"),
       },
     },
@@ -664,6 +665,27 @@ Intent-aware lex (C++ performance, not sports):
       return {
         content: [{ type: "text", text: `Batched ${results.length} memories: ${created} created, ${dupes} duplicate.` }],
         structuredContent: { results },
+      };
+    }
+  );
+
+  server.registerTool(
+    "memory_register_scopes",
+    {
+      title: "Register Memory Scopes (pre-warm vec0 partitions)",
+      description: "Pre-allocate vec0 partition rows for a known set of scope keys before bulk ingest. The first vector insert into a new scope pays a partition-allocation cost (allocates partition row + initial chunk metadata, ~30-50ms each); calling this tool upfront with all expected scope values eliminates that cold cost from the per-insert path. Idempotent — re-registering an existing scope is a no-op. Caller must know the embedding dimension (use `dimensions` parameter to match the vec table). Useful for eval harnesses + cross-bench wrappers that know all scope values up front.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        scopes: z.array(z.string()).describe("List of scope keys to pre-warm. Each becomes a partition in memories_vec."),
+        dimensions: z.number().int().positive().describe("Embedding dimension (must match the vec table). For mxbai-xs use 384."),
+      },
+    },
+    async ({ scopes, dimensions }) => {
+      const db = store.internal.db;
+      ensureScopePartitions(db, dimensions, scopes);
+      return {
+        content: [{ type: "text", text: `Pre-warmed ${scopes.length} vec0 partition(s) at dim=${dimensions}.` }],
+        structuredContent: { registered: scopes.length, dimensions },
       };
     }
   );

@@ -380,9 +380,16 @@ class QmdMemoryProvider(MemoryProvider):
     # -------------------------------------------------------------------
 
     # Batch size for memory_store_batch calls. The qmd MCP tool batches the
-    # embed call internally so a larger batch is strictly faster on the embed
-    # side. Cap kept modest (32) so JSON-RPC payloads stay reasonable.
-    _INGEST_BATCH_SIZE = 32
+    # embed call internally so larger batches are strictly faster on the embed
+    # side, and the new bulk multi-VALUES insert path collapses N row inserts
+    # into one SQL statement per table per batch. 128 is a good balance:
+    # ~4x fewer roundtrips than 32 and JSON-RPC payloads stay reasonable
+    # (~1 MB for 128 LME session texts).
+    _INGEST_BATCH_SIZE = 128
+
+    # Embedding dimension — used to pre-warm vec0 partitions before ingest.
+    # mxbai-xs is 384d. Override via env if you swap embed model.
+    _EMBED_DIMENSIONS = 384
 
     def _maybe_user_only(self, content: str) -> str:
         """L1 (user-turns-only) ingest filter. Both LME and LoCoMo serialize
@@ -405,19 +412,39 @@ class QmdMemoryProvider(MemoryProvider):
             return content
 
     def ingest(self, documents: list[Document]) -> None:
-        """Batched ingest via memory_store_batch (qmd commit f7a7086+).
-        ~8-10x faster than per-doc memory_store calls because the embedding
-        backend (transformers.js mxbai-xs q8) batches a chunk of texts in
-        one forward pass, and hash-dedup + inserts both batch into single
-        SQLite round-trips. Mirrors AMB hybrid_search.ingest()'s pattern of
-        collecting all texts then calling encode() once.
+        """Batched ingest via memory_store_batch + pre-warmed vec0 partitions.
 
-        L1 filtering (user-turns-only) is applied here at the adapter level
-        because qmd's library memory_store path doesn't read the
-        QMD_INGEST_USER_ONLY env var (that var is only honored by
-        evaluate/longmemeval/eval.mts). Doing it in the adapter is the
-        smallest-scope fix and lets us test L1 through AMB without changing
-        qmd's library API."""
+        Three optimizations stack here, mirroring AMB hybrid_search's pattern:
+
+        1. **Pre-warm vec0 partitions** via memory_register_scopes — eliminates
+           the per-scope cold-allocation cost (~30-50ms each) from the per-batch
+           insert path. Caller knows all scope keys upfront from doc.user_id.
+
+        2. **Larger batches (128 vs 32)** — 4x fewer JSON-RPC roundtrips,
+           lets transformers.js batch-encode 128 texts per forward pass.
+
+        3. **Per-item flags**: skipHistory=True (no audit trail needed for
+           bench), category="other" (skips the per-item regex classifier).
+
+        L1 filtering (user-turns-only) is applied here because qmd's library
+        memoryStore path doesn't read QMD_INGEST_USER_ONLY (that var is only
+        honored by evaluate/longmemeval/eval.mts). Doing it in the adapter is
+        the smallest-scope fix and lets us test L1 through AMB without
+        changing qmd's library API.
+        """
+        # Pre-warm partitions for the full scope set in one tool call.
+        # Idempotent — re-registering existing scopes is a no-op on the qmd side.
+        unique_scopes = sorted({doc.user_id or "global" for doc in documents})
+        try:
+            self._call_tool(
+                "memory_register_scopes",
+                {"scopes": unique_scopes, "dimensions": self._EMBED_DIMENSIONS},
+            )
+        except Exception:
+            # Older qmd builds without memory_register_scopes — fall through
+            # to the per-batch cold-alloc path. Not fatal, just slower.
+            pass
+
         for i in range(0, len(documents), self._INGEST_BATCH_SIZE):
             chunk = documents[i:i + self._INGEST_BATCH_SIZE]
             items = []
@@ -429,6 +456,11 @@ class QmdMemoryProvider(MemoryProvider):
                     "text": self._maybe_user_only(doc.content),
                     "scope": doc.user_id or "global",
                     "metadata": metadata,
+                    # Bench doesn't need history tracking — skip the
+                    # per-item memory_history INSERT.
+                    "skipHistory": True,
+                    # Skip the per-item classifier regex pass.
+                    "category": "other",
                 })
             self._call_tool("memory_store_batch", {"items": items})
 
