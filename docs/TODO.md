@@ -220,6 +220,7 @@ on LME-class workloads.
 
 ## §4 — Parked / low priority
 
+- [ ] **Rename brainstorm — defer to v17 ship.** qmd started as a markdown indexer ("query md") but the project is now a memory framework competing with mem0 / Hindsight / MemPalace. Name communicates none of that. Rename is justifiable but mid-v17 is the wrong time (npm package, binary, github repo, 14+ historical bench runs all reference QMD_*; AMB adapter is being PR'd as "qmd" now). Brainstorm candidates so far: **Lotl** (Living-off-the-Land — our actual differentiator is "use what's already on the machine", FTS5 + sqlite-vec + local ONNX, no LLM, no infra; bonus axolotl mascot), **Mnemex** (mnemonic + Vannevar Bush's Memex), **Hearthmem**. User also floated Meme/memeory and Bender/Futurama themes. Revisit after v17 ships and the AMB cross-bench data lands so we have a stable benchmark anchor under the old name before any rename invalidates citation continuity.
 - [ ] **Pluggable storage backend** (`MemoryBackend` interface) — sqlite-vec + pgvector + lancedb first-class. Parked until multi-tenant deployment or 1M+ memories per scope demand it.
 - [ ] **GraphRAG community summaries** (low priority — Category 10 KG injection is higher value).
 - [ ] **LIRS / Belady eviction baselines** (theoretical, no production signal).
