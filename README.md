@@ -95,6 +95,34 @@ qmd mcp --http --daemon           # start on localhost:8181
 qmd mcp stop                      # stop
 ```
 
+## ⭐ Recommended local config — beats MemPalace on LongMemEval
+
+Four lines in `~/.config/qmd/.env`:
+
+```sh
+QMD_EMBED_BACKEND=transformers
+QMD_TRANSFORMERS_MODEL=mixedbread-ai/mxbai-embed-xsmall-v1
+QMD_TRANSFORMERS_DTYPE=q8
+QMD_VEC_MIN_SIM=0.1
+```
+
+**Benchmark (2026-04-14, LongMemEval `_s` n=500, session granularity, RAW recall):**
+
+| System | Overall R@5 (session-ID) | Multi-session R@5 | Wall |
+|---|---|---|---|
+| **qmd (this config)** | **98.4%** ✅ | **100%** | ~15 min |
+| MemPalace raw (live reproduction against the same data file) | 96.6% | 100%* | 12m59s |
+| MemPalace published | 96.6% | 100%* | 12m30s |
+
+`*` MemPalace only publishes per-category R@10; R@5 per-category not available for direct comparison.
+
+**What these four lines do:**
+- **Local ONNX embed** via `@huggingface/transformers` — no cmake, no GPU, ~50 MB model download on first use.
+- **mxbai-xs q8** — 384-dim quantized encoder; 2-3 seconds per query on CPU.
+- **`QMD_VEC_MIN_SIM=0.1`** — overrides the adaptive cosine acceptance floor. The default `max(0.05, top1 × 0.5)` rejects candidates too aggressively on tight-cluster q8 models (top1 ≈ 0.82 → floor ≈ 0.41 → pool shrinks to ~10 memories). Fixed 0.1 keeps the pool at ~40-50 and adds +0.2pp sr5 on the already-winning baseline.
+
+See `docs/ROADMAP.md` "Night 2026-04-13 → 2026-04-14 — metric audit" for the full per-model comparison table (mxbai variants, arctic family, MiniLM, BGE, Gemini, MemPalace reference).
+
 ## Cloud Configuration
 
 Copy `.env.example` to `~/.config/qmd/.env`. Loaded automatically.
