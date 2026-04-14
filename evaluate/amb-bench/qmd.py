@@ -150,6 +150,9 @@ class QmdMemoryProvider(MemoryProvider):
         self._port: int | None = None
         self._url: str | None = None
         self._cache_dir: Path | None = None
+        # MCP session state — populated by _handshake() on first tool call.
+        self._session_id: str | None = None
+        self._next_request_id: int = 0
 
     # -------------------------------------------------------------------
     # Lifecycle
@@ -194,6 +197,8 @@ class QmdMemoryProvider(MemoryProvider):
             self._cache_dir = None
         self._port = None
         self._url = None
+        self._session_id = None
+        self._next_request_id = 0
 
     def prepare(self, store_dir: Path, unit_ids: set[str] | None = None, reset: bool = True) -> None:
         # qmd's storage is managed by initialize() via QMD_CACHE_DIR; nothing
@@ -203,26 +208,98 @@ class QmdMemoryProvider(MemoryProvider):
             self.initialize()
 
     # -------------------------------------------------------------------
-    # MCP tool calls
+    # MCP HTTP transport — JSON-RPC over POST /mcp
     # -------------------------------------------------------------------
+    # qmd uses MCP's StreamableHTTP transport. Sessions are mandatory:
+    # the first call must be `initialize`, the server returns
+    # `mcp-session-id` in the response headers, and every subsequent
+    # JSON-RPC call must include that header. We hand-roll the handshake
+    # here to avoid pulling the full mcp Python SDK as an AMB dependency.
 
-    def _call_tool(self, tool: str, arguments: dict) -> dict:
-        """Invoke an MCP tool over HTTP and return its parsed result."""
+    _MCP_PROTOCOL_VERSION = "2024-11-05"
+
+    def _next_id(self) -> int:
+        self._next_request_id += 1
+        return self._next_request_id
+
+    def _post_jsonrpc(self, body: dict, *, expect_response: bool = True) -> tuple[dict | None, dict[str, str]]:
+        """POST a JSON-RPC envelope to /mcp and return (parsed_body, headers).
+
+        Includes the MCP session header on every call after the handshake.
+        StreamableHTTP requires the Accept header to advertise both JSON and SSE.
+        """
         if self._url is None:
             raise RuntimeError("QmdMemoryProvider not initialized. Call initialize() first.")
-        # MCP HTTP transport uses JSON-RPC 2.0 envelopes.
-        payload = {
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        if self._session_id is not None:
+            headers["mcp-session-id"] = self._session_id
+        r = requests.post(f"{self._url}/mcp", json=body, headers=headers, timeout=60)
+        if r.status_code >= 400:
+            raise RuntimeError(f"qmd MCP HTTP {r.status_code}: {r.text[:300]}")
+        if not expect_response:
+            return None, dict(r.headers)
+        # StreamableHTTP can reply with either application/json (single
+        # response) or text/event-stream (one or more SSE events). For
+        # simple request/response we only need the first JSON payload.
+        ctype = r.headers.get("content-type", "")
+        if "text/event-stream" in ctype:
+            # Parse the first `data: {...}` line out of the SSE stream.
+            for line in r.text.splitlines():
+                if line.startswith("data:"):
+                    return json.loads(line[5:].strip()), dict(r.headers)
+            raise RuntimeError(f"qmd MCP SSE response had no data lines: {r.text[:300]}")
+        return r.json(), dict(r.headers)
+
+    def _handshake(self) -> None:
+        """Run the MCP initialize handshake and record the session id."""
+        if self._session_id is not None:
+            return
+        init_body = {
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": self._next_id(),
+            "method": "initialize",
+            "params": {
+                "protocolVersion": self._MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "amb-bench-qmd-adapter", "version": "0.1.0"},
+            },
+        }
+        _, headers = self._post_jsonrpc(init_body)
+        # Header names from requests are case-insensitive but we store the
+        # mcp-session-id verbatim — qmd reads it back the same way.
+        sid = headers.get("mcp-session-id") or headers.get("Mcp-Session-Id")
+        if not sid:
+            raise RuntimeError("qmd MCP handshake did not return mcp-session-id header")
+        self._session_id = sid
+        # Per MCP spec, send notifications/initialized after the initialize
+        # response so the server knows the client is ready. This is a
+        # notification (no `id` field, no expected response body).
+        notify_body = {
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {},
+        }
+        self._post_jsonrpc(notify_body, expect_response=False)
+
+    def _call_tool(self, tool: str, arguments: dict) -> dict:
+        """Invoke an MCP tool over HTTP and return its parsed result payload."""
+        if self._session_id is None:
+            self._handshake()
+        body = {
+            "jsonrpc": "2.0",
+            "id": self._next_id(),
             "method": "tools/call",
             "params": {"name": tool, "arguments": arguments},
         }
-        r = requests.post(f"{self._url}/mcp", json=payload, timeout=60)
-        r.raise_for_status()
-        body = r.json()
-        if "error" in body:
-            raise RuntimeError(f"qmd MCP error on {tool}: {body['error']}")
-        return body.get("result", {})
+        parsed, _ = self._post_jsonrpc(body)
+        if parsed is None:
+            raise RuntimeError(f"qmd MCP {tool} returned no body")
+        if "error" in parsed:
+            raise RuntimeError(f"qmd MCP error on {tool}: {parsed['error']}")
+        return parsed.get("result", {})
 
     # -------------------------------------------------------------------
     # MemoryProvider interface
