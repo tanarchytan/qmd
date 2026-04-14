@@ -51,25 +51,44 @@ default-off, untested at n=500, and could move multi-session if turned on.
 - [x] **`QMD_MEMORY_MMR=session`** — RAW-compat dialog diversity. n=500: 98.4% overall, 90.0% preference. Tied with loose-floor baseline.
 - [x] **Cross-encoder rerank** (`cross-encoder/ms-marco-MiniLM-L6-v2` via `transformers.js`) — shipped 2026-04-14 (commit `773b079`), n=500 A/B (`d3da644`): **flat on sr5** (98.4% overall, 90.0% preference). r5 preference jumped 90→100% (lexical rerank finds better in-session passages) but sr5 is unchanged — the failure is at candidate generation, not rerank. Flagged off. Code retained for future use cases.
 
-### Lesson from the parked batch
+### Root-cause diagnostic (2026-04-14, post-cross-encoder)
 
-Every rerank-stage and post-retrieval-filter lever tested so far has been
-**flat on preference sr5**. This is the strongest possible signal that
-**the right sessions are not in the top-K candidate pool to begin with**.
-Preference questions paraphrase the user's stated preference heavily
-(e.g. "recommend cultural events" ↔ "user practices Spanish on weekends"),
-so cosine between the raw query and the right session is below our
-top-K cutoff. Rerank can't recover what isn't in the pool. **v17 work
-must widen the candidate generation stage**, not re-score it.
+Ran `evaluate/preference-rank-diagnostic.mts`: for each of the 30 preference
+questions, embed with `mxbai-xs q8`, no-cutoff vec0 KNN against the question
+scope, find the rank of the correct `source_session_id`. **All 30 correct
+sessions are in the candidate pool. Coverage is 100%. The failure is
+ranking, not generation.** Vector-only sr5 = 83.3% (25/30 in top-5);
+production sr5 with BM25/RRF climbs to 90.0%. The 5 vector misses sit at
+ranks 6, 8, 12, 39, and one BM25 recovers. See ROADMAP "v17 root-cause
+diagnostic" section for full distribution + per-question rank list.
 
-### Queued experiments (v17, in order of expected preference-sr5 lift)
+**This invalidates the entire candidate-generation queue below.** All
+levers in the previous version of this section (HyDE, per-turn ingest,
+LLM query expansion, multi-vector, candidate pool size, floor calibration)
+attack a problem that does not exist. The candidates are there. Cross-
+encoder rerank failed not because the right session was missing from its
+top-40 input, but because cross-encoders re-score by lexical relevance and
+the **wrong** session has more verbose assistant text overlapping the
+query than the **right** session has user-turn text.
 
-- [ ] **HyDE (Hypothetical Document Embedding)** — generate a fake "ideal answer" passage with a local LLM, embed the hypothetical instead of the raw query, retrieve against that. Bridges the query↔answer paraphrase gap that is killing preference. Blocks: need a generation-capable local backend (node-llama-cpp was ripped; options are `transformers.js` text-generation, a remote call, or a small ONNX chat model). Priority: **highest**.
-- [ ] **LLM query expansion (remote)** — full sentence-level paraphrase via a remote call (cheaper than local HyDE to try first). Previous `EXPAND=keywords` was zero-LLM and only fanned out keyword clusters; this would fan out whole paraphrase sentences. Priority: **high** if HyDE is blocked on backend wiring.
-- [ ] **Per-turn ingest A/B on LME** — flip `QMD_INGEST_PER_TURN=on`, rebuild dbs, rerun n=500. Turns ~50 memories/scope into ~500. More finely-chunked ingest may increase the probability that a preference-stating turn survives top-K retrieval. Still untested after the 2026-04-14 WSL crashes. Priority: **high** (candidate-pool lever, cheap).
-- [ ] **Candidate pool size** — currently top-40 into rerank; MemPalace retrieves wider and filters. Raise `limit * N` blend ratio in `memoryRecall` block 5a. Priority: **medium**.
-- [ ] **Multi-vector / ColBERT late interaction** — per-token vectors, MaxSim scoring. Biggest expected lift on preference-style retrieval but a major refactor (new storage path, MaxSim kernel, new embed backend). Park until HyDE + per-turn + pool-size are exhausted.
-- [ ] **Model-aware floor calibration** — `QMD_VEC_FLOOR_RATIO=<0-1>` env knob to replace hardcoded `relRatio=0.5` in `pickVectorMatches`. Lower ratio widens candidate pool on tight-distribution q8 models. Priority: **medium**.
+### Queued experiments (v17, post-diagnostic)
+
+- [ ] **L1 (user-turns-only) ingest variant** — strip assistant turns from session text before embedding. Mechanism: improves the embedding centroid of the right session, since the user's preference statement now carries the centroid weight instead of being drowned in the assistant's 500-token verbose response. Schift's "L# cache hierarchy" credits this with +3pp R@1 and 100% preference (`docs/notes/random-findings-online.md` §3). Implementation: branch in `evaluate/longmemeval/eval.mts:404` ingest path, or a real `QMD_INGEST_USER_ONLY=on` flag in the memory store. Pure local, no LLM, no new backend. Priority: **highest**.
+- [ ] **L# (L0+L1+L2) score blend** — if L1 alone over-corrects (loses cases where L0 assistant-side signal mattered), add the Schift blend `0.5×L1 + 0.3×L2 + 0.2×L0` as a query-time score fusion across two ingest variants. Priority: **medium**, gated on L1 alone result.
+- [ ] **Preference-aware rerank** — only reachable if L1+L# don't close the gap. Either a cross-encoder fine-tuned on preference pairs, or a query-side rewrite that emphasizes preference predicates ("user prefers X" template injection). Priority: **low**, fallback only.
+
+### Parked (post-diagnostic)
+
+The candidate-generation queue from the previous version of this section
+is all parked — diagnostic proves coverage is 100% and these levers attack
+the wrong problem:
+
+- ~~HyDE / local generative query expansion~~ — coverage already 100%, won't help.
+- ~~Remote LLM query expansion~~ — same.
+- ~~Per-turn ingest~~ — same. Smaller chunks don't change which sessions are reachable; sr5 is session-granularity.
+- ~~Wider candidate pool / `limit * N`~~ — top-40 already contains 28/30 right sessions. The 2 remaining ones are at ranks 39 (HS reunion, MemPalace also misses) and 1 BM25-recovered. Widening the pool to 100 would catch the rank-39 case but only if rerank can correctly promote it, which is the same cross-encoder failure mode.
+- ~~Multi-vector / ColBERT~~ — refactor cost not justified; the ranking issue is centroid-quality not multi-vector matching.
+- ~~Model-aware floor calibration~~ — `QMD_VEC_MIN_SIM=0.1` already provides a manual escape hatch, and the 5 vector misses are not at the floor.
 
 ---
 

@@ -117,6 +117,82 @@ qmd wins on 5 of 6 categories + overall. MemPalace wins on two, but knowledge-up
 - **Document arctic-s as a NON-recommendation** — strictly worse on the correct metric
 - **Document the metric lesson** in UPSTREAM/ROADMAP so future audits don't regress on it
 
+### v17 root-cause diagnostic — preference gap is RANKING, not coverage (2026-04-14)
+
+After cross-encoder rerank landed flat on sr5, ROADMAP §"v17 priority shift"
+item 1 asked the right question: "are we missing the right preference session
+or returning it in the wrong order?" Ran `evaluate/preference-rank-diagnostic.mts`
+to settle it.
+
+**Method:** for each of the 30 single-session-preference questions, embed the
+query with `mxbai-xs q8`, run a NO-CUTOFF `vec0` KNN against the question's
+scope (every memory in the haystack, no `k` limit, no cosine floor), and
+record the rank of the first memory whose `source_session_id` matches
+`answer_session_ids`. Vector-only — no BM25, no RRF, no rerank.
+
+**Distribution (n=30):**
+
+| Rank bucket | n | Cumulative |
+|---|---|---|
+| rank 1 | 17 | 17 (56.7%) |
+| rank 2-5 | 8 | 25 (83.3%) |
+| rank 6-20 | 3 | 28 (93.3%) |
+| rank 21-50 | 2 | 30 (100%) |
+| rank 51+ | 0 | 30 |
+| **not in pool at any depth** | **0** | — |
+
+**The correct session is in the candidate pool for every preference question.**
+Coverage is 100%. Vector-only sr5 is 83.3%; production sr5 (with BM25 + RRF
+fusion) climbs to 90.0%, recovering 2 of the 5 vector misses via the BM25
+side. The remaining 5 misses break into:
+
+- **Three "just outside top-5"** cases (ranks 6, 8, 12) — colleagues-baking,
+  Denver trip, commute activities. The right session is one or two slots
+  away from being a hit.
+- **One rank-39** case — the high school reunion question. **MemPalace also
+  misses this one** per `evaluate/preference-misses.py`. Genuinely hard.
+- **One additional vector-side miss** that BM25 recovers in production.
+
+**What this invalidates:**
+
+- ❌ **HyDE / per-turn ingest / wider candidate pool / multi-vector** — every
+  candidate-generation lever we queued attacks a problem that does not exist.
+  The candidates are already there. Drop these from v17 priority.
+- ❌ **The earlier "candidate generation is the bottleneck" conclusion** from
+  the cross-encoder failure was **wrong**. Cross-encoder failed not because
+  the right session was missing from its top-40 input, but because cross-
+  encoder re-scores by query↔passage lexical relevance, and the assistant's
+  verbose response in the **wrong** session has more lexical surface area
+  matching the query than the user's terse preference statement in the
+  **right** session.
+
+**What this validates (with a sharper mechanism):**
+
+- ✅ **L1 (user-turns-only) ingest** — Schift's "L# cache hierarchy" lever
+  from `docs/notes/random-findings-online.md`. The mechanism isn't candidate
+  widening — it's **embedding-centroid quality**. When a session is embedded
+  as full text (L0), the assistant's 500-token verbose response dominates
+  the centroid. When embedded as user-turns-only (L1), the user's 1-2 line
+  preference statement carries the centroid weight. Cosine to a query about
+  that preference tightens, and the right session moves from rank 6-12 into
+  top-5.
+
+**v17 plan (revised, much sharper):**
+
+1. **L1 ingest variant** — implement user-turns-only chunking as an ingest
+   mode. A/B at n=500. Target: lift the rank-6/8/12 vector misses into top-5
+   without regressing the 25 already-hitting cases. Pure local, no LLM, no
+   new backend. Highest fit lever from the diagnostic.
+2. **L# blend** — if L1 alone over-corrects (loses cases that L0 was getting
+   on assistant-side signal), add the L0+L1 score blend Schift uses
+   (`0.5×L1 + 0.3×L2 + 0.2×L0`).
+3. **HyDE / candidate-pool widening** — DROPPED from v17 priority. The
+   diagnostic proves these don't fit our failure mode. Park.
+
+Diagnostic script committed as `evaluate/preference-rank-diagnostic.mts` —
+re-runnable any time we want to recheck after an embed-model or chunker
+change.
+
 ### Live MemPalace raw reproduction at n=500 (apples-to-apples)
 
 Cloned `github.com/milla-jovovich/mempalace` @ 3.3.0 to `~/qmd-eval/baselines/mempalace/`, installed chromadb + fastembed, ran `benchmarks/longmemeval_bench.py --mode raw --limit 500` against our `longmemeval_s_cleaned.json`. MemPalace's bench computes session-level `recall_any` — the exact metric our `sr5` is documented to mirror.
