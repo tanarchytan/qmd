@@ -29,9 +29,10 @@ where the last one left off.
 
 ## Sync history
 
-| Date | Upstream HEAD | Our branch | Picked | Skipped | Deferred | Audit notes |
-|---|---|---|---|---|---|---|
-| 2026-04-14 | `cfd640e` | `dev @ 87424b0` | 4 | 7 | 1 | First post-cleanup audit. 458 upstream commits since divergence. |
+| Date | Upstream HEAD | Last sync base | Our branch | New commits | Picked | Skipped | Deferred | Audit notes |
+|---|---|---|---|---|---|---|---|---|
+| 2026-04-07 | (v2.1.0) | initial fork | `dev @ c846ac7` | — | — | — | — | `chore: merge upstream v2.1.0` — full merge, not a cherry-pick audit |
+| 2026-04-14 | `cfd640e` | `c846ac7` (2026-04-07 v2.1.0 merge) | `dev @ 87424b0` | **13** | 4 | 7 | 2 | First post-cleanup audit. **100% coverage** of the 13 truly new commits since the v2.1.0 merge. |
 
 ---
 
@@ -50,18 +51,18 @@ Format: upstream hash → our commit, with a one-line rationale.
 
 ---
 
-## Already had (no action needed)
+## Already had (verified during audit, no action needed)
 
-Verified during audit — these landed in our fork via independent paths
-(usually our own session work touching the same files).
+Verified during audit — these were already in our tree, usually from a
+prior upstream merge (in our case the 2026-04-07 v2.1.0 merge).
 
-### 2026-04-14 audit
+### 2026-04-14 audit (pulled in via v2.1.0 merge)
 
 | Upstream | Subject | Where it lives in our tree |
 |---|---|---|
-| `09a4d19` | fix(store): error on embedding dimension mismatch (#501) | `src/store/db-init.ts:286-291` — exact same patch |
-| `ef062e1` | fix(multi-get): brace expansion glob (#424) | `src/cli/qmd.ts:957`, `src/store/documents.ts:483`, `matchFilesByGlob` |
-| `0212363` | fix(mcp): read version from package.json (#431) | `src/mcp/server.ts:98` `getPackageVersion()` |
+| `09a4d19` | fix(store): error on embedding dimension mismatch (#501) | `src/store/db-init.ts:286-291` |
+| `ef062e1` | fix(multi-get): brace expansion glob (#424) | `src/cli/qmd.ts:957`, `src/store/documents.ts:483` |
+| `0212363` | fix(mcp): read version from package.json (#431) | `src/mcp/server.ts:98` |
 
 ---
 
@@ -75,13 +76,23 @@ Re-evaluate ONLY if we re-add the corresponding subsystem.
 
 | Upstream | Subject | Why skipped |
 |---|---|---|
+| `cfd640e` | fix(test): resolve LLM test timeouts by disabling file parallelism | Test file we deleted with the LlamaCpp removal |
+| `e4990e4` | Harden embedding overflow handling | LlamaCpp `truncateToContextSize` hardening + `chunkDocumentByTokens` recursive guard. Both target surface we removed (no LlamaCpp class, no `llm.tokenize` in chunking — we use char heuristic). |
 | `f53ee26` | fix: detect non-GGUF model files | We removed node-llama-cpp; no GGUF loading path |
-| `6db34d7` | fix(llm): catch GPU init failures, fall back to CPU | llama.cpp specific |
-| `8644fa9` | fix(store): thread embed model URI to format functions | Uses `isQwen3EmbeddingModel` detection which we ripped out tonight |
-| `54550a3` | fix(llm): explicit embed context size, env-configurable | llama.cpp specific |
 | `1ecb5c9` | Fix QMD_LLAMA_GPU backend override handling | `QMD_LLAMA_*` env vars removed in cleanup |
 | `26e3d0c` | fix(status): avoid build attempts during device probe | Device probe was LlamaCpp-specific, removed |
-| handelize chain (`9fb9de4` → `9c9de94` → `828823d` → `fee576b`) | tried to remove `.toLowerCase()`, broke things, reverted, added migration | We never participated in that experiment; our `documents.ts:50` always had `.toLowerCase()` |
+| `fee576b` | fix: migrate legacy lowercase paths on reindex | Part of handelize chain (see below) |
+| `9fb9de4` | fix: preserve original case in handelize() | Part of handelize chain (see below) |
+
+**Handelize chain context:** upstream's `9fb9de4` → `9c9de94` → `828823d` → `fee576b` is a "tried to remove `.toLowerCase()`, broke things, reverted, added migration for the broken window" cycle. We never participated in that experiment — our `src/store/documents.ts:50` always had `.toLowerCase()` — so the entire chain is a no-op for us.
+
+**Older audit hits (skipped during prior merge cycles, listed for reference):**
+
+| Upstream | Why skipped (still applies) |
+|---|---|
+| `6db34d7` fix(llm): catch GPU init failures, fall back to CPU | llama.cpp specific |
+| `8644fa9` fix(store): thread embed model URI to format functions | Uses `isQwen3EmbeddingModel` detection which we ripped out 2026-04-13 |
+| `54550a3` fix(llm): explicit embed context size, env-configurable | llama.cpp specific |
 
 ---
 
