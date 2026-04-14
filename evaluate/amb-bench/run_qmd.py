@@ -2,7 +2,7 @@
 qmd × AMB cross-dataset bench runner.
 
 Runs the qmd memory provider through AMB's LongMemEvalDataset and
-LoCoMoDataset adapters, scoring sr5 (session-id recall@5) and r5
+LoComoDataset adapters, scoring sr5 (session-id recall@5) and r5
 (token-overlap content availability) ourselves against Query.gold_ids
 and Query.gold_answers. Skips AMB's generate + judge LLM steps entirely.
 
@@ -53,7 +53,7 @@ if _QMD_ADAPTER_SOURCE.exists() and not _QMD_ADAPTER_TARGET.exists():
     _QMD_ADAPTER_TARGET.write_text(_QMD_ADAPTER_SOURCE.read_text())
 
 from memory_bench.dataset.longmemeval import LongMemEvalDataset  # noqa: E402
-from memory_bench.dataset.locomo import LoCoMoDataset  # noqa: E402
+from memory_bench.dataset.locomo import LoComoDataset  # noqa: E402
 from memory_bench.memory.qmd import QmdMemoryProvider  # noqa: E402
 from memory_bench.models import Document, Query  # noqa: E402
 
@@ -207,7 +207,7 @@ def main() -> None:
 
     datasets: list[tuple[str, object, str]] = [
         ("longmemeval", LongMemEvalDataset(), "s"),
-        ("locomo", LoCoMoDataset(), "locomo10"),
+        ("locomo", LoComoDataset(), "locomo10"),
     ]
 
     # Quick smoke-test mode — env-driven so we can sanity check on a tiny slice
