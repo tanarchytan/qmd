@@ -40,7 +40,7 @@ import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections
 // already get this via src/cli/qmd.ts:110 — calling here is a noop for them
 // and a critical safety net for everyone else. Upstream tobi/qmd 9dd8a73.
 enableProductionMode();
-import { memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, extractAndStore, knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeTimeline, knowledgeStats, MEMORY_CATEGORIES } from "../memory/index.js";
+import { memoryStore, memoryStoreBatch, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, extractAndStore, knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeTimeline, knowledgeStats, MEMORY_CATEGORIES } from "../memory/index.js";
 
 // =============================================================================
 // Types for structured content
@@ -637,6 +637,34 @@ Intent-aware lex (C++ performance, not sports):
         ? `Memory stored (id: ${result.id})`
         : `Duplicate found (existing id: ${result.duplicate_id})`;
       return { content: [{ type: "text", text: msg }] };
+    }
+  );
+
+  server.registerTool(
+    "memory_store_batch",
+    {
+      title: "Store Memories (Batch)",
+      description: "Batched version of memory_store. Embeds all texts in ONE provider call instead of N — typically 8-10x faster for bulk ingest because the embedding backend (transformers.js, remote API) batches much more efficiently than per-call. Hash dedup is also batched into a single SQL round-trip, and inserts run in a single SQLite transaction. Each item supports the same fields as memory_store: text, category, scope, importance, metadata.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        items: z.array(z.object({
+          text: z.string().describe("Memory content"),
+          category: z.enum(["preference", "fact", "decision", "entity", "reflection", "other"]).optional(),
+          scope: z.string().optional(),
+          importance: z.number().min(0).max(1).optional(),
+          metadata: z.record(z.string(), z.unknown()).optional(),
+        })).describe("List of memory items to ingest in one batched embed + insert pass"),
+      },
+    },
+    async ({ items }) => {
+      const db = store.internal.db;
+      const results = await memoryStoreBatch(db, items);
+      const created = results.filter(r => r.status === "created").length;
+      const dupes = results.filter(r => r.status === "duplicate").length;
+      return {
+        content: [{ type: "text", text: `Batched ${results.length} memories: ${created} created, ${dupes} duplicate.` }],
+        structuredContent: { results },
+      };
     }
   );
 

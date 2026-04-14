@@ -70,14 +70,33 @@ from ..models import Document
 from .base import MemoryProvider
 
 
-# qmd's 2026-04-14 production winner (sr5 98.4% on LongMemEval _s n=500).
+# qmd's 2026-04-14 production winner (sr5 98.4% on LongMemEval _s n=500),
+# matched against the env vars the native eval harness (evaluate/longmemeval/
+# eval.mts) sets when running RAW retrieval-only benchmarks. Critically:
+# the *INGEST_*=off and RECALL_RAW=on flags disable the LLM-based extraction
+# / reflection / synthesis paths that fire by default and would try to reach
+# a non-configured LLM (causing per-doc hangs of ~10s+).
+#
 # These env vars are forwarded to the qmd MCP subprocess unless overridden.
 _DEFAULT_QMD_ENV: dict[str, str] = {
+    # Embed backend (production winner)
     "QMD_EMBED_BACKEND": "transformers",
     "QMD_TRANSFORMERS_EMBED": "mixedbread-ai/mxbai-embed-xsmall-v1",
     "QMD_TRANSFORMERS_DTYPE": "q8",
     "QMD_VEC_MIN_SIM": "0.1",
     "QMD_TRANSFORMERS_QUIET": "on",
+    # Disable LLM-based ingest paths — we're benching retrieval, not ingest.
+    # Without these, qmd tries to extract facts / reflect / consolidate via
+    # the configured remote LLM on every memory_store, hanging ~10s/doc.
+    "QMD_INGEST_EXTRACTION": "off",
+    "QMD_INGEST_REFLECTIONS": "off",
+    "QMD_INGEST_SYNTHESIS": "off",
+    "QMD_INGEST_PER_TURN": "off",
+    # RAW recall mode: skip rerank, return cosine-sorted top-K directly.
+    # We score sr5 ourselves so we don't want any additional reranker pass.
+    "QMD_RECALL_RAW": "on",
+    # Don't try to use ZeroEntropy as a remote collection store.
+    "QMD_ZE_COLLECTIONS": "off",
 }
 
 
@@ -356,20 +375,31 @@ class QmdMemoryProvider(MemoryProvider):
     # MemoryProvider interface
     # -------------------------------------------------------------------
 
+    # Batch size for memory_store_batch calls. The qmd MCP tool batches the
+    # embed call internally so a larger batch is strictly faster on the embed
+    # side. Cap kept modest (32) so JSON-RPC payloads stay reasonable.
+    _INGEST_BATCH_SIZE = 32
+
     def ingest(self, documents: list[Document]) -> None:
-        for doc in documents:
-            scope = doc.user_id or "global"
-            metadata: dict = {"doc_id": doc.id}
-            if doc.timestamp:
-                metadata["timestamp"] = doc.timestamp
-            self._call_tool(
-                "memory_store",
-                {
+        """Batched ingest via memory_store_batch (qmd commit f9a03fb+).
+        ~8-10x faster than per-doc memory_store calls because the embedding
+        backend (transformers.js mxbai-xs q8) batches a chunk of texts in
+        one forward pass, and hash-dedup + inserts both batch into single
+        SQLite round-trips. Mirrors AMB hybrid_search.ingest()'s pattern of
+        collecting all texts then calling encode() once."""
+        for i in range(0, len(documents), self._INGEST_BATCH_SIZE):
+            chunk = documents[i:i + self._INGEST_BATCH_SIZE]
+            items = []
+            for doc in chunk:
+                metadata: dict = {"doc_id": doc.id}
+                if doc.timestamp:
+                    metadata["timestamp"] = doc.timestamp
+                items.append({
                     "text": doc.content,
-                    "scope": scope,
+                    "scope": doc.user_id or "global",
                     "metadata": metadata,
-                },
-            )
+                })
+            self._call_tool("memory_store_batch", {"items": items})
 
     def retrieve(
         self,
