@@ -78,11 +78,15 @@ Batch-generated from the result JSON files in `~/qmd-eval/evaluate/longmemeval/`
 | 6 | `MiniLM-L6 uint8` | 98.0% | 99.2% | 97.0% | 100.0% | 90.0% | 100.0% | 97.1% | 94.4% |
 | 6 | `mxbai-xs q8` + `EXPAND=keywords` | 98.0% | 99.2% | 97.7% | 98.7% | 90.0% | 100.0% | 97.1% | 94.2% |
 | 8 | `MiniLM-L6 fp32` (pre-cleanup baseline) | 97.0% | 97.7% | 95.5% | 98.7% | 86.7% | 100.0% | 98.6% | 93.2% |
-| 9 | **MemPalace published** | **96.6%** | 100% | 97% | 100% | 97% | 96% | 97% | — |
+| 9 | **MemPalace raw — published + live reproduction 2026-04-14** ⁽ᵃ⁾ | **96.6%** | 100% ⁽ᵇ⁾ | 97% ⁽ᵇ⁾ | 100% ⁽ᵇ⁾ | 96.7% ⁽ᵇ⁾ | 96.4% ⁽ᵇ⁾ | 97.1% ⁽ᵇ⁾ | — |
 | 10 | `arctic-xs q8` | 96.6% | 97.7% | 94.0% | 100.0% | 86.7% | 100.0% | 97.1% | 93.4% |
 | 11 | **`arctic-s q8` baseline** (earlier "night winner") | **95.8%** ⚠️ | 98.5% | 93.2% | 98.7% | **80.0%** ⚠️ | 100.0% | 95.7% | 93.2% |
 | 12 | `arctic-s q8` + `EXPAND=keywords` | 95.6% | 98.5% | 92.5% | 98.7% | 80.0% | 100.0% | 95.7% | 92.8% |
 | 12 | `arctic-s q8` + loose + expand + MMR (kitchen sink) | 95.6% | 98.5% | 92.5% | 98.7% | 80.0% | 100.0% | 95.7% | 92.8% |
+
+`(a)` MemPalace raw n=500 re-ran today against the same `longmemeval_s_cleaned.json` we use. Overall R@5 **96.6% — exact match to their published headline.** Full bench output + wall time in the "Live MemPalace raw reproduction" subsection below.
+
+`(b)` MemPalace's bench reports per-category **recall@10**, not recall@5. The per-category numbers in this row are their R@10 values (from the live run), NOT R@5 — the only cross-system cell that's strictly apples-to-apples is the "sr5 overall" column at 96.6%. Our R@5-per-category for all other rows comes from our own eval harness's `sr5` field, which is the equivalent of MemPalace's `recall_any@5`. If we could get per-category R@5 from MemPalace it would land somewhere between the published R@10 and our observed gap; the overall 96.6% is the anchor.
 
 **Critical re-read of the night cycle:**
 
