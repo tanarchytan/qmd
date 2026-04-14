@@ -399,11 +399,10 @@ def main() -> None:
     configs: list[tuple[str, dict[str, str]]] = [
         ("qmd-default", {}),
         ("qmd-l1", {"QMD_INGEST_USER_ONLY": "on"}),
-        # cross-encoder rerank (may be added once we have eval data on it)
-        # ("qmd-cerank", {
-        #     "QMD_MEMORY_RERANK": "cross-encoder",
-        #     "QMD_TRANSFORMERS_RERANK": "cross-encoder/ms-marco-MiniLM-L6-v2/onnx/model_quint8_avx2",
-        # }),
+        ("qmd-cerank", {
+            "QMD_MEMORY_RERANK": "cross-encoder",
+            "QMD_TRANSFORMERS_RERANK": "cross-encoder/ms-marco-MiniLM-L6-v2/onnx/model_quint8_avx2",
+        }),
     ]
 
     datasets: list[tuple[str, object, str]] = [
