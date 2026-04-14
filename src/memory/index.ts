@@ -1165,8 +1165,17 @@ export async function memoryRecall(
   //      FTS/vec hits are never displaced.
   // KG facts are capped at 5 total and inserted with moderate score (0.25)
   // so they rank below any real strong hits and only surface when the
-  // main pipeline came up short. Also skipped in RAW mode.
-  if (!RAW && process.env.QMD_RECALL_KG === "on") {
+  // main pipeline came up short.
+  //
+  // Two env gates (mirroring the diversity flag pair):
+  //   QMD_RECALL_KG=on       — legacy, only fires outside RAW mode
+  //                            (treated as a post-RRF boost).
+  //   QMD_RECALL_KG_RAW=on   — RAW-compatible, fires regardless of RAW so
+  //                            we can A/B KG injection on baseline eval
+  //                            harnesses (LongMemEval) that require RAW.
+  const kgLegacy = !RAW && process.env.QMD_RECALL_KG === "on";
+  const kgRaw = process.env.QMD_RECALL_KG_RAW === "on";
+  if (kgLegacy || kgRaw) {
     const entities = extractQueryEntities(query);
     const topScore = sorted[0]?.score ?? 0;
     if (entities.length > 0 && entities.length <= 3 && topScore < 0.3) {
