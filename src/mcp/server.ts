@@ -620,18 +620,19 @@ Intent-aware lex (C++ performance, not sports):
     "memory_store",
     {
       title: "Store Memory",
-      description: "Store a fact, preference, decision, or other memory. Deduplicates automatically (exact match + semantic similarity). Returns the memory ID.",
+      description: "Store a fact, preference, decision, or other memory. Deduplicates automatically (exact match + semantic similarity). Returns the memory ID. Optional `metadata` round-trips arbitrary JSON fields (e.g. source_session_id, doc_id) that show up in `memory_recall` results — use this to map qmd memories back to your own object IDs.",
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
         text: z.string().describe("The memory content to store (verbatim text)"),
         category: z.enum(["preference", "fact", "decision", "entity", "reflection", "other"]).optional().describe("Memory category (default: other)"),
         scope: z.string().optional().describe("Scope for isolation: agent name, project, or 'global' (default: global)"),
         importance: z.number().min(0).max(1).optional().describe("Importance 0-1 (default: 0.5). Higher = persists longer."),
+        metadata: z.record(z.string(), z.unknown()).optional().describe("Arbitrary JSON metadata stored verbatim and surfaced on recall (e.g. `{source_session_id: \"abc\", doc_id: 42}`). Use to round-trip your own object IDs through qmd."),
       },
     },
-    async ({ text, category, scope, importance }) => {
+    async ({ text, category, scope, importance, metadata }) => {
       const db = store.internal.db;
-      const result = await memoryStore(db, { text, category, scope, importance });
+      const result = await memoryStore(db, { text, category, scope, importance, metadata });
       const msg = result.status === "created"
         ? `Memory stored (id: ${result.id})`
         : `Duplicate found (existing id: ${result.duplicate_id})`;
@@ -643,7 +644,7 @@ Intent-aware lex (C++ performance, not sports):
     "memory_recall",
     {
       title: "Recall Memories",
-      description: "Search memories by natural language query. Uses hybrid search (semantic + keyword). Returns ranked results.",
+      description: "Search memories by natural language query. Uses hybrid search (semantic + keyword). Returns ranked results with their stored `metadata` parsed to JSON, so callers can map results back to their own object IDs.",
       annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema: {
         query: z.string().describe("Search query"),
@@ -658,12 +659,21 @@ Intent-aware lex (C++ performance, not sports):
       if (results.length === 0) {
         return { content: [{ type: "text", text: "No memories found." }] };
       }
-      const lines = results.map((r, i) =>
+      // Parse stored metadata (JSON string) into an object so structuredContent
+      // consumers don't have to re-parse. Falls through to null on bad JSON.
+      const enriched = results.map(r => {
+        let parsed: Record<string, unknown> | null = null;
+        if (typeof r.metadata === "string" && r.metadata.length > 0) {
+          try { parsed = JSON.parse(r.metadata) as Record<string, unknown>; } catch { /* ignore */ }
+        }
+        return { ...r, metadata: parsed };
+      });
+      const lines = enriched.map((r, i) =>
         `${i + 1}. [${r.category}] (score: ${r.score.toFixed(2)}, scope: ${r.scope}) ${r.text}\n   id: ${r.id}`
       );
       return {
         content: [{ type: "text", text: lines.join('\n') }],
-        structuredContent: { results },
+        structuredContent: { results: enriched },
       };
     }
   );
@@ -691,18 +701,19 @@ Intent-aware lex (C++ performance, not sports):
     "memory_update",
     {
       title: "Update Memory",
-      description: "Update an existing memory's text, importance, or category. Re-embeds if text changes.",
+      description: "Update an existing memory's text, importance, category, or metadata. Re-embeds if text changes.",
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
         id: z.string().describe("Memory ID to update"),
         text: z.string().optional().describe("New memory text (triggers re-embedding)"),
         importance: z.number().min(0).max(1).optional().describe("New importance 0-1"),
         category: z.enum(["preference", "fact", "decision", "entity", "reflection", "other"]).optional().describe("New category"),
+        metadata: z.record(z.string(), z.unknown()).optional().describe("Replace stored metadata with this JSON object."),
       },
     },
-    async ({ id, text, importance, category }) => {
+    async ({ id, text, importance, category, metadata }) => {
       const db = store.internal.db;
-      const result = await memoryUpdate(db, { id, text, importance, category });
+      const result = await memoryUpdate(db, { id, text, importance, category, metadata });
       return {
         content: [{ type: "text", text: result.updated ? `Memory ${id} updated.` : `Memory ${id} not found.` }],
       };
