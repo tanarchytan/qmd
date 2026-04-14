@@ -136,6 +136,40 @@ for (const r of rows) {
   console.log(`   top5: ${r.topSessions.join(", ")}`);
 }
 
+// Second pass on misses only — dump the row TYPE (turn vs session) of the
+// memories ranked above the correct session, so we know whether L1 should
+// target the per-turn ingest path or the session-level ingest path.
+console.log("\n=== Miss top-10 row inspection (L1 lever scoping) ===\n");
+const inspectStmt = db.prepare(`
+  SELECT m.id, m.text, m.metadata, v.distance
+  FROM memories_vec v
+  JOIN memories m ON m.id = v.id
+  WHERE v.scope = ? AND v.embedding MATCH ? AND v.k = ?
+  ORDER BY v.distance ASC
+`);
+for (const r of rows) {
+  if (r.rankFirstHit === null || r.rankFirstHit <= 5) continue;
+  const q = prefs.find(p => p.question_id === r.qid)!;
+  const emb = await embedder.embed(q.question);
+  if (!emb) continue;
+  const top10 = inspectStmt.all(q.question_id, new Float32Array(emb.embedding), 10) as Array<{
+    id: string; text: string; metadata: string; distance: number;
+  }>;
+  console.log(`── ${r.qid} (rank ${r.rankFirstHit}) — top 10 ──`);
+  for (let i = 0; i < top10.length; i++) {
+    const m = top10[i]!;
+    const meta = m.metadata ? JSON.parse(m.metadata) : {};
+    const sid = meta.source_session_id ?? "?";
+    const isTurn = "turn_index" in meta;
+    const kind = isTurn ? `TURN[${meta.turn_index}]` : "SESSION";
+    const right = r.correct.includes(sid) ? " ★RIGHT" : "";
+    const preview = m.text.replace(/\s+/g, " ").slice(0, 90);
+    console.log(`  ${i + 1}. ${kind.padEnd(10)} sid=${sid.padEnd(20)} d=${m.distance.toFixed(3)}${right}`);
+    console.log(`     ${preview}`);
+  }
+  console.log();
+}
+
 console.log("\n=== Distribution ===");
 for (const [k, v] of Object.entries(buckets)) {
   console.log(`  ${k.padEnd(15)}: ${v}`);
