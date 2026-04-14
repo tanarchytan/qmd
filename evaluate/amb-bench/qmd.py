@@ -391,6 +391,18 @@ class QmdMemoryProvider(MemoryProvider):
     # mxbai-xs is 384d. Override via env if you swap embed model.
     _EMBED_DIMENSIONS = 384
 
+    # Char-level truncation cap. mxbai-xs has a 512-token context window;
+    # tokenizing 10 KB of LME session text only to truncate to 512 tokens
+    # internally is the dominant ingest cost. ~2000 chars ≈ 500 tokens for
+    # English text — caller-side truncation reduces tokenizer work by ~5x
+    # without changing what mxbai-xs actually embeds. AMB hybrid_search uses
+    # tiktoken to chunk into 512-token windows; we use char count because
+    # we don't want a tiktoken dep, and the cost difference is negligible
+    # for monolingual English benchmarks. The information loss is bounded
+    # to "content past character 2000" which mxbai-xs would have truncated
+    # internally anyway.
+    _MAX_TEXT_CHARS = 2000
+
     def _maybe_user_only(self, content: str) -> str:
         """L1 (user-turns-only) ingest filter. Both LME and LoCoMo serialize
         Document.content as `json.dumps(turns)`. When QMD_INGEST_USER_ONLY=on
@@ -452,8 +464,14 @@ class QmdMemoryProvider(MemoryProvider):
                 metadata: dict = {"doc_id": doc.id}
                 if doc.timestamp:
                     metadata["timestamp"] = doc.timestamp
+                # Apply L1 user-only filter (if enabled) THEN truncate to
+                # the embed-window char cap. The order matters — filtering
+                # first means we keep the most relevant turns within the cap.
+                text = self._maybe_user_only(doc.content)
+                if len(text) > self._MAX_TEXT_CHARS:
+                    text = text[:self._MAX_TEXT_CHARS]
                 items.append({
-                    "text": self._maybe_user_only(doc.content),
+                    "text": text,
                     "scope": doc.user_id or "global",
                     "metadata": metadata,
                     # Bench doesn't need history tracking — skip the
