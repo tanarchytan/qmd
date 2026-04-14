@@ -11,7 +11,60 @@
 
 ## 🌙 Night 2026-04-13 → 2026-04-14 — arctic-s unlock, phase 5 dead ends, paper trail
 
-**Headline:** `snowflake-arctic-embed-s q8` broke the 82% multi-session R@5 ceiling on LongMemEval `_s` n=500 without any code-side tuning. **84.2% multi-session, 93.2% overall R@5** — the first model swap that moved the bottleneck category. `arctic-s q8` is the new night winner and the ceiling-fallback candidate alongside `MiniLM-L6 uint8`.
+> **2026-04-14 late correction (apples-to-apples metric audit):** The entire night's "arctic-s unlocks multi-session" narrative below was measured against our `r5` (token-overlap of the answer string against memory text), NOT the `sr5` (session-ID match) metric that MemPalace's published 96.6% uses. Re-running per-category on `sr5`:
+>
+> | Config | sr5 overall | multi-session sr5 | preference sr5 | temporal sr5 |
+> |---|---|---|---|---|
+> | **mxbai-xs q8** (prior default) | **98.2%** ✅ | **100%** ✅ | 90% | 97% |
+> | arctic-s q8 ("winner" below) | 95.8% | 98.5% | **80%** ⚠️ | 93.2% |
+> | MemPalace published (raw) | 96.6% | 100% | 97% | 97% |
+>
+> **mxbai-xs q8 was already beating MemPalace's published headline (98.2% vs 96.6%) on the apples-to-apples metric before tonight's work started.** The arctic-s "unlock" was a token-overlap artifact. arctic-s is strictly worse than mxbai-xs on every sr5 category (−2.4pp overall, **−10pp on single-session-preference**). v17 priorities shift accordingly — see "Metric audit" subsection below.
+
+**Headline (original, now superseded):** `snowflake-arctic-embed-s q8` broke the 82% multi-session R@5 ceiling on LongMemEval `_s` n=500 without any code-side tuning. **84.2% multi-session, 93.2% overall R@5** — the first model swap that moved the bottleneck category. `arctic-s q8` is the new night winner and the ceiling-fallback candidate alongside `MiniLM-L6 uint8`.
+
+### Metric audit (added 2026-04-14 late)
+
+Our eval harness computes two recall metrics per question:
+
+- **`r5`** — token-overlap between the ground-truth answer *string* and the top-5 memory *texts*. Binary: 1 if ≥70% of answer tokens appear in the retrieved content, else 0. This is what we've been calling "R@5" in every table above. It's a **content-match** metric.
+- **`sr5`** — session-ID match against `answer_session_ids`. Binary: 1 if any top-5 memory's `source_session_id` is in the ground-truth answer sessions. This is labeled in `eval.mts` as "apples-to-apples with MemPalace's `recall_any`" and is the metric that corresponds to MemPalace's published 96.6%. It's a **retrieval** metric.
+
+The two measure different things and disagree sharply on some categories. Token-overlap rewards "the right answer content landed in top-5"; session-ID rewards "retrieval picked sessions from the right scope".
+
+**sr5 per-category comparison at n=500 (corrected headline data):**
+
+| Category | n | mxbai-xs q8 sr5 | arctic-s q8 sr5 | MemPalace pub |
+|---|---|---|---|---|
+| single-session-user | 70 | **98.6%** | 95.7% | 97% |
+| single-session-assistant | 56 | **100.0%** | 100.0% | 96% |
+| single-session-preference | 30 | **90.0%** | 80.0% ⚠️ | 97% |
+| knowledge-update | 78 | 98.7% | 98.7% | 100% |
+| temporal-reasoning | 133 | **97.0%** | 93.2% | 97% |
+| **multi-session** | 133 | **100.0%** ✅ | 98.5% | 100% |
+| **OVERALL sr5** | 500 | **98.2%** | 95.8% | 96.6% |
+
+**What this says:**
+
+- **mxbai-xs q8 ALREADY BEATS MemPalace's published 96.6% by 1.6pp on the apples-to-apples metric.** It was a phantom gap all along.
+- arctic-s q8 is strictly worse than mxbai-xs on every non-knowledge category. Do not promote arctic-s as a default.
+- **The real bottleneck isn't multi-session** — it's **single-session-preference at 90% sr5 on mxbai-xs** (and 80% on arctic-s). That's the 10pp gap vs MemPalace's 97% preference score.
+- The 82% r5 multi-session "ceiling" we chased all night was measuring token overlap on answer content, not retrieval quality. Retrieval is already at 100% sr5 on multi-session for mxbai-xs q8 — perfect parity with MemPalace.
+
+**Lessons in addition to the earlier list:**
+
+- **Know which metric your headline is.** We wrote a `computeSessionRecallAtK` with a comment saying "apples-to-apples with MemPalace" and then still defaulted to reporting the token-overlap r5 in every session note. Never let the default labeling stay if there's a more-correct metric computed alongside it.
+- **Two metrics that correlate on easy categories can diverge on hard ones.** mxbai-xs sr5 preference (90%) vs r5 preference (100%) shows the model was retrieving the wrong sessions half as often as we thought on those questions — the paraphrased answers hide retrieval failures from token-overlap scoring.
+- **Arctic-s q8 is NOT the night winner. mxbai-xs q8 is the production default that was already winning.** The whole arctic-s exploration was a dead end driven by metric confusion.
+
+**v17 priority shift:**
+
+1. **single-session-preference bucket** (90% sr5 on our best model, 97% MemPalace) — now the #1 target. Root-cause analysis: are we missing the right preference session or returning it in the wrong order?
+2. **temporal-reasoning** on arctic-s (93.2%) is noise; on mxbai-xs we're already at 97% parity with MemPalace.
+3. ~~Multi-session bucket~~ — at 100% sr5 parity, no v17 work needed for retrieval. The old "82% ceiling" was a metric artifact.
+4. **Default stays mxbai-xs q8.** Document arctic-s as a specialized option for workloads that actually need the token-overlap metric (we don't have a clear use case for that).
+
+
 
 ### Status at 2026-04-14 — per-category R@5 at n=500
 
