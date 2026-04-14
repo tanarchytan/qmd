@@ -79,25 +79,37 @@ hindsight) are preserved or queued for the bench cycle.
 - `sr5 s-pref` — single-session-preference bucket, the only category where
   qmd had a real gap before L1. v17 work targets this column.
 - `sr5 overall` — average across all 6 categories.
+- `r5` — token-overlap between the ground-truth answer string and the top-5
+  memory **texts**. **NOT a retrieval-quality metric** — measures "did the
+  answer text show up in what we retrieved?" Useful as a downstream
+  content-availability signal: a high-sr5 / low-r5 row means we retrieved
+  the right session but its stored text doesn't contain the answer string,
+  so an LLM running on top would see a worse context. **Hard requirement
+  on L# blend: must keep r5 within ~5pp of the L0 baseline (94.2%) while
+  preserving the L1 sr5-preference lift.**
 - `R@5 published` — the system's own published headline number, from their
   README / paper / leaderboard. Different metric than ours where noted.
 - `wall` — n=500 retrieval wall-clock time on our hardware. Blank for
   systems we haven't reproduced yet.
 
-| Config | sr5 overall | sr5 s-pref | sr5 multi | sr5 temp | sr5 kn-upd | sr5 s-asst | sr5 s-user | wall | R@5 published | Notes |
-|---|---|---|---|---|---|---|---|---|---|---|
-| **`mxbai-xs q8` + loose + L1** ⁽ᵈ⁾ | **97.6%** | **96.7%** ✅ | 99.2% | 95.5% | 98.7% | 96.4% | 98.6% | 16m02s | — | **closes preference gap, costs −0.8pp overall** |
-| **`mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1`** (current default) | **98.4%** | 90.0% ⚠️ | 100% | 97.0% | 98.7% | 100% | 100% | 15m12s | — | overall winner, preference gap |
-| `mxbai-xs q8` baseline (prior default) | 98.2% | 90.0% | 100% | 97.0% | 98.7% | 100% | 100% | 15m12s | — | beat MemPalace before any night work |
-| **MemPalace raw** (live + published) ⁽ᵃ⁾ | **96.6%** | 96.7% | 99.2% | 94.7% | 100.0% | 96.4% | 91.4% | 12m59s | 96.6% | reference anchor; live-reproduced 2026-04-14 |
-| **mem0** ⁽ᵇ⁾ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | 67.6% (LME _s) | bench setup pending, see TODO §1 |
-| **Hindsight** ⁽ᵇ⁾ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | 91.4% (LME end-to-end) | bench setup pending; their 91.4% is QA accuracy not retrieval |
+| Config | sr5 overall | sr5 s-pref | sr5 multi | sr5 temp | sr5 kn-upd | sr5 s-asst | sr5 s-user | r5 ⁽ᵉ⁾ | wall | R@5 published | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **`mxbai-xs q8` + loose + L1** ⁽ᵈ⁾ | **97.6%** | **96.7%** ✅ | 99.2% | 95.5% | 98.7% | 96.4% | 98.6% | **65.6%** ⚠️ | 16m02s | — | **closes preference gap; r5 collapse blocks shipping until L# blend recovers content** |
+| **`mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1`** (current default) | **98.4%** | 90.0% ⚠️ | 100% | 97.0% | 98.7% | 100% | 100% | **94.2%** | 15m12s | — | overall + r5 winner, preference gap |
+| `mxbai-xs q8` baseline (prior default) | 98.2% | 90.0% | 100% | 97.0% | 98.7% | 100% | 100% | 94.2% | 15m12s | — | beat MemPalace before any night work |
+| **MemPalace raw** (live + published) ⁽ᵃ⁾ | **96.6%** | 96.7% | 99.2% | 94.7% | 100.0% | 96.4% | 91.4% | not measured ⁽ᶠ⁾ | 12m59s | 96.6% | reference anchor; live-reproduced 2026-04-14 |
+| **mem0** ⁽ᵇ⁾ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | 67.6% (LME _s) | bench setup pending, see TODO §1 |
+| **Hindsight** ⁽ᵇ⁾ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | 91.4% (LME end-to-end) | bench setup pending; their 91.4% is QA accuracy not retrieval |
 
 `(a)` MemPalace raw n=500 was re-run on 2026-04-14 against the same `longmemeval_s_cleaned.json` we use. Overall R@5 **96.6% — exact match to their published headline.** Per-category cells are actual per-question hit counts parsed from the bench stdout log and joined with `question_type` via `evaluate/mempalace-per-cat.py`. MemPalace's bench computes session-level `recall_any` — apples-to-apples with our `sr5`. **The cloned mempalace repo at `~/qmd-eval/baselines/mempalace/` was deleted 2026-04-14 after the bench landed; the metric tooling and per-question logs are preserved.**
 
 `(b)` mem0 cloned to `~/qmd-baselines/mem0/` 2026-04-14. Hindsight clone TBD. Both will be benched against the same `longmemeval_s_cleaned.json` to populate this row. **Their published numbers are NOT directly comparable:** mem0's 67.6% on LME-S is an end-to-end QA accuracy with their own LLM judge, NOT session-id recall; Hindsight's 91.4% is full QA accuracy on Gemini-3, also not retrieval. The `R@5 published` column is for context only. **Apples-to-apples requires running their retrieval against our data file and scoring sr5.** Bench harness candidate: AMB (`~/qmd-baselines/amb/`), driving each system's retrieval API directly and skipping AMB's generate+judge LLM steps.
 
-`(d)` L1 (user-turns-only session ingest) — `QMD_INGEST_USER_ONLY=on` in the eval ingest path, filters `turns` to `t.role === "user"` before joining the session-level memory text. Mechanism: improves the embedding centroid of each session by removing assistant verbosity, so the user's preference statement carries the centroid weight. Result n=500 (commit pending): preference sr5 **90.0% → 96.7% (+6.7pp)**, exact parity with MemPalace's 96.7%. **Trade:** single-session-assistant drops 100% → 96.4% (−3.6pp) because answers in the assistant's response are now stripped from the centroid; multi-session, temporal, single-session-user each lose ~1pp. Net overall sr5 **−0.8pp (98.4 → 97.6)**. The trade isn't free, but the preference fix is real and reproduces Schift's L# claim. Next step: **L# blend** (parallel L0+L1 indexes, score-fused per Schift's `0.5×L1 + 0.3×L2 + 0.2×L0`) to keep L0 signal for the assistant-side bucket. Also notable: r5 (token-overlap) collapsed from 94.2% → 65.6%, which is the final nail in r5's coffin as a retrieval metric — stripping assistant text removes most of the answer tokens that token-overlap was matching.
+`(d)` L1 (user-turns-only session ingest) — `QMD_INGEST_USER_ONLY=on` in the eval ingest path, filters `turns` to `t.role === "user"` before joining the session-level memory text. Mechanism: improves the embedding centroid of each session by removing assistant verbosity, so the user's preference statement carries the centroid weight. Result n=500 (commit `fc8ee25`): preference sr5 **90.0% → 96.7% (+6.7pp)**, exact parity with MemPalace's 96.7%. **Trade:** single-session-assistant drops 100% → 96.4% (−3.6pp) because answers in the assistant's response are now stripped from the centroid; multi-session, temporal, single-session-user each lose ~1pp. Net overall sr5 **−0.8pp (98.4 → 97.6)**. The trade isn't free, but the preference fix is real and reproduces Schift's L# claim. Next step: **L# blend** (parallel L0+L1 indexes, score-fused per Schift's `0.5×L1 + 0.3×L2 + 0.2×L0`) to keep L0 signal for the assistant-side bucket.
+
+`(e)` r5 column re-added 2026-04-14 after the L1 r5 collapse exposed the metric's real meaning. Originally we tracked r5 as the "retrieval headline" and were mortified when it dropped from 94.2% → 65.6%. The metric audit had already established sr5 as the correct retrieval metric, but r5 isn't useless — it tracks **answer-text availability in retrieved memory text**, which is what an LLM running on top of qmd would actually consume as context. The L1 collapse is mechanical: stripping assistant turns from the session-level memory text removes most of the answer tokens that token-overlap was matching, even though the session-id retrieval still hits. **Treat r5 as a hard requirement on L# blend:** the blend must keep r5 within ~5pp of the L0 baseline (94.2%) while preserving the L1 sr5-preference lift. If L# blend lands sr5 preference ≥95% AND r5 overall ≥89%, ship it. If r5 stays collapsed, the blend isn't returning enough text content per recall and we have a deeper L1-shipping problem to solve before promoting it.
+
+`(f)` MemPalace's r5 (token-overlap) was never measured. Their bench computes session-id `recall_any` only; the retrieved memory texts per question are not dumped by their bench. To populate this cell we'd need to re-clone `~/qmd-baselines/mempalace`, modify their bench to write per-question retrieved chunks, then run our r5 logic against them (~30 min). **Prefer the AMB-driven cross-bench (TODO §1)** which captures retrieved text for any provider natively and would give us r5 + sr5 + speed for mem0 / Hindsight / MemPalace in one harness. Mark this cell as not-measured rather than missing.
 
 **Direct apples-to-apples delta** (qmd `mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1` minus MemPalace raw live):
 
