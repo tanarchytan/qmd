@@ -499,10 +499,15 @@ shape.
 - **Importance components** that informed our category + length
   heuristic (full 4-component scoring is queued for v17)
 
-[**Hindsight**](https://github.com/superlinear-ai/hindsight) — post-
-retrieval `reflect` synthesis. One LLM call after top-K retrieval that
-reasons across the recovered memories before the agent answers.
-Implemented as `memoryReflect()` in `src/memory/index.ts:1255`.
+**Hindsight** (architectural target, source-unconfirmed) — the
+LongMemEval SOTA we benchmark against (91.4% R@5). Their published
+4-parallel-path recipe is documented in our `docs/EVAL.md` SOTA table.
+We adopted the **post-retrieval `reflect` synthesis** pattern: one LLM
+call after top-K retrieval that reasons across the recovered memories
+before the agent answers. Implemented as `memoryReflect()` in
+`src/memory/index.ts:1255`. We have not been able to locate an open-
+source repo for Hindsight — if you know the canonical link, please
+open an issue.
 
 [**Generative Agents** (Park et al. 2023)](https://arxiv.org/abs/2304.03442) —
 periodic reflection over stored memory streams. We run this as
