@@ -87,6 +87,11 @@ Batch-generated from the result JSON files in `~/qmd-eval/evaluate/longmemeval/`
 
 `(a)` MemPalace raw n=500 re-ran today against the same `longmemeval_s_cleaned.json` we use. Overall R@5 **96.6% — exact match to their published headline.** Per-category R@5 figures in this row are **actual per-question hit counts** parsed from the bench stdout log and joined with the dataset's `question_type` field via `evaluate/mempalace-per-cat.py`; MemPalace's own bench summary only prints per-category R@10, but the per-question `R@5=0|1` data is in the log. Cells are fully apples-to-apples with our `sr5` values.
 
+`(c)` `mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1` + `QMD_MEMORY_RERANK=cross-encoder` with `cross-encoder/ms-marco-MiniLM-L6-v2` `model_quint8_avx2.onnx`. Local cross-encoder rerank shipped 2026-04-14 (commit `773b079`) targeting the `single-session-preference` bucket where the loose-floor baseline trails MemPalace by 6.7pp (90% vs 96.7%). **Run in flight at the time of this commit** — n=500 launched 13:40 CEST, ~17 min wall, result file at `~/qmd-eval/evaluate/longmemeval/results-n500-mxbai-loose-cerank.json`. Pull with `python3 ~/qmd-eval/report-sr5.py <file>` and edit this row in place when the data lands. Decision tree:
+- **preference sr5 ≥ 93% (lift ≥ +3pp):** promote `QMD_MEMORY_RERANK=cross-encoder` to `.env.example` recommended block + README, cite as the v17 first-release config.
+- **preference sr5 90-93%:** marginal — keep flagged off, document workload-specific use, note the +35s wall cost.
+- **preference sr5 flat or worse:** cross-encoder can't bridge the semantic gap on this benchmark category. Park, document the failure, next lever is HyDE or LLM-based query expansion (TODO §1).
+
 **Direct apples-to-apples delta** (qmd `mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1` minus MemPalace raw live):
 
 | Category | qmd | MemPalace | Δ |
