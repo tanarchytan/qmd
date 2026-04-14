@@ -830,12 +830,20 @@ export async function memoryRecall(
     }
   };
 
-  // Zero-LLM multi-query expansion (gated by QMD_MEMORY_EXPAND=entities).
-  // Builds sub-queries from proper-noun entities in the question and fans
-  // out parallel vec KNN queries, merging hits by id (max similarity). Aims
-  // at the multi-session category where single-query recall misses cross-
-  // session supporting facts. Q0 (original) always included — worst case
-  // degrades to baseline + some noise instead of replacing signal.
+  // Zero-LLM multi-query expansion (gated by QMD_MEMORY_EXPAND).
+  //
+  // entities — builds sub-queries from proper-noun entities + keywords.
+  //   Works on workloads with rich named-entity density (e.g. knowledge
+  //   bases, meeting notes with people/projects). Weak on LongMemEval
+  //   because most questions reference lowercase concepts.
+  //
+  // keywords — splits extracted keywords into N groups and fans out one
+  //   sub-query per group. Targets multi-hop retrieval where the answer
+  //   spans several supporting facts, each matched by a different keyword
+  //   cluster. No proper-noun dependency.
+  //
+  // Q0 (original) always included — worst case degrades to baseline +
+  // some noise instead of replacing signal.
   const EXPAND_MODE = process.env.QMD_MEMORY_EXPAND;
   const subQueries: string[] = [query];
   if (EXPAND_MODE === "entities") {
@@ -843,6 +851,20 @@ export async function memoryRecall(
     const expandKeywords = extractKeywords(query).slice(0, 6).join(" ");
     for (const e of expandEntities.slice(0, 2)) {
       const sub = expandKeywords ? `${expandKeywords} ${e}` : e;
+      if (sub !== query && !subQueries.includes(sub)) subQueries.push(sub);
+    }
+  } else if (EXPAND_MODE === "keywords") {
+    // Split the top keywords into N groups and build a sub-query per group.
+    // Group size 2 → 3 sub-queries of 2 keywords each for a 6-keyword query.
+    // Cap at 2 sub-queries (plus Q0 = 3 total parallel vec calls) to keep
+    // the latency budget reasonable.
+    const expandKeywords = extractKeywords(query);
+    const groupSize = 2;
+    const maxGroups = 2;
+    for (let i = 0; i < Math.min(maxGroups, Math.floor(expandKeywords.length / groupSize)); i++) {
+      const group = expandKeywords.slice(i * groupSize, (i + 1) * groupSize);
+      if (group.length === 0) break;
+      const sub = group.join(" ");
       if (sub !== query && !subQueries.includes(sub)) subQueries.push(sub);
     }
   }
@@ -984,11 +1006,97 @@ export async function memoryRecall(
         }
       }
 
+      // ── Scope-normalized scoring (gated by QMD_MEMORY_SCOPE_NORM=rank) ──
+      //
+      // Rank-normalize similarities within each scope so cross-scope
+      // cosine magnitude drift doesn't wash out the right answer. Noop
+      // when the candidate pool contains a single scope (which is the
+      // case on LongMemEval where scope = question_id). Targets multi-
+      // project qmd workloads where one recall query spans several
+      // partitioned scopes via the "global" union path.
+      let withSim: Array<{ id: string; similarity: number }>;
+      const SCOPE_NORM = process.env.QMD_MEMORY_SCOPE_NORM === "rank";
+      if (SCOPE_NORM && mergedHits.size > 1) {
+        // Fetch scope per id via a single IN() query; avoid N round-trips.
+        const ids = Array.from(mergedHits.keys());
+        const placeholders = ids.map(() => "?").join(",");
+        const scopeRows = db.prepare(
+          `SELECT id, scope FROM memories WHERE id IN (${placeholders})`
+        ).all(...ids) as Array<{ id: string; scope: string }>;
+        const idToScope = new Map<string, string>();
+        for (const row of scopeRows) idToScope.set(row.id, row.scope);
+
+        // Group by scope, sort within each by descending similarity,
+        // rewrite similarity = 1 / (RRF_K + rank_in_scope).
+        const RRF_K = 60;
+        const byScope = new Map<string, Array<{ id: string; similarity: number }>>();
+        for (const [id, similarity] of mergedHits) {
+          const s = idToScope.get(id) ?? "__unknown__";
+          const arr = byScope.get(s) ?? [];
+          arr.push({ id, similarity });
+          byScope.set(s, arr);
+        }
+        if (byScope.size <= 1) {
+          // Single scope → noop, keep original cosines.
+          withSim = Array.from(mergedHits, ([id, similarity]) => ({ id, similarity }));
+        } else {
+          withSim = [];
+          for (const arr of byScope.values()) {
+            arr.sort((a, b) => b.similarity - a.similarity);
+            for (let rank = 0; rank < arr.length; rank++) {
+              withSim.push({ id: arr[rank]!.id, similarity: 1 / (RRF_K + rank) });
+            }
+          }
+        }
+      } else {
+        withSim = Array.from(mergedHits, ([id, similarity]) => ({ id, similarity }));
+      }
+
       // Adaptive vector acceptance — pickVectorMatches handles the floor.
-      const withSim = Array.from(mergedHits, ([id, similarity]) => ({ id, similarity }));
-      for (const r of pickVectorMatches(withSim)) {
-        const mem = getById.get(r.id) as Memory | null;
-        if (mem) addResult(mem, r.similarity);
+      // Session-diversity MMR (gated by QMD_MEMORY_MMR=session) penalizes
+      // repeat picks from the same source session. Directly attacks the
+      // LongMemEval multi-session category where the right answer spans
+      // multiple session chunks.
+      const mmrMode = process.env.QMD_MEMORY_MMR;
+      const accepted = pickVectorMatches(withSim);
+      if (mmrMode === "session") {
+        const seenSessions = new Set<string>();
+        const diversified: Array<{ id: string; similarity: number }> = [];
+        const leftovers: Array<{ id: string; similarity: number }> = [];
+        // Pre-fetch memories in one batch so we can read metadata.source_session_id.
+        const ids = accepted.map(r => r.id);
+        const memMap = new Map<string, Memory>();
+        if (ids.length > 0) {
+          const placeholders = ids.map(() => "?").join(",");
+          const rows = db.prepare(
+            `SELECT * FROM memories WHERE id IN (${placeholders})`
+          ).all(...ids) as Memory[];
+          for (const m of rows) memMap.set(m.id, m);
+        }
+        for (const r of accepted) {
+          const mem = memMap.get(r.id);
+          const meta = mem?.metadata as Record<string, unknown> | undefined;
+          const sessionId = typeof meta?.source_session_id === "string"
+            ? (meta.source_session_id as string)
+            : null;
+          if (sessionId && seenSessions.has(sessionId)) {
+            leftovers.push(r);
+          } else {
+            if (sessionId) seenSessions.add(sessionId);
+            diversified.push(r);
+          }
+        }
+        // Append leftovers at the end so we never shrink the result set.
+        for (const r of leftovers) diversified.push(r);
+        for (const r of diversified) {
+          const mem = memMap.get(r.id);
+          if (mem) addResult(mem, r.similarity);
+        }
+      } else {
+        for (const r of accepted) {
+          const mem = getById.get(r.id) as Memory | null;
+          if (mem) addResult(mem, r.similarity);
+        }
       }
     } catch {
       // memories_vec may not exist
