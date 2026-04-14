@@ -102,13 +102,12 @@ That's actually decent coverage:
   to extract facts from raw conversation. Different category of system from
   qmd / hybrid_search; the cross-system data point that matters.
 
-**Hindsight handling:** can't bench retrieval-only without paid cloud access.
-Two options:
-1. Cite Hindsight's published 91.4% LME number with the caveat that it's
-   end-to-end QA accuracy on Gemini-3, not retrieval recall — apples-to-
-   oranges, useful only as a directional reference.
-2. If we get a Vectorize trial later, run their adapter through the same
-   wrapper. Code path is identical (it's just another `MemoryProvider`).
+**Hindsight handling: excluded from the cross-bench.** Their AMB adapter
+(`hindsight.py`) talks to Vectorize's paid cloud service via
+`hindsight_client_api`. There is no local install path. We are not
+pursuing a Vectorize trial. Their published 91.4% LME number is
+end-to-end QA accuracy on Gemini-3, not retrieval recall, so it stays
+in the ROADMAP retable for reference only with cells marked n/a.
 
 ## Wrapper script architecture
 
