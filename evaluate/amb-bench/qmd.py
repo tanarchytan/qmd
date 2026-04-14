@@ -220,9 +220,13 @@ class QmdMemoryProvider(MemoryProvider):
         node_dir = _find_node_bin_dir()
         if node_dir:
             env["PATH"] = node_dir + os.pathsep + env.get("PATH", "")
-        # Isolate qmd's index per provider instance so config sweeps don't
-        # share the same sqlite db.
-        env.setdefault("QMD_CACHE_DIR", str(self._cache_dir))
+        # Isolate qmd's SQLite index per provider instance so config sweeps
+        # don't share the same db. qmd reads INDEX_PATH (src/store/path.ts:210)
+        # — NOT the QMD_CACHE_DIR env var, which doesn't exist in qmd. Without
+        # this, all 3 configs in a sweep would write to ~/.cache/qmd/index.sqlite
+        # and the second + third configs would dedup against the first config's
+        # rows, producing byte-identical results that mask the L1/cerank effect.
+        env["INDEX_PATH"] = str(self._cache_dir / "index.sqlite")
 
         # Pipe qmd's stderr to a per-instance log file so we can debug
         # startup/runtime failures after the process exits. Writes go to
