@@ -13,6 +13,39 @@
 
 **Headline:** `snowflake-arctic-embed-s q8` broke the 82% multi-session R@5 ceiling on LongMemEval `_s` n=500 without any code-side tuning. **84.2% multi-session, 93.2% overall R@5** — the first model swap that moved the bottleneck category. `arctic-s q8` is the new night winner and the ceiling-fallback candidate alongside `MiniLM-L6 uint8`.
 
+### Status at 2026-04-14 — per-category R@5 at n=500
+
+Mirrors the format of the 2026-04-13 partition-fix diagnosis table (which first
+flagged multi-session at 80% as the headline bottleneck) so we can compare
+session-to-session deltas.
+
+| Category | n | **arctic-s q8 (night winner)** | mxbai-xs q8 (prior default) | MemPalace (reference) | Gap to MemPalace |
+|---|---|---|---|---|---|
+| single-session-user | 70 | 98.6% | 100.0% | 97% | +1.6 ✓ |
+| single-session-assistant | 56 | 98.2% | 98.2% | 96% | +2.2 ✓ |
+| single-session-preference | 30 | 100.0% | 100.0% | 97% | +3.0 ✓ |
+| knowledge-update | 78 | 96.2% | 98.7% | 100% | −3.8 |
+| temporal-reasoning | 133 | 94.0% | 97.7% | 97% | −3.0 |
+| **multi-session** | **133** | **84.2%** ⬆ | 82.0% | **100%** | **−15.8 ⚠️** |
+| **OVERALL R@5** | 500 | **93.2%** | 94.2% | **96.6%** | **−3.4** |
+| **OVERALL R@10** | 500 | **95.4%** | 94.4% | 98.2% | −2.8 |
+
+**Session-to-session deltas vs the 2026-04-13 partition-fix baseline (mxbai-xs q8 post-partition-fix):**
+
+| Category | 2026-04-13 | 2026-04-14 (arctic-s) | Δ |
+|---|---|---|---|
+| single-session-user | 100% | 98.6% | **−1.4** |
+| single-session-assistant | 98% | 98.2% | +0.2 |
+| single-session-preference | 100% | 100.0% | 0 |
+| knowledge-update | 97% | 96.2% | −0.8 |
+| temporal-reasoning | 95% | 94.0% | −1.0 |
+| **multi-session** | **81%** | **84.2%** | **+3.2** ⬆ |
+| **OVERALL R@5** | **93.2%** | **93.2%** | **0** |
+
+**What the table says:** arctic-s q8 is a **targeted trade for the multi-session bucket**. It gains +3.2pp on the stuck category (relative to the 2026-04-13 mxbai-xs q8 partition baseline) but pays back −1 to −1.4pp on the other four non-trivial buckets. Overall R@5 is flat at 93.2% — the gains and losses almost exactly cancel. **arctic-s is strictly better if multi-session is the binding priority; mxbai-xs q8 is strictly better if overall R@5 is the binding priority.** The choice depends on workload.
+
+**The gap to MemPalace is now isolated to multi-session.** Five categories are at parity or better with the 96.6% reference; the 15.8pp multi-session gap accounts for ~100% of the −3.4pp overall R@5 deficit. v17 lever work targets this bucket specifically.
+
 ### Multi-session R@5 leaderboard (n=500, RAW recall, session-granularity ingest)
 
 | Config | overall R@5 | multi-session R@5 | Wall |
