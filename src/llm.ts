@@ -26,7 +26,6 @@ export {
   DEFAULT_EMBED_MODEL_URI,
   DEFAULT_RERANK_MODEL_URI,
   DEFAULT_GENERATE_MODEL_URI,
-  isQwen3EmbeddingModel,
   formatQueryForEmbedding,
   formatDocForEmbedding,
 } from "./llm/types.js";

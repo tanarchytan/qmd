@@ -136,8 +136,7 @@ Config lives in `~/.config/qmd/.env` (see `.env.example` for all options).
 Index stored at `~/.cache/qmd/index.sqlite`.
 
 Key env vars:
-- `QMD_LOCAL=no` — skip node-llama-cpp entirely (no cmake, no GPU)
-- `QMD_LLAMA_BUILD=auto` — allow cmake builds for node-llama-cpp
+- `QMD_EMBED_BACKEND=transformers` — opt in to local ONNX embed via `@huggingface/transformers` (default: remote only)
 - `QMD_EMBED_PROVIDER`, `QMD_RERANK_PROVIDER`, `QMD_QUERY_EXPANSION_PROVIDER` — per-operation remote LLM config
 
 When running as OpenClaw plugin: provider config lives in `openclaw.json` under `plugins.entries.tanarchy-qmd.config` (embed/rerank/queryExpansion objects). Plugin maps these to QMD_* env vars on register().

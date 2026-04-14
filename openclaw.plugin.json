@@ -28,11 +28,6 @@
         "type": "string",
         "description": "Override path to the QMD SQLite database"
       },
-      "local": {
-        "type": "boolean",
-        "default": false,
-        "description": "Enable local node-llama-cpp (requires cmake/GPU). Default false for plugin."
-      },
       "embed": {
         "type": "object",
         "properties": {

@@ -58,7 +58,6 @@ interface QmdPluginConfig {
   topK: number;
   scope: string;
   dbPath?: string;
-  local?: boolean;
   embed?: ProviderConfig;
   rerank?: ProviderConfig;
   queryExpansion?: ProviderConfig;
@@ -80,13 +79,6 @@ const DEFAULT_CONFIG: QmdPluginConfig = {
  * Called AFTER loadQmdEnv() so plugin config wins over .env file.
  */
 function applyConfigToEnv(cfg: QmdPluginConfig): void {
-  // Plugin default: remote-only (no cmake/GPU needed)
-  if (cfg.local === false || cfg.local === undefined) {
-    process.env.QMD_LOCAL = "no";
-  } else {
-    process.env.QMD_LOCAL = "yes";
-  }
-
   if (cfg.embed) {
     if (cfg.embed.provider) process.env.QMD_EMBED_PROVIDER = cfg.embed.provider;
     if (cfg.embed.apiKey) process.env.QMD_EMBED_API_KEY = cfg.embed.apiKey;

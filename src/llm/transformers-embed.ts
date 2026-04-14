@@ -2,8 +2,7 @@
  * llm/transformers-embed.ts — local ONNX embedding backend via
  * `@huggingface/transformers` (the rebranded `@xenova/transformers`).
  *
- * Unlike `fastembed.ts` (hardcoded enum of 4-6 models), this backend accepts
- * ANY HuggingFace repo that ships an ONNX export — usually under the
+ * Accepts ANY HuggingFace repo that ships an ONNX export — usually under the
  * `onnx-community/<name>-ONNX` org or an `onnx/` subfolder in the main repo.
  *
  * Lazy-loaded. Dynamic import means `@huggingface/transformers` only
@@ -21,8 +20,9 @@
  *
  * Default = mxbai-xsmall q8: chosen as production default after the
  * 2026-04-13 LME _s n=500 A/B (94.2% R@5, 14m49s — 37% faster than the
- * fp32 MiniLM fastembed baseline at 93.2% R@5 / 23m33s). Fallback path
- * is fastembed AllMiniLML6V2 if transformers backend fails to load.
+ * fp32 MiniLM baseline at 93.2% R@5 / 23m33s). If this backend fails to load,
+ * memory embed returns null and recall falls back to FTS-only (no other
+ * local backend exists post-cleanup).
  */
 
 import { homedir } from "os";

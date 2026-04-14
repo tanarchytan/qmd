@@ -110,7 +110,6 @@ All provider config lives in `openclaw.json` under `plugins.entries.tanarchy-qmd
 | `autoCapture` | boolean | `true` | Extract memories after each turn |
 | `topK` | number | `5` | Max memories to recall |
 | `scope` | string | `"global"` | Memory scope (auto-detects agent ID) |
-| `local` | boolean | `false` | Enable local GGUF models (requires cmake/GPU) |
 | `embed` | object | — | Embedding provider config |
 | `rerank` | object | — | Reranking provider config |
 | `queryExpansion` | object | — | Query expansion provider config |
@@ -149,7 +148,6 @@ Each provider object: `{ "provider", "apiKey", "url", "model", "dimensions" }`
 
 Set env vars in `~/.config/qmd/.env`:
 ```bash
-QMD_LOCAL=no
 QMD_EMBED_PROVIDER=zeroentropy
 QMD_EMBED_API_KEY=ze-your-key
 QMD_EMBED_MODEL=zembed-1

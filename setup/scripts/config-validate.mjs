@@ -73,11 +73,8 @@ if (existsSync(envPath)) {
     }
   }
 
-  // Check local mode consistency
-  if (vars.QMD_LOCAL === "no") {
-    if (!vars.QMD_EMBED_PROVIDER) {
-      warnings.push("QMD_LOCAL=no but no QMD_EMBED_PROVIDER set — embeddings will fail");
-    }
+  if (!vars.QMD_EMBED_PROVIDER && vars.QMD_EMBED_BACKEND !== "transformers") {
+    warnings.push("No QMD_EMBED_PROVIDER set and QMD_EMBED_BACKEND!=transformers — embeddings will fail");
   }
 
   // Check rerank mode

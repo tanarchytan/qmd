@@ -31,38 +31,13 @@ export const DEFAULT_GENERATE_MODEL_URI = DEFAULT_GENERATE_MODEL;
 // Embedding Formatting Functions
 // =============================================================================
 
-/**
- * Detect if a model URI uses the Qwen3-Embedding format.
- * Qwen3-Embedding uses a different prompting style than nomic/embeddinggemma.
- */
-export function isQwen3EmbeddingModel(modelUri: string): boolean {
-  return /qwen.*embed/i.test(modelUri) || /embed.*qwen/i.test(modelUri);
-}
-
-/**
- * Format a query for embedding.
- * Uses nomic-style task prefix format for embeddinggemma (default).
- * Uses Qwen3-Embedding instruct format when a Qwen embedding model is active.
- */
-export function formatQueryForEmbedding(query: string, modelUri?: string): string {
-  const uri = modelUri ?? process.env.QMD_EMBED_MODEL ?? DEFAULT_EMBED_MODEL;
-  if (isQwen3EmbeddingModel(uri)) {
-    return `Instruct: Retrieve relevant documents for the given query\nQuery: ${query}`;
-  }
+/** Nomic-style task prefix for query embeddings. */
+export function formatQueryForEmbedding(query: string, _modelUri?: string): string {
   return `task: search result | query: ${query}`;
 }
 
-/**
- * Format a document for embedding.
- * Uses nomic-style format with title and text fields (default).
- * Qwen3-Embedding encodes documents as raw text without special prefixes.
- */
-export function formatDocForEmbedding(text: string, title?: string, modelUri?: string): string {
-  const uri = modelUri ?? process.env.QMD_EMBED_MODEL ?? DEFAULT_EMBED_MODEL;
-  if (isQwen3EmbeddingModel(uri)) {
-    // Qwen3-Embedding: documents are raw text, no task prefix
-    return title ? `${title}\n${text}` : text;
-  }
+/** Nomic-style title+text format for document embeddings. */
+export function formatDocForEmbedding(text: string, title?: string, _modelUri?: string): string {
   return `title: ${title || "none"} | text: ${text}`;
 }
 

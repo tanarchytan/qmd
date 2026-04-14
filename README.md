@@ -6,7 +6,7 @@ A unified search engine and memory system for AI agents. Index your documents, s
 **Agent memory:** Store, recall, forget, and extract memories with automatic deduplication and decay.
 **Knowledge graph:** Temporal entity-relationship triples — "what was true when?"
 
-Runs locally (GGUF models, no cloud needed) or via cloud APIs (ZeroEntropy, SiliconFlow, Nebius, Gemini, OpenAI). Set `QMD_LOCAL=no` for remote-only mode — no cmake, no GPU required.
+Runs against cloud APIs (ZeroEntropy, SiliconFlow, Nebius, Gemini, OpenAI) by default — no cmake, no GPU required. Set `QMD_EMBED_BACKEND=transformers` to opt in to local ONNX embeddings via `@huggingface/transformers`.
 
 ```sh
 npm install -g @tanarchy/qmd
@@ -117,7 +117,6 @@ QMD_{OP}_MODEL=      # model name
 ### Example: ZeroEntropy embed + rerank
 
 ```sh
-QMD_LOCAL=no
 QMD_EMBED_PROVIDER=zeroentropy
 QMD_EMBED_API_KEY=ze_your-key
 QMD_EMBED_MODEL=zembed-1
@@ -134,7 +133,6 @@ QMD_QUERY_EXPANSION_MODEL=meta-llama/Meta-Llama-3.1-8B-Instruct
 ### Example: SiliconFlow all three operations
 
 ```sh
-QMD_LOCAL=no
 QMD_EMBED_PROVIDER=siliconflow
 QMD_EMBED_API_KEY=sk-your-key
 QMD_EMBED_MODEL=Qwen/Qwen3-Embedding-8B
@@ -147,7 +145,7 @@ QMD_QUERY_EXPANSION_API_KEY=sk-your-key
 QMD_QUERY_EXPANSION_MODEL=zai-org/GLM-4.5-Air
 ```
 
-When no remote providers are configured, QMD uses local GGUF models automatically. You can mix local and remote (e.g. local embeddings + cloud rerank).
+Embed can also run locally via `QMD_EMBED_BACKEND=transformers` (ONNX, opt-in). Rerank and query expansion are remote-only.
 
 ## Memory System
 

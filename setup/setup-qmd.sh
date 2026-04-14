@@ -151,7 +151,7 @@ if [[ -z "$PROVIDER" ]]; then
   echo "  A) SiliconFlow    — Free tier, embed + rerank + expansion"
   echo "  B) Nebius + ZE    — Best quality (Nebius embed, ZeroEntropy rerank)"
   echo "  C) OpenAI         — Simplest setup, one API key"
-  echo "  D) Local only     — No API keys needed (requires cmake + GPU)"
+  echo "  D) Local embed    — QMD_EMBED_BACKEND=transformers (opt-in ONNX)"
   echo ""
   read -rp "Choose [A/B/C/D]: " choice
   case "${choice^^}" in
@@ -176,7 +176,6 @@ case "$PROVIDER" in
     read -rp "SiliconFlow API key: " SF_KEY
     if [[ -z "$SF_KEY" ]]; then err "API key required"; exit 1; fi
     ENV_VARS=(
-      [QMD_LOCAL]="no"
       [QMD_EMBED_PROVIDER]="siliconflow"
       [QMD_EMBED_API_KEY]="$SF_KEY"
       [QMD_EMBED_MODEL]="Qwen/Qwen3-Embedding-8B"
@@ -196,7 +195,6 @@ case "$PROVIDER" in
     read -rp "ZeroEntropy API key: " ZE_KEY
     if [[ -z "$NEB_KEY" || -z "$ZE_KEY" ]]; then err "Both keys required"; exit 1; fi
     ENV_VARS=(
-      [QMD_LOCAL]="no"
       [QMD_EMBED_PROVIDER]="api"
       [QMD_EMBED_API_KEY]="$NEB_KEY"
       [QMD_EMBED_URL]="https://api.studio.nebius.ai/v1"
@@ -216,7 +214,6 @@ case "$PROVIDER" in
     read -rp "OpenAI API key: " OAI_KEY
     if [[ -z "$OAI_KEY" ]]; then err "API key required"; exit 1; fi
     ENV_VARS=(
-      [QMD_LOCAL]="no"
       [QMD_EMBED_PROVIDER]="openai"
       [QMD_EMBED_API_KEY]="$OAI_KEY"
       [QMD_EMBED_MODEL]="text-embedding-3-small"
@@ -227,8 +224,8 @@ case "$PROVIDER" in
     )
     ;;
   local)
-    info "Local-only mode (no API keys)"
-    ENV_VARS=([QMD_LOCAL]="yes")
+    info "Local embed mode (opt-in transformers.js ONNX backend, no API keys)"
+    ENV_VARS=([QMD_EMBED_BACKEND]="transformers")
     ;;
   *)
     err "Unknown provider: $PROVIDER"

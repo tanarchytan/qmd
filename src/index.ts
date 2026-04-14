@@ -209,8 +209,8 @@ export interface StoreOptions {
  * The QMD SDK store — provides search, retrieval, collection management,
  * context management, and indexing operations.
  *
- * All methods are async. The store manages its own LlamaCpp instance
- * (lazy-loaded, auto-unloaded after inactivity) — no global singletons.
+ * All methods are async. Embed is lazy — local via transformers.js (when
+ * QMD_EMBED_BACKEND=transformers) or remote via RemoteLLM.
  */
 export interface QMDStore {
   /** The underlying internal store (for advanced use) */
