@@ -139,17 +139,23 @@ def run_provider_on_dataset(
     provider.initialize()
     try:
         # Load queries first (limit applies here — restricts the question set).
-        # Then load only the documents needed by those queries: AMB's load_documents
-        # supports user_ids filter, and for both LME and LoCoMo the user_id (=
-        # isolation unit) is the question/conversation scope. Without this filter,
-        # passing limit=20 to load_documents caps the TOTAL doc count at 20 which
-        # for LME means we only get 20 of ~25,000 sessions and every right session
-        # falls outside the loaded set → sr5 = 0%.
+        # Then load only the documents needed by those queries via user_ids
+        # filter (LME's user_id is question_id, LoCoMo's is sample_id). Without
+        # this, passing limit=20 to load_documents caps the TOTAL doc count at
+        # 20 which for LME means we only get 20 of ~25,000 sessions and every
+        # right session falls outside the loaded set → sr5 = 0%.
+        #
+        # Some adapters (LoCoMoDataset) don't implement the user_ids parameter.
+        # Fall back to limit-based load when user_ids isn't accepted.
         queries = dataset.load_queries(split=split, limit=limit)
+        documents = None
         if queries and any(q.user_id for q in queries):
             user_ids = {q.user_id for q in queries if q.user_id}
-            documents = dataset.load_documents(split=split, user_ids=user_ids)
-        else:
+            try:
+                documents = dataset.load_documents(split=split, user_ids=user_ids)
+            except TypeError:
+                pass  # adapter doesn't support user_ids — fall through
+        if documents is None:
             documents = dataset.load_documents(split=split, limit=limit)
         print(f"  loaded {len(documents)} docs, {len(queries)} queries")
 

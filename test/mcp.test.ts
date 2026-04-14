@@ -313,27 +313,11 @@ describe("MCP Server", () => {
   // searchVec (Vector similarity search)
   // ===========================================================================
 
-  describe.skip("searchVec (vector similarity) — depends on removed LlamaCpp ingest path", () => {
-    test("returns results for semantic query", async () => {
-      const results = await searchVec(testDb, "project documentation", DEFAULT_EMBED_MODEL, 10);
-      expect(results.length).toBeGreaterThan(0);
-    });
-
-    test("respects limit parameter", async () => {
-      const results = await searchVec(testDb, "documentation", DEFAULT_EMBED_MODEL, 2);
-      expect(results.length).toBeLessThanOrEqual(2);
-    });
-
-    test("returns empty when no vector table exists", async () => {
-      const emptyDb = openDatabase(":memory:");
-      initTestDatabase(emptyDb);
-      emptyDb.exec("DROP TABLE IF EXISTS vectors_vec");
-
-      const results = await searchVec(emptyDb, "test", DEFAULT_EMBED_MODEL, 10);
-      expect(results.length).toBe(0);
-      emptyDb.close();
-    });
-  });
+  // searchVec (vector similarity) tests removed in the 2026-04-14 LlamaCpp
+  // stub cleanup. The block was permanently `describe.skip`-ed because the
+  // ingest path it depended on was removed in 2026-04-13. Re-add when the
+  // transformers backend has a stable test-fixture path that can seed
+  // memories_vec deterministically.
 
   // ===========================================================================
   // hybridQuery (query expansion + reranking)
