@@ -463,6 +463,10 @@ class QmdMemoryProvider(MemoryProvider):
                     "skipHistory": True,
                     # Skip the per-item classifier regex pass.
                     "category": "other",
+                    # Chunk long docs into ~512-token pieces for better
+                    # multi-vector coverage. Each chunk shares metadata.doc_id
+                    # so retrieval can dedupe back to the source doc.
+                    "chunk": True,
                 })
             self._call_tool("memory_store_batch", {"items": items})
 
@@ -474,13 +478,23 @@ class QmdMemoryProvider(MemoryProvider):
         query_timestamp: str | None = None,
     ) -> tuple[list[Document], dict | None]:
         scope = user_id or "global"
+        # Over-fetch (k * 4) so that after dedup-by-doc_id we still have enough
+        # unique docs to fill the caller's requested k. With chunking enabled,
+        # one logical doc can produce multiple chunks all in the top-K and
+        # collapse to fewer unique docs than the caller asked for.
+        prefetch = k * 4
         result = self._call_tool(
             "memory_recall",
-            {"query": query, "scope": scope, "limit": k},
+            {"query": query, "scope": scope, "limit": prefetch},
         )
         # MCP tools return their structured payload under structuredContent.
         structured = result.get("structuredContent") or {}
         rows = structured.get("results", []) if isinstance(structured, dict) else []
+
+        # Walk results in rank order; for each unique doc_id keep the FIRST
+        # (highest-scoring) chunk only. Drops chunks 2..N of any doc that's
+        # already represented in the output. After dedup, take top-k.
+        seen: set[str] = set()
         docs: list[Document] = []
         for row in rows:
             md = row.get("metadata") if isinstance(row, dict) else None
@@ -490,11 +504,17 @@ class QmdMemoryProvider(MemoryProvider):
                 except Exception:
                     md = None
             doc_id = (md or {}).get("doc_id") or row.get("id", "")
+            doc_id_str = str(doc_id)
+            if doc_id_str in seen:
+                continue
+            seen.add(doc_id_str)
             docs.append(
                 Document(
-                    id=str(doc_id),
+                    id=doc_id_str,
                     content=row.get("text", ""),
                     user_id=row.get("scope"),
                 )
             )
+            if len(docs) >= k:
+                break
         return docs, result

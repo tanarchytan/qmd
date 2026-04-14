@@ -654,6 +654,7 @@ Intent-aware lex (C++ performance, not sports):
           importance: z.number().min(0).max(1).optional(),
           metadata: z.record(z.string(), z.unknown()).optional(),
           skipHistory: z.boolean().optional().describe("When true, skip the memory_history INSERT for this item. Bulk ingest of fresh corpora doesn't need history tracking."),
+          chunk: z.boolean().optional().describe("When true, split this item's text into ~512-token chunks before embedding. Each chunk becomes its own row sharing metadata.doc_id (auto-assigned if absent) so callers can map chunks back to the original logical doc at retrieve time. Mirrors AMB hybrid_search's multi-vector pattern."),
         })).describe("List of memory items to ingest in one batched embed + insert pass"),
       },
     },

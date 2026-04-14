@@ -13,6 +13,7 @@ import { getRemoteConfig, getRemoteLLM } from "../remote-config.js";
 import { getDecayScore } from "./decay.js";
 import { classifyMemory } from "./patterns.js";
 import { knowledgeQuery, type KnowledgeEntry } from "./knowledge.js";
+import { chunkDocument } from "../store/chunking.js";
 
 // =============================================================================
 // Embedding LRU cache — avoids redundant API calls for repeated text
@@ -95,6 +96,21 @@ export type MemoryStoreOptions = {
    * batched ingest of fresh corpora.
    */
   skipHistory?: boolean;
+  /**
+   * When true, split this item's text into multiple chunks (each ≤512 tokens)
+   * before embedding. Each chunk becomes its own row in `memories` with shared
+   * `metadata.doc_id` so callers can map chunks back to the original logical
+   * doc at retrieve time. Mirrors AMB hybrid_search's pattern of multi-vector
+   * coverage of long documents.
+   *
+   * `metadata.doc_id` is auto-populated with `metadata.doc_id` (if caller set
+   * one) OR a fresh UUID per logical doc. `metadata.chunk_seq` (0-indexed) and
+   * `metadata.chunk_pos` (char offset within original text) are added per chunk.
+   *
+   * For texts shorter than the chunk threshold, this is a no-op — the item
+   * passes through unchunked but still gets a `metadata.doc_id` assigned.
+   */
+  chunk?: boolean;
 };
 
 export type MemoryTier = "peripheral" | "working" | "core";
@@ -585,20 +601,59 @@ export async function memoryStoreBatch(
 ): Promise<{ id: string; status: "created" | "duplicate" }[]> {
   if (items.length === 0) return [];
   const now = Date.now();
-  const results: { id: string; status: "created" | "duplicate" }[] = new Array(items.length);
 
-  // Phase 1: hash dedup (single round-trip)
-  const hashes = items.map(it => contentHash(it.text.trim()));
+  // Phase 0: chunking expansion. Items with chunk:true are split into
+  // multiple chunk-items each ≤512 tokens, sharing metadata.doc_id so
+  // callers can map chunks back to the original logical doc at retrieve
+  // time. Mirrors AMB hybrid_search's multi-vector pattern. Items without
+  // chunk:true pass through unchanged. The result array we return must
+  // still be one-per-original-item, so we track which output rows came
+  // from which input via originIdx; chunks of one input collapse into
+  // a single result row reporting the FIRST chunk's id (arbitrary but
+  // deterministic).
+  const expanded: MemoryStoreOptions[] = [];
+  const expandedOriginIdx: number[] = [];
+  const CHUNK_MAX_CHARS = 1536; // ≈ 512 tokens at 3 chars/token (mxbai-xs window)
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]!;
+    if (it.chunk && it.text && it.text.length > CHUNK_MAX_CHARS) {
+      // Auto-assign a stable doc_id if the caller didn't provide one, so
+      // chunk grouping survives the round-trip through metadata.
+      const baseMeta = { ...(it.metadata ?? {}) };
+      if (!baseMeta.doc_id) baseMeta.doc_id = randomUUID();
+      const chunks = chunkDocument(it.text, CHUNK_MAX_CHARS);
+      for (let c = 0; c < chunks.length; c++) {
+        const chunk = chunks[c]!;
+        expanded.push({
+          ...it,
+          text: chunk.text,
+          metadata: { ...baseMeta, chunk_seq: c, chunk_pos: chunk.pos },
+        });
+        expandedOriginIdx.push(i);
+      }
+    } else {
+      expanded.push(it);
+      expandedOriginIdx.push(i);
+    }
+  }
+
+  // Allocate the output array on the EXPANDED size so per-chunk results
+  // have somewhere to land. We project back to per-original-item at the
+  // end: for a chunked input, the original item gets the first chunk's id.
+  const results: { id: string; status: "created" | "duplicate" }[] = new Array(expanded.length);
+
+  // Phase 1: hash dedup (single round-trip) — operates on the expanded set
+  const hashes = expanded.map(it => contentHash(it.text.trim()));
   const placeholders = hashes.map(() => "?").join(",");
   const existingRows = db.prepare(
     `SELECT id, content_hash FROM memories WHERE content_hash IN (${placeholders})`
   ).all(...hashes) as { id: string; content_hash: string }[];
   const existingByHash = new Map(existingRows.map(r => [r.content_hash, r.id]));
 
-  // Phase 2: collect texts that need embedding
+  // Phase 2: collect texts that need embedding (operates on the EXPANDED set)
   const toEmbed: { idx: number; text: string }[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const text = items[i]!.text.trim();
+  for (let i = 0; i < expanded.length; i++) {
+    const text = expanded[i]!.text.trim();
     if (!text) {
       results[i] = { id: "", status: "duplicate" };
       continue;
@@ -639,7 +694,7 @@ export async function memoryStoreBatch(
   const rows: RowToInsert[] = [];
   for (let j = 0; j < toEmbed.length; j++) {
     const { idx, text } = toEmbed[j]!;
-    const opts = items[idx]!;
+    const opts = expanded[idx]!;
     rows.push({
       idx,
       id: randomUUID(),
@@ -701,8 +756,8 @@ export async function memoryStoreBatch(
       }
     }
 
-    // Touch access counts for hash duplicates
-    for (let i = 0; i < items.length; i++) {
+    // Touch access counts for hash duplicates (over the expanded set)
+    for (let i = 0; i < expanded.length; i++) {
       if (results[i] && results[i]!.status === "duplicate" && results[i]!.id) {
         touch.run(now, results[i]!.id);
       }
@@ -710,7 +765,29 @@ export async function memoryStoreBatch(
   });
   txn();
 
-  return results;
+  // Project expanded per-chunk results back to per-original-item. For
+  // chunked inputs, the original item gets the FIRST chunk's id (deterministic
+  // and useful — chunks are stored sequentially so the first one is a stable
+  // anchor). The status reports "created" if any chunk was created, "duplicate"
+  // only if every chunk was already present.
+  const projected: { id: string; status: "created" | "duplicate" }[] = new Array(items.length);
+  for (let exIdx = 0; exIdx < expanded.length; exIdx++) {
+    const origIdx = expandedOriginIdx[exIdx]!;
+    const result = results[exIdx];
+    if (!result) continue;
+    const existing = projected[origIdx];
+    if (!existing) {
+      projected[origIdx] = result;
+    } else if (existing.status === "duplicate" && result.status === "created") {
+      // Upgrade duplicate-only group to created when any chunk lands new
+      projected[origIdx] = { id: existing.id, status: "created" };
+    }
+  }
+  // Fill any holes (shouldn't happen but defensive)
+  for (let i = 0; i < items.length; i++) {
+    if (!projected[i]) projected[i] = { id: "", status: "duplicate" };
+  }
+  return projected;
 }
 
 /**
