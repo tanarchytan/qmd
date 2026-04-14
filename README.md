@@ -232,8 +232,8 @@ Entity names are auto-normalized: "David Gillot" → "david_gillot".
            • stop word filtering
                       │
                       ▼
-              LLM Reranking
-              (ZeroEntropy / local Qwen3)
+              LLM Reranking (optional)
+              (ZeroEntropy / SiliconFlow / Gemini / OpenAI)
                       │
                       ▼
            Position-Aware Blend
@@ -423,45 +423,173 @@ Full version history, technique tables, lessons learned, and SOTA targets in [`d
 
 ## Standing on the Shoulders of Giants
 
-This project builds on ideas from several remarkable open-source projects:
+QMD is a pile of good ideas from other projects, glued together with one
+SQLite database and a lot of benchmarking. Everything below is shipped and
+verified in code.
 
-### [tobi/qmd](https://github.com/tobi/qmd) — The Foundation
-The original QMD by Tobi Lutke. Everything starts here: SQLite FTS5 + sqlite-vec hybrid search, node-llama-cpp local LLM pipeline, AST-aware chunking via tree-sitter, the MCP server, session management, and the entire CLI. We forked this and built on top.
+### Foundation
 
-### [MemPalace](https://github.com/milla-jovovich/mempalace) — Search Quality Breakthroughs
-Their benchmark work changed how we think about retrieval. Key lessons:
-- **Raw verbatim storage beats LLM extraction** (96.6% recall with zero LLM calls vs Mem0's 30-45%)
-- **Zero-LLM score boosts**: keyword overlap (+1.2%), quoted phrase matching (+0.6%), person name boosting (+0.6%), preference pattern extraction (+0.6%) — all implemented in our search pipeline
-- **Stop word list** for keyword extraction precision
-- **Temporal knowledge graph** with validity windows — our `knowledge_store`/`knowledge_query` is directly inspired by their approach
-- Their honest benchmarking methodology (500-question LongMemEval, per-category breakdowns) set the standard
+[**tobi/qmd**](https://github.com/tobi/qmd) — Tobi Lutke's original QMD.
+SQLite FTS5 + sqlite-vec hybrid search, AST-aware chunking via tree-sitter,
+the MCP server, session management, the entire CLI scaffolding. We forked
+this and grew the memory system on top.
 
-### [Mem0](https://github.com/mem0ai/mem0) — Memory Architecture Patterns
-52k stars and a clean architecture. What we learned:
-- **Two-layer deduplication**: content hash (instant) + cosine similarity (semantic) — implemented in `memory_store`
-- **Memory changelog table** for audit trails ("why does the agent believe X?")
-- **Three-tier scope model** (user/session/agent) — informed our `scope` field design
-- **LLM conflict resolution** (ADD/UPDATE/DELETE/NONE) — design pattern for future enhancement
-- **OpenClaw plugin pattern** — their `@mem0/openclaw-mem0` plugin is the reference for our Phase 5
+### Memory & retrieval architecture
 
-### [Mastra](https://github.com/mastra-ai/mastra) — Memory Processing
-TypeScript AI framework with sophisticated memory management:
-- **Observational memory** — three-agent (actor/observer/reflector) background compression of conversations
-- **Embedding LRU cache** keyed by xxhash64 — avoiding re-embedding identical queries
-- **Token budgeting** with dual thresholds for context window management
-- **Thread/resource isolation** — informed our per-scope memory boundaries
+[**MemPalace**](https://github.com/milla-jovovich/mempalace) — the project
+that pushed us past 90% R@5 on LongMemEval.
+- Raw verbatim storage as the baseline (their 96.6% R@5 head-to-head)
+- Zero-LLM score boosts: keyword overlap (×1.4), quoted phrase (×1.6),
+  person name filter, stop-word list
+- Temporal distance boost (40% time-proximate)
+- Preference pattern ingest
+- Strong-signal detection (skip query expansion when FTS hits clean)
+- Per-question scope isolation pattern (we implement it as
+  `memories_vec` PARTITION KEY)
+- Honest benchmarking methodology that set our standard
 
-### [memory-lancedb-pro](https://github.com/CortexReach/memory-lancedb-pro) — Decay & Lifecycle
-OpenClaw plugin with the most complete memory lifecycle:
-- **Weibull decay engine** — the exact formula (recency × frequency × intrinsic) with tier-specific beta values is ported directly
-- **Three-tier promotion** (Peripheral → Working → Core) with access-count thresholds
-- **Smart extraction** with 6 categories — our category system matches theirs
-- **Auto-capture/recall hooks** for OpenClaw — the reference architecture for Phase 5
+[**Mem0**](https://github.com/mem0ai/mem0) — atomic-fact extraction and
+dedup pipeline.
+- LLM atomic fact extraction with categories
+- Two-layer dedup: MD5 content hash (instant) + cosine similarity ≥0.9
+- Memory changelog table for audit trails
+- LLM conflict resolution (ADD / UPDATE / DELETE / NONE) — fully shipped
+- Multi-agent namespace isolation
+- OpenClaw plugin auto-recall / auto-capture hook pattern
 
-### What We Built Different
-- **One database** — everything in SQLite (documents, memories, knowledge, vectors, FTS, cache). No ChromaDB, no LanceDB, no separate vector store.
-- **Zero-LLM-first** — search quality improvements that don't require API calls (score boosts, stop words, pattern matching). LLM reranking is optional enhancement, not a requirement.
-- **Remote-first dispatch** — when cloud providers are configured, they take priority with automatic fallback to local. No cmake builds needed for remote-only setups.
+[**Mastra**](https://github.com/mastra-ai/mastra) — TypeScript memory
+processing patterns.
+- Embedding LRU cache (we use MD5 keys instead of xxhash64; functionally
+  equivalent at our scale)
+- Per-scope memory boundaries (informed our `scope` field design)
+
+[**memory-lancedb-pro**](https://github.com/CortexReach/memory-lancedb-pro) —
+the most complete memory lifecycle layer we found.
+- Weibull decay engine (recency × frequency × intrinsic, β per tier) —
+  ported directly to `src/memory/decay.ts`
+- Three-tier promotion: peripheral → working → core
+- Smart extraction with 6 categories matching ours
+- Dream consolidation with cursor checkpointing — wired into our OpenClaw
+  plugin's `session_end` hook
+
+[**Zep / Graphiti**](https://github.com/getzep/graphiti) — temporal
+knowledge graph schema.
+- Bitemporal validity windows on facts (`valid_from` / `valid_until`)
+- Auto-invalidation of conflicting facts
+- Inspired our `knowledge_store` / `knowledge_query` API and the
+  `consolidateEntityFacts` synthesis pass
+
+[**Letta / MemGPT**](https://github.com/letta-ai/letta) — agent
+self-directed retrieval via tool calls. We expose this through the MCP
+server's `memory_recall` and `memory_store` tools, letting the agent
+choose when to recall vs ingest.
+
+[**Tinkerclaw — Serra (2026)**](https://github.com/globalcaos/tinkerclaw) —
+three OpenClaw memory papers (Instant Recall, Total Recall, Sleep
+Consolidation). The most influential single source on our retrieval
+shape.
+- **Push Pack** pattern — proactive Task State + hot-tail + time markers
+  bundle (`pushPack()` in `src/memory/index.ts:1400`)
+- **Importance log-modulation** in scoring — the v12 formula
+  `effective = cos_sim × (1 + α·log(importance))`, α≈0.15
+- **MMR / dialog diversity** for top-K reshuffling
+  (`applyDialogDiversity()` + `QMD_MEMORY_MMR=session`)
+- **LRU-K-flavored eviction** with type weighting
+  (`runEvictionPass()` in `src/memory/decay.ts:135`)
+- **Importance components** that informed our category + length
+  heuristic (full 4-component scoring is queued for v17)
+
+[**Hindsight**](https://github.com/superlinear-ai/hindsight) — post-
+retrieval `reflect` synthesis. One LLM call after top-K retrieval that
+reasons across the recovered memories before the agent answers.
+Implemented as `memoryReflect()` in `src/memory/index.ts:1255`.
+
+[**Generative Agents** (Park et al. 2023)](https://arxiv.org/abs/2304.03442) —
+periodic reflection over stored memory streams. We run this as
+`runReflectionPass()` (`src/memory/index.ts:1306`) — pulls the last N
+memories, derives meta-reflections via LLM, stores them as new memories
+with `category=reflection`. Wired into the OpenClaw `session_end` hook.
+
+### Algorithms & classic IR
+
+- **BM25** (Robertson, Jones et al. — Okapi BM25) — keyword search via
+  SQLite FTS5. `bm25()` ranking from FTS5's built-in implementation.
+- **Reciprocal Rank Fusion** (Cormack, Clarke, Büttcher 2009) — our
+  `RRF_K=60` smoothing constant fuses the BM25 + vector ranked lists.
+  Two-list RRF with 2× weight on the BM25 list.
+- **Maximal Marginal Relevance** (Carbonell & Goldstein 1998) — the
+  diversity primitive behind `applyDialogDiversity`. We use a
+  session-key variant instead of cosine similarity — cheaper, attacks
+  the multi-evidence retrieval pattern directly.
+- **LRU-K** (O'Neil, O'Neil, Weikum 1993, SIGMOD) — the eviction policy
+  Tinkerclaw cites and we approximate with a single-field backward
+  window in `runEvictionPass`.
+- **Weibull distribution** — the decay curve shape for memory
+  forgetting, fitted per tier in `src/memory/decay.ts:16`.
+- **HNSW** indirectly via [**sqlite-vec**](https://github.com/asg017/sqlite-vec) —
+  vector index. We use vec0 virtual tables with PARTITION KEY for
+  per-scope KNN.
+
+### Tooling & infrastructure
+
+- [**better-sqlite3**](https://github.com/WiseLibs/better-sqlite3) —
+  synchronous SQLite bindings. The reason QMD can stay zero-async at
+  the storage layer.
+- [**sqlite-vec**](https://github.com/asg017/sqlite-vec) — Alex Garcia's
+  vector extension. Cosine, partition keys, the whole vector pipeline.
+- [**@huggingface/transformers**](https://github.com/huggingface/transformers.js) —
+  the rebranded `@xenova/transformers`. Local ONNX embed backend
+  (default: Snowflake `arctic-embed-s` q8 after the 2026-04-13/14
+  small-class A/B).
+- [**tree-sitter**](https://github.com/tree-sitter/tree-sitter) +
+  language grammars — AST-aware code chunking for TS/JS/Python/Go/Rust.
+- [**Model Context Protocol**](https://github.com/modelcontextprotocol/specification) —
+  the MCP transport for the `qmd mcp` server.
+- [**OpenClaw**](https://docs.claude.com/en/docs/claude-code/openclaw) —
+  the agent integration framework whose hook system QMD plugs into.
+
+### Benchmarks we honor
+
+- [**LongMemEval**](https://github.com/xiaowu0162/LongMemEval) — Wu et
+  al.'s 500-question multi-session retrieval benchmark. Our headline
+  metric. Per-category breakdown (single-session-user / -assistant /
+  -preference, knowledge-update, temporal-reasoning, **multi-session**)
+  is the lens we use to find ranking failures.
+- [**LoCoMo**](https://github.com/snap-research/locomo) — Snap
+  Research's long-context memory benchmark. We use conv-26 + conv-30
+  (n=304) for stress testing question-answer quality, with the
+  [LoCoMo audit](https://github.com/dial481/locomo-audit)'s 6.4%
+  ground-truth caveat applied.
+
+### What we built different (the QMD-specific bits)
+
+- **One database for everything.** Documents, memories, knowledge graph,
+  vectors, FTS5, decay scores, embedding cache — all in a single
+  `~/.cache/qmd/index.sqlite`. No ChromaDB, no LanceDB, no separate
+  vector store, no Redis.
+- **Zero-LLM-first.** Every search-quality improvement that doesn't need
+  an API call ships before any that does. LLM rerank, query expansion,
+  and reflection synthesis are all opt-in enhancements.
+- **Remote-first dispatch with optional local embed.** When cloud
+  providers are configured, they take priority. Local embed via
+  `QMD_EMBED_BACKEND=transformers` is opt-in — no cmake, no GPU
+  required for the default install.
+- **Scope = partition key.** `memories_vec` ships with `scope TEXT
+  PARTITION KEY` so vector KNN walks only the current scope's slice of
+  the index. Eliminated the n=500 89.4% R@5 ceiling caused by global
+  KNN bleeding across scopes.
+- **Adaptive cosine acceptance.** `pickVectorMatches` replaces the
+  legacy fixed 0.3 floor with `max(absFloor=0.05, top1 × 0.5)` and a
+  `minKeep=5` safety net. Survives both open-vault and focused-
+  haystack regimes.
+- **Multi-query expansion (zero-LLM).** Two variants:
+  `QMD_MEMORY_EXPAND=entities` (proper nouns) and
+  `QMD_MEMORY_EXPAND=keywords` (top-N keyword groups). The keyword
+  variant gave +1pp multi-session R@5 on LongMemEval n=500 in our
+  2026-04-13/14 night cycle.
+- **Compact local provider footprint.** No `node-llama-cpp`, no `cmake`
+  builds, no fastembed enum. Single ONNX backend that accepts any HF
+  repo via env vars.
 
 ## License
 
