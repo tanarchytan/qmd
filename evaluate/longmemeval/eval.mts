@@ -384,6 +384,13 @@ async function main() {
       const storeTurns = process.env.QMD_INGEST_PER_TURN !== "off";
       const storeSessions = process.env.QMD_INGEST_SESSION_AS_MEMORY !== "off";
       const batchExtract = process.env.QMD_INGEST_BATCH_EXTRACT !== "off";
+      // L1 (user-turns-only) ingest from Schift's L# cache pattern. When on,
+      // the session-level memory text is built from user turns only,
+      // stripping the assistant's verbose responses so the embedding
+      // centroid focuses on the user's preference statements. Targets the
+      // single-session-preference rank 6/8/12 cases identified in the
+      // 2026-04-14 preference-rank-diagnostic.mts run. Default off.
+      const userOnlySession = process.env.QMD_INGEST_USER_ONLY === "on";
 
       const sessionTexts: string[] = [];
       const turnBatch: Array<{ text: string; scope: string; importance?: number; metadata?: Record<string, unknown> }> = [];
@@ -399,7 +406,8 @@ async function main() {
             turnBatch.push({ text, scope, metadata: { source_session_id: sessionId, turn_index: t } });
           }
         }
-        const sessionText = turns.map(t => `${t.role}: ${t.content}`).join("\n");
+        const sessionTurns = userOnlySession ? turns.filter(t => t.role === "user") : turns;
+        const sessionText = sessionTurns.map(t => `${t.role}: ${t.content}`).join("\n");
         if (storeSessions && date) {
           turnBatch.push({ text: `[${date}]\n${sessionText}`, scope, importance: 0.7, metadata: { source_session_id: sessionId } });
         }

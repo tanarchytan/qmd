@@ -64,30 +64,40 @@ The two measure different things and disagree sharply on some categories. Token-
 3. ~~Multi-session bucket~~ — at 100% sr5 parity, no v17 work needed for retrieval. The old "82% ceiling" was a metric artifact.
 4. **Default stays mxbai-xs q8.** Document arctic-s as a specialized option for workloads that actually need the token-overlap metric (we don't have a clear use case for that).
 
-### Full retable of 2026-04-13/14 runs on sr5 (all n=500 configs)
+### Apples-to-apples retable (live, n=500, sr5 + cross-system metrics)
 
-Batch-generated from the result JSON files in `~/qmd-eval/evaluate/longmemeval/` via `evaluate/batch-sr5-report.py`. Sorted by sr5 overall. **Winners are the ones that actually move the apples-to-apples needle.**
+Curated 2026-04-14 after the L1 result landed. Slimmed from the historical
+night-cycle table — every parked / failed config (arctic-s family, EXPAND
+variants, fixed-MMR, MiniLM, arctic-xs, cross-encoder rerank) was removed.
+Only the qmd configs that are either current production candidates or
+direct comparison anchors are kept. Cross-system rows (MemPalace, mem0,
+hindsight) are preserved or queued for the bench cycle.
 
-| Rank | Config | sr5 overall | multi | temp | kn-upd | s-pref | s-asst | s-user | r5 (legacy) |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | `mxbai-xs q8` + loose + cross-encoder rerank ⁽ᶜ⁾ | 98.4% | 100% | 97.0% | 98.7% | **90.0%** ❌ | 100.0% | 100.0% | 94.2% |
-| 1 | **`mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1`** (loose-floor) | **98.4%** ✅ | **100%** | 97.0% | 98.7% | 90.0% | 100.0% | 100.0% | 94.2% |
-| 1 | `mxbai-xs q8` + loose + MMR | 98.4% ✅ | 100% | 97.0% | 98.7% | 90.0% | 100.0% | 100.0% | 94.2% |
-| 3 | **`mxbai-xs q8` baseline** (prior production default) | **98.2%** | **100%** | 97.0% | 98.7% | 90.0% | 100.0% | 100.0% | 94.2% |
-| 3 | `mxbai-xs q8` + loose + expand + fixed-MMR | 98.2% | 99.2% | 97.7% | 98.7% | 90.0% | 100.0% | 100.0% | 94.2% |
-| 3 | `mxbai-xs q8` + fixed-MMR (phase 4 run 1) | 98.2% | 99.2% | 97.7% | 98.7% | 90.0% | 100.0% | 100.0% | 94.2% |
-| 6 | `MiniLM-L6 uint8` | 98.0% | 99.2% | 97.0% | 100.0% | 90.0% | 100.0% | 97.1% | 94.4% |
-| 6 | `mxbai-xs q8` + `EXPAND=keywords` | 98.0% | 99.2% | 97.7% | 98.7% | 90.0% | 100.0% | 97.1% | 94.2% |
-| 8 | `MiniLM-L6 fp32` (pre-cleanup baseline) | 97.0% | 97.7% | 95.5% | 98.7% | 86.7% | 100.0% | 98.6% | 93.2% |
-| 9 | **MemPalace raw — published + live reproduction 2026-04-14** ⁽ᵃ⁾ | **96.6%** | 99.2% | 94.7% | 100.0% | 96.7% | 96.4% | 91.4% | — |
-| 10 | `arctic-xs q8` | 96.6% | 97.7% | 94.0% | 100.0% | 86.7% | 100.0% | 97.1% | 93.4% |
-| 11 | **`arctic-s q8` baseline** (earlier "night winner") | **95.8%** ⚠️ | 98.5% | 93.2% | 98.7% | **80.0%** ⚠️ | 100.0% | 95.7% | 93.2% |
-| 12 | `arctic-s q8` + `EXPAND=keywords` | 95.6% | 98.5% | 92.5% | 98.7% | 80.0% | 100.0% | 95.7% | 92.8% |
-| 12 | `arctic-s q8` + loose + expand + MMR (kitchen sink) | 95.6% | 98.5% | 92.5% | 98.7% | 80.0% | 100.0% | 95.7% | 92.8% |
+**Metrics columns:**
+- `sr5` — session-ID `recall_any@5`, the apples-to-apples retrieval metric.
+  This is what we score. MemPalace publishes this as `R@5`.
+- `sr5 s-pref` — single-session-preference bucket, the only category where
+  qmd had a real gap before L1. v17 work targets this column.
+- `sr5 overall` — average across all 6 categories.
+- `R@5 published` — the system's own published headline number, from their
+  README / paper / leaderboard. Different metric than ours where noted.
+- `wall` — n=500 retrieval wall-clock time on our hardware. Blank for
+  systems we haven't reproduced yet.
 
-`(a)` MemPalace raw n=500 re-ran today against the same `longmemeval_s_cleaned.json` we use. Overall R@5 **96.6% — exact match to their published headline.** Per-category R@5 figures in this row are **actual per-question hit counts** parsed from the bench stdout log and joined with the dataset's `question_type` field via `evaluate/mempalace-per-cat.py`; MemPalace's own bench summary only prints per-category R@10, but the per-question `R@5=0|1` data is in the log. Cells are fully apples-to-apples with our `sr5` values.
+| Config | sr5 overall | sr5 s-pref | sr5 multi | sr5 temp | sr5 kn-upd | sr5 s-asst | sr5 s-user | wall | R@5 published | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **`mxbai-xs q8` + loose + L1** ⁽ᵈ⁾ | **97.6%** | **96.7%** ✅ | 99.2% | 95.5% | 98.7% | 96.4% | 98.6% | 16m02s | — | **closes preference gap, costs −0.8pp overall** |
+| **`mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1`** (current default) | **98.4%** | 90.0% ⚠️ | 100% | 97.0% | 98.7% | 100% | 100% | 15m12s | — | overall winner, preference gap |
+| `mxbai-xs q8` baseline (prior default) | 98.2% | 90.0% | 100% | 97.0% | 98.7% | 100% | 100% | 15m12s | — | beat MemPalace before any night work |
+| **MemPalace raw** (live + published) ⁽ᵃ⁾ | **96.6%** | 96.7% | 99.2% | 94.7% | 100.0% | 96.4% | 91.4% | 12m59s | 96.6% | reference anchor; live-reproduced 2026-04-14 |
+| **mem0** ⁽ᵇ⁾ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | 67.6% (LME _s) | bench setup pending, see TODO §1 |
+| **Hindsight** ⁽ᵇ⁾ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | 91.4% (LME end-to-end) | bench setup pending; their 91.4% is QA accuracy not retrieval |
 
-`(c)` `mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1` + `QMD_MEMORY_RERANK=cross-encoder` with `cross-encoder/ms-marco-MiniLM-L6-v2` `model_quint8_avx2.onnx`. Local cross-encoder rerank shipped 2026-04-14 (commit `773b079`) targeting the `single-session-preference` bucket where the loose-floor baseline trails MemPalace by 6.7pp. **Result (n=500, ~17 min wall): flat on sr5.** Overall 98.4%, preference 90.0% — bit-identical to the loose-floor baseline on every sr5 category. Token-overlap r5 preference jumped 90% → 100% (cross-encoder is finding more lexically-overlapping passages within the same wrong sessions), but sr5 says we're picking the same sessions either way. **Conclusion: cross-encoder can't bridge the semantic gap on this benchmark — the failure is at the candidate-generation stage, not the rerank stage.** Per the original decision tree this falls in the "park, don't promote" branch. `QMD_MEMORY_RERANK=cross-encoder` stays flagged off; backend code retained for future workloads where rerank input candidates aren't already pre-filtered by sr5-aligned cosine. **Next lever: HyDE or LLM-based query expansion** to widen the candidate pool before retrieval, since rerank-after-retrieval cannot recover sessions that were never in the candidate set.
+`(a)` MemPalace raw n=500 was re-run on 2026-04-14 against the same `longmemeval_s_cleaned.json` we use. Overall R@5 **96.6% — exact match to their published headline.** Per-category cells are actual per-question hit counts parsed from the bench stdout log and joined with `question_type` via `evaluate/mempalace-per-cat.py`. MemPalace's bench computes session-level `recall_any` — apples-to-apples with our `sr5`. **The cloned mempalace repo at `~/qmd-eval/baselines/mempalace/` was deleted 2026-04-14 after the bench landed; the metric tooling and per-question logs are preserved.**
+
+`(b)` mem0 cloned to `~/qmd-baselines/mem0/` 2026-04-14. Hindsight clone TBD. Both will be benched against the same `longmemeval_s_cleaned.json` to populate this row. **Their published numbers are NOT directly comparable:** mem0's 67.6% on LME-S is an end-to-end QA accuracy with their own LLM judge, NOT session-id recall; Hindsight's 91.4% is full QA accuracy on Gemini-3, also not retrieval. The `R@5 published` column is for context only. **Apples-to-apples requires running their retrieval against our data file and scoring sr5.** Bench harness candidate: AMB (`~/qmd-baselines/amb/`), driving each system's retrieval API directly and skipping AMB's generate+judge LLM steps.
+
+`(d)` L1 (user-turns-only session ingest) — `QMD_INGEST_USER_ONLY=on` in the eval ingest path, filters `turns` to `t.role === "user"` before joining the session-level memory text. Mechanism: improves the embedding centroid of each session by removing assistant verbosity, so the user's preference statement carries the centroid weight. Result n=500 (commit pending): preference sr5 **90.0% → 96.7% (+6.7pp)**, exact parity with MemPalace's 96.7%. **Trade:** single-session-assistant drops 100% → 96.4% (−3.6pp) because answers in the assistant's response are now stripped from the centroid; multi-session, temporal, single-session-user each lose ~1pp. Net overall sr5 **−0.8pp (98.4 → 97.6)**. The trade isn't free, but the preference fix is real and reproduces Schift's L# claim. Next step: **L# blend** (parallel L0+L1 indexes, score-fused per Schift's `0.5×L1 + 0.3×L2 + 0.2×L0`) to keep L0 signal for the assistant-side bucket. Also notable: r5 (token-overlap) collapsed from 94.2% → 65.6%, which is the final nail in r5's coffin as a retrieval metric — stripping assistant text removes most of the answer tokens that token-overlap was matching.
 
 **Direct apples-to-apples delta** (qmd `mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1` minus MemPalace raw live):
 
