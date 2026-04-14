@@ -1053,50 +1053,10 @@ export async function memoryRecall(
       }
 
       // Adaptive vector acceptance — pickVectorMatches handles the floor.
-      // Session-diversity MMR (gated by QMD_MEMORY_MMR=session) penalizes
-      // repeat picks from the same source session. Directly attacks the
-      // LongMemEval multi-session category where the right answer spans
-      // multiple session chunks.
-      const mmrMode = process.env.QMD_MEMORY_MMR;
       const accepted = pickVectorMatches(withSim);
-      if (mmrMode === "session") {
-        const seenSessions = new Set<string>();
-        const diversified: Array<{ id: string; similarity: number }> = [];
-        const leftovers: Array<{ id: string; similarity: number }> = [];
-        // Pre-fetch memories in one batch so we can read metadata.source_session_id.
-        const ids = accepted.map(r => r.id);
-        const memMap = new Map<string, Memory>();
-        if (ids.length > 0) {
-          const placeholders = ids.map(() => "?").join(",");
-          const rows = db.prepare(
-            `SELECT * FROM memories WHERE id IN (${placeholders})`
-          ).all(...ids) as Memory[];
-          for (const m of rows) memMap.set(m.id, m);
-        }
-        for (const r of accepted) {
-          const mem = memMap.get(r.id);
-          const meta = mem?.metadata as Record<string, unknown> | undefined;
-          const sessionId = typeof meta?.source_session_id === "string"
-            ? (meta.source_session_id as string)
-            : null;
-          if (sessionId && seenSessions.has(sessionId)) {
-            leftovers.push(r);
-          } else {
-            if (sessionId) seenSessions.add(sessionId);
-            diversified.push(r);
-          }
-        }
-        // Append leftovers at the end so we never shrink the result set.
-        for (const r of leftovers) diversified.push(r);
-        for (const r of diversified) {
-          const mem = memMap.get(r.id);
-          if (mem) addResult(mem, r.similarity);
-        }
-      } else {
-        for (const r of accepted) {
-          const mem = getById.get(r.id) as Memory | null;
-          if (mem) addResult(mem, r.similarity);
-        }
+      for (const r of accepted) {
+        const mem = getById.get(r.id) as Memory | null;
+        if (mem) addResult(mem, r.similarity);
       }
     } catch {
       // memories_vec may not exist
@@ -1242,9 +1202,17 @@ export async function memoryRecall(
   // uncovered in the top-K. Greedy MMR-lite reshuffles the top-limit to
   // prefer unseen source_dialog_id / source_session_id first, falling
   // back to score order when all remaining candidates come from already-
-  // covered dialogs. Opt-in via QMD_RECALL_DIVERSIFY=on (default off so
-  // the baseline is unchanged).
-  if (!RAW && process.env.QMD_RECALL_DIVERSIFY === "on" && sorted.length > 2) {
+  // covered dialogs.
+  //
+  // Two env gates:
+  //   QMD_RECALL_DIVERSIFY=on — legacy flag, only fires outside RAW mode
+  //     (treated as a post-RRF boost, same tier as keyword/temporal).
+  //   QMD_MEMORY_MMR=session  — new flag, fires regardless of RAW so we
+  //     can A/B diversity as a first-class retrieval lever on baseline
+  //     eval harnesses (LongMemEval etc.) that require RAW=on.
+  const diversifyLegacy = !RAW && process.env.QMD_RECALL_DIVERSIFY === "on";
+  const diversifyMmr = process.env.QMD_MEMORY_MMR === "session";
+  if ((diversifyLegacy || diversifyMmr) && sorted.length > 2) {
     sorted = applyDialogDiversity(sorted, limit);
   } else {
     sorted = sorted.slice(0, limit);
