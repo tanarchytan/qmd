@@ -31,6 +31,8 @@ default-off, untested at n=500, and could move multi-session if turned on.
 
 **Action: queue a "phase 5 wiring sweep" — one n=500 run per shipped flag, see what moves the multi-session needle.** That's effectively free experimentation against existing code. Highest expected ROI in the night plan.
 
+**2026-04-14 night post-mortem on the sweep:** phase 4 ran 3 of the levered configs on mxbai + arctic-s at n=500 (results in ROADMAP night section). Phase 5 + 5b + 5c + phase-5 variants all died to WSL crash / background-task reaping / Gemini quota cool-downs — the chains never completed. Per-turn ingest is still **untested at any size** after the eval harness overran WSL's memory cgroup. `QMD_RECALL_KG_RAW=on` ships as a gate tonight but never got an n=500 pass. Memory reflect / runReflectionPass / pushPack / runTieredRecall remain as-shipped-but-unwired. Next session: single short `run_in_background` jobs only; no chains; workers ≤ 2.
+
 ---
 
 ## §1 — Multi-session ceiling attack (active v17 goal)

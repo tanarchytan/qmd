@@ -263,6 +263,28 @@ function buildRerankPrompt(query: string, docsText: string): string {
 
 export class RemoteLLM implements LLM {
   private readonly config: RemoteLLMConfig;
+  // Process-wide throttle for Gemini embed requests. Implemented as a Promise
+  // chain so concurrent workers serialize correctly — read+sleep+update as
+  // an atomic unit. The previous static-timestamp version had a race where
+  // two workers could both observe "no sleep needed" simultaneously and
+  // double the effective rate. Static so all RemoteLLM instances share it.
+  private static _geminiThrottleChain: Promise<void> = Promise.resolve();
+
+  /** Acquire the gemini throttle slot. Returns when it's safe to fire the
+   * next request. Each waiter chains onto the previous so requests serialize
+   * even under worker concurrency. */
+  private static async _waitForGeminiSlot(intervalMs: number): Promise<void> {
+    if (intervalMs <= 0) return;
+    const previous = RemoteLLM._geminiThrottleChain;
+    let release!: () => void;
+    RemoteLLM._geminiThrottleChain = new Promise(r => { release = r; });
+    try {
+      await previous;
+      await new Promise(r => setTimeout(r, intervalMs));
+    } finally {
+      release();
+    }
+  }
 
   constructor(config: RemoteLLMConfig) {
     this.config = config;
@@ -539,11 +561,21 @@ export class RemoteLLM implements LLM {
     const apiKey = cfg.apiKey;
     const model = options?.model || cfg.model;
     const timeoutMs = options?.timeoutMs ?? this.config.timeoutsMs?.embed;
-    // BATCH_SIZE bumped from 32 → 64. ZeroEntropy and OpenAI-compatible
-    // embed APIs accept up to 100-256 per request; 64 halves the round-trips
-    // for large ingests without risking provider limits.
-    const BATCH_SIZE = 64;
+    // BATCH_SIZE: 64 for OpenAI-compatible APIs (high per-request limit),
+    // 5 for Gemini free tier (30k TPM cap binding — small batches keep
+    // each request well under 5k tokens so the throttle controls steady-
+    // state TPM cleanly).
+    const geminiBatchSize = Number(process.env.QMD_GEMINI_EMBED_BATCH_SIZE ?? "5");
+    const BATCH_SIZE = provider === 'gemini' ? geminiBatchSize : 64;
     const allResults: (EmbeddingResult | null)[] = new Array(texts.length).fill(null);
+    // Gemini rate limit throttle (free tier: 100 RPM, 30k TPM, 1k RPD).
+    // TPM is the binding constraint — at BATCH_SIZE=5 averaging ~600 tok/text,
+    // each batch is ~3k tokens. 15-sec interval = 4 batches/min × 3k = 12k TPM,
+    // safely under the 30k cap with margin for token estimation error.
+    // Override via QMD_GEMINI_EMBED_INTERVAL_MS.
+    const geminiIntervalMs = provider === 'gemini'
+      ? Number(process.env.QMD_GEMINI_EMBED_INTERVAL_MS ?? "15000")
+      : 0;
 
     for (let i = 0; i < texts.length; i += BATCH_SIZE) {
       const batch = texts.slice(i, i + BATCH_SIZE);
@@ -603,8 +635,88 @@ export class RemoteLLM implements LLM {
               }
             }
           }
+        } else if (provider === 'gemini') {
+          // Gemini Embedding API — uses x-goog-api-key, distinct request shape.
+          // Endpoint: POST /v1beta/models/<model>:batchEmbedContents
+          // Body: { requests: [{ model: "models/<m>", content: { parts: [{text}] }, outputDimensionality? }] }
+          // Default model: gemini-embedding-001 (Gemini Embedding 2 marketing name, 3072d, matryoshka).
+          // QMD_EMBED_DIMENSIONS=1024 is the Google-recommended sweet spot.
+          //
+          // Throttle + custom retry loop. Bypasses fetchWithRetry because
+          // Google embeds RetryInfo in the JSON body's `details` array (not
+          // in the HTTP Retry-After header), and we want the throttle slot
+          // to be re-acquired for each retry instead of bursting in 1-sec
+          // intervals like fetchWithRetry's exponential backoff does.
+          const baseUrl = (cfg.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
+          const geminiModel = model || 'gemini-embedding-001';
+          if (!apiKey) throw new Error("QMD_EMBED_API_KEY is required when QMD_EMBED_PROVIDER=gemini.");
+          const requests = batch.map(text => ({
+            model: `models/${geminiModel}`,
+            content: { parts: [{ text }] },
+            ...(cfg.dimensions ? { outputDimensionality: cfg.dimensions } : {}),
+            // Task type hint — Gemini supports SEMANTIC_SIMILARITY, RETRIEVAL_DOCUMENT,
+            // RETRIEVAL_QUERY, etc. Default to RETRIEVAL_DOCUMENT for ingest path
+            // (memory recall flips to RETRIEVAL_QUERY via options.isQuery if set).
+            taskType: options?.isQuery ? "RETRIEVAL_QUERY" : "RETRIEVAL_DOCUMENT",
+          }));
+          const reqUrl = `${baseUrl}/v1beta/models/${encodeURIComponent(geminiModel)}:batchEmbedContents`;
+          const maxAttempts = 6;
+          let respData: { embeddings?: Array<{ values?: number[] }> } | null = null;
+          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            await RemoteLLM._waitForGeminiSlot(geminiIntervalMs);
+            const r = await fetch(reqUrl, {
+              method: "POST",
+              headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+              body: JSON.stringify({ requests }),
+              ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+            });
+            if (r.ok) {
+              respData = await r.json() as { embeddings?: Array<{ values?: number[] }> };
+              break;
+            }
+            // Parse Google RetryInfo from the JSON body. Format:
+            //   { "error": { "details": [{ "@type": ".../RetryInfo", "retryDelay": "60s" }] } }
+            const bodyText = await r.text().catch(() => '');
+            let retryDelayMs = 0;
+            try {
+              const errBody = JSON.parse(bodyText) as {
+                error?: { details?: Array<{ "@type"?: string; retryDelay?: string }> };
+              };
+              const retryInfo = errBody.error?.details?.find(d =>
+                typeof d["@type"] === "string" && d["@type"].endsWith("RetryInfo"));
+              if (retryInfo?.retryDelay) {
+                const m = retryInfo.retryDelay.match(/^(\d+(?:\.\d+)?)s$/);
+                if (m) retryDelayMs = Math.ceil(Number(m[1]) * 1000);
+              }
+            } catch { /* not JSON, fall through */ }
+            // Fallback: HTTP Retry-After header, or backoff, with a floor.
+            if (retryDelayMs === 0) {
+              const ra = r.headers.get("retry-after");
+              if (ra) retryDelayMs = Math.ceil(Number(ra) * 1000);
+              if (!Number.isFinite(retryDelayMs) || retryDelayMs <= 0) {
+                retryDelayMs = Math.min(60000, 2000 * Math.pow(2, attempt - 1));
+              }
+            }
+            if (r.status !== 429 && r.status < 500) {
+              throw new Error(`[gemini] embed failed (HTTP ${r.status}) ${reqUrl} — ${bodyText.slice(0, 300)}`);
+            }
+            if (attempt === maxAttempts) {
+              throw new Error(`[gemini] embed exhausted ${maxAttempts} retries (last HTTP ${r.status})`);
+            }
+            process.stderr.write(`[gemini] HTTP ${r.status}, RetryInfo says ${Math.round(retryDelayMs / 1000)}s; sleeping then retrying (${attempt}/${maxAttempts})\n`);
+            await new Promise(r => setTimeout(r, retryDelayMs));
+          }
+          if (respData) {
+            const embeddings = respData.embeddings || [];
+            for (let j = 0; j < embeddings.length; j++) {
+              const vec = embeddings[j]?.values;
+              if (vec && vec.length > 0) {
+                allResults[i + j] = { embedding: vec, model: geminiModel };
+              }
+            }
+          }
         } else {
-          throw new Error(`Unsupported embed provider: ${provider}. Use 'api' or 'url'.`);
+          throw new Error(`Unsupported embed provider: ${provider}. Use 'api', 'url', or 'gemini'.`);
         }
       } catch (err) {
         process.stderr.write(`[embed] batch offset ${i} error: ${err}\n`);

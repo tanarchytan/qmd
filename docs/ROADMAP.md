@@ -9,6 +9,74 @@
 
 ---
 
+## 🌙 Night 2026-04-13 → 2026-04-14 — arctic-s unlock, phase 5 dead ends, paper trail
+
+**Headline:** `snowflake-arctic-embed-s q8` broke the 82% multi-session R@5 ceiling on LongMemEval `_s` n=500 without any code-side tuning. **84.2% multi-session, 93.2% overall R@5** — the first model swap that moved the bottleneck category. `arctic-s q8` is the new night winner and the ceiling-fallback candidate alongside `MiniLM-L6 uint8`.
+
+### Multi-session R@5 leaderboard (n=500, RAW recall, session-granularity ingest)
+
+| Config | overall R@5 | multi-session R@5 | Wall |
+|---|---|---|---|
+| **arctic-s q8 baseline** | **93.2%** | **84.2%** 🏆 | ~25m |
+| arctic-s q8 + expand-kw | 92.8% | 83.5% | ~25m |
+| arctic-s q8 + loose + expand + MMR (fullstack) | 92.8% | 83.5% | ~25m |
+| MiniLM-L6 uint8 | 94.4% | 83% | 17m09s |
+| mxbai-xs q8 + expand-kw | 94.2% | 83% | 14m56s |
+| mxbai-xs q8 + loose + expand + fixed-MMR | 94.2% | 82.7% | 15m36s |
+| mxbai-xs q8 + loose-floor | 94.2% | 82% | 14m58s |
+| mxbai-xs q8 baseline | 94.2% | 82% | 15m12s |
+| arctic-xs q8 baseline | 93.4% | 82% | 15m52s |
+
+### Code shipped
+
+- **Multi-query expansion** — `QMD_MEMORY_EXPAND=entities` and `QMD_MEMORY_EXPAND=keywords`. Zero-LLM sub-query fanout. +1pp multi-session on mxbai-xs q8; **−0.7pp regression on arctic-s q8**. Model-specific. Off by default.
+- **Scope-normalized scoring** — `QMD_MEMORY_SCOPE_NORM=rank`. Noop on LME (single-scope per question). Shipped for multi-project qmd deployments.
+- **Dialog-diversity MMR RAW-compatible gate** — `QMD_MEMORY_MMR=session`. Reuses existing `applyDialogDiversity()`. Null signal on LME because the candidate pool is already session-diverse at session granularity.
+- **KG-in-recall RAW-compatible gate** — `QMD_RECALL_KG_RAW=on`. Mirror of the existing `QMD_RECALL_KG=on` for RAW eval mode. Untested at scale due to quota/crash constraints; ships alongside.
+- **Gemini embed provider** — `QMD_EMBED_PROVIDER=gemini` with matryoshka `QMD_EMBED_DIMENSIONS`, Google `RetryInfo`-aware backoff, cross-worker throttle via Promise chain. Produces healthy embeddings (confirmed at 1024d n=100: 97% R@5 / 93% multi in 2m46s). See "What didn't work" for the rate-limit story.
+- **Fixed: MMR metadata parse bug** — the initial `QMD_MEMORY_MMR=session` implementation dereferenced `mem.metadata.source_session_id` but stored `metadata` is a JSON string. Replaced with reuse of the pre-existing `memoryDialogKey()` helper.
+- **Upstream cherry-picks** (commit `87424b0`): 4 tobi/qmd fixes — USERPROFILE fallback for Windows MCP, `enableProductionMode()` at MCP init, sqlite-vec error UX, JSON `--json` line field. 3 more already applied via the 2026-04-07 v2.1.0 merge. Provenance log in `docs/UPSTREAM.md`.
+
+### What didn't work
+
+- **Per-turn ingest at n=500** extrapolated to ~6 hours per run × 8-run chain = ~48 hours. Not viable. Switched to n=100 screening, which then **crashed WSL** twice with `E_UNEXPECTED` under sustained load (workers=4 + per-turn write pressure). Abandoned for tonight. The hypothesis that per-turn substrate could unlock MMR's diversity value remains **untested**.
+- **Phase 5 chain (8 runs of arctic-s × levers)** died 3× to background-task reaping + WSL shutdown. Even `setsid + nohup` didn't survive the claude-code background task lifecycle reaping the wsl.exe bridge. The working pattern is: short one-at-a-time `run_in_background` tasks, not long chains.
+- **Gemini Embedding 2** (gemini-embedding-001 + 2-preview) rate-limit dance. Free-tier limits (100 RPM / 30k TPM / 1k RPD) made n=100 eval infeasible without aggressive throttling; paid tier (1M TPM) hit its own cap under unthrottled burst + workers=2 + BATCH_SIZE=64. Ship the provider code because it's real feature work, but LME benchmarking deferred.
+- **Expansion × MMR × loose-floor kitchen sink** on arctic-s: matches expand-kw alone, so MMR and loose-floor add nothing on arctic-s's already-wide distribution.
+
+### Lessons learned
+
+- **n=100 is metric-saturated at ~98% R@5 / ~93% multi-session** across every small-class embed model tested tonight. Only n=500 can discriminate levers that move multi-session by ≤1-2pp. Budget evals accordingly.
+- **WSL2 cannot sustain load avg 14+ for 30+ min** on this host without crashing. Keep workers ≤ 2 for heavy eval work. Per-turn ingest amplifies the write pressure 10× and is the most dangerous config for stability.
+- **Background task lifecycle is fragile** — claude-code `run_in_background` tasks can be reaped, and when they are, the WSL child processes die. Use **short one-at-a-time jobs** instead of long orchestrated chains for critical eval work.
+- **Matryoshka sweep on Gemini was confounded by quota cool-downs** — the first run of a sweep after a 429 burst is still inside the sliding 1-min window and gets 429s even at 1-sec throttle. Respect Google's `RetryInfo.retryDelay` (implemented), but accept that sweeps need wider spacing than back-to-back launches.
+- **Expansion is model-specific** — +1pp on mxbai-xs q8, −0.7pp on arctic-s q8. Models with wider spread already have the diversity expansion provides; tight-cluster models benefit most.
+- **WSL .env precedence is inverted** — `~/.config/qmd/.env` overrides shell env vars. Tonight's Gemini run was silently hitting ZeroEntropy because of a stale .env. **Move the .env out of the way for eval runs that need clean env.**
+
+### Commits landed tonight (chronological)
+
+- `87d4f32` chore: rip Qwen3/LlamaCpp/fastembed leftovers (graphify cleanup)
+- `7dc7c1e` chore: drop src/bench-rerank.ts (node-llama-cpp followup)
+- `ff26021` feat(memory): zero-LLM multi-query expansion (entities variant)
+- `fd87442` feat(memory): three multi-session levers (scope-norm + keyword expand + session MMR)
+- `1def426` fix(memory): MMR reuses applyDialogDiversity, lift RAW gate
+- `eebd810` feat(memory): RAW-compat gate for KG-in-recall + phase 5 plan + TODO audit
+- `95982ba` docs(readme): rewrite shoulders-of-giants section with full attribution
+- `ef5a943` docs(baselines): clone competitor repos + audit which run on LME
+- `87424b0` fix: cherry-pick 4 upstream tobi/qmd fixes (post-divergence audit)
+- `3d0faa3` docs(upstream): cherry-pick provenance log + audit playbook
+- `803a6d7` docs(upstream): correct sync-history baseline + clarify audit coverage
+
+### v17 priorities (informed by tonight)
+
+1. **Cross-encoder rerank** via transformers.js — biggest untested lever for the multi-session ceiling. `mixedbread-ai/mxbai-rerank-base-v1` ONNX, ~80 lines mirroring `TransformersEmbedBackend`.
+2. **Per-turn ingest with concurrency-safe write path** — the hypothesis is still untested and the WSL crash is an infrastructure issue, not a design flaw. Needs workers=1 or batched-write mode.
+3. **`QMD_VEC_FLOOR_RATIO` per-model calibration** — mxbai-xs q8 has tight cosines → the 0.5 default floor reject most candidates → MMR has nothing to diversify. Per-model calibration is a one-flag fix that could unlock MMR for tight-cluster models.
+4. **Gemini benchmarking with paid-tier capacity** — the provider code works, the RetryInfo handler is solid; just needs a quota window wide enough to run n=500 cleanly. Tomorrow's work.
+5. **§0 shipped-but-untested features** in `docs/TODO.md` — Hindsight reflect pass, periodic reflection, Push Pack, KG-in-recall, tier-grouped recall. Each is one eval run from a verdict.
+
+---
+
 ## 🆕 Session 2026-04-12 — commits shipped
 
 | SHA | Type | Summary |
