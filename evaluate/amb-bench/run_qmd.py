@@ -334,12 +334,18 @@ def main() -> None:
             except Exception as e:
                 print(f"  FAILED: {cfg_name} × {ds_name}: {e!r}")
 
-    # Print final comparison table
+    # Print final comparison table — flat overview across all (config, dataset) cells.
     print("\n\n=== FINAL ===")
-    print(f"{'config':<20} {'dataset':<15} {'n':<6} {'sr5':<8} {'r5':<8} {'wall':<10}")
+    print(f"{'config':<18} {'dataset':<13} {'n':<5} {'sr5':<8} {'sr10':<8} {'mrr':<8} {'r5':<8} {'sh':<8} {'f1':<8} {'wall':<10}")
     for s in summaries:
+        o = s.get("overall", {})
         wall = f"{s['ingest_wall_s'] + s['retrieve_wall_s']:.0f}s"
-        print(f"{s['config']:<20} {s['dataset']:<15} {s['n']:<6} {s['sr5_overall']:<8.1%} {s['r5_overall']:<8.1%} {wall:<10}")
+        print(
+            f"{s['config']:<18} {s['dataset']:<13} {s['n']:<5} "
+            f"{o.get('sr5', 0):<8.1%} {o.get('sr10', 0):<8.1%} {o.get('mrr', 0):<8.3f} "
+            f"{o.get('r5', 0):<8.1%} {o.get('sh', 0):<8.1%} {o.get('f1', 0):<8.3f} "
+            f"{wall:<10}"
+        )
 
 
 if __name__ == "__main__":
