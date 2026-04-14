@@ -1064,4 +1064,67 @@ describe.skipIf(!!process.env.CI)("MCP HTTP Transport", () => {
     expect(json.result).toBeDefined();
     expect(json.result.content.length).toBeGreaterThan(0);
   });
+
+  // ---------------------------------------------------------------------------
+  // Memory tools — metadata round-trip
+  //
+  // Regression test for the AMB cross-bench adapter: external callers need
+  // to round-trip arbitrary doc IDs through qmd via the metadata field added
+  // in commit 2d85b8a. memory_store must accept metadata, memory_recall must
+  // surface it as a parsed object on structuredContent.results[i].metadata.
+  // Without this contract, sr5-style scoring against gold IDs is impossible.
+  // ---------------------------------------------------------------------------
+
+  test("POST /mcp tools/call memory_store + memory_recall round-trips metadata.doc_id", async () => {
+    // Initialize
+    await mcpRequest({
+      jsonrpc: "2.0", id: 1, method: "initialize",
+      params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1.0" } },
+    });
+
+    const uniqueText = `metadata-roundtrip-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const docId = `synthetic-doc-${Math.random().toString(36).slice(2)}`;
+    const scope = `mcp-test-${Date.now()}`;
+
+    // Store with metadata
+    const storeRes = await mcpRequest({
+      jsonrpc: "2.0", id: 100, method: "tools/call",
+      params: {
+        name: "memory_store",
+        arguments: {
+          text: uniqueText,
+          scope,
+          metadata: { doc_id: docId, source_session_id: "session-xyz", custom: 42 },
+        },
+      },
+    });
+    expect(storeRes.status).toBe(200);
+    expect(storeRes.json.result).toBeDefined();
+    expect(storeRes.json.result.content[0].text).toMatch(/Memory stored|Duplicate found/);
+
+    // Recall and verify metadata round-trip
+    const recallRes = await mcpRequest({
+      jsonrpc: "2.0", id: 101, method: "tools/call",
+      params: {
+        name: "memory_recall",
+        arguments: { query: uniqueText, scope, limit: 5 },
+      },
+    });
+    expect(recallRes.status).toBe(200);
+    expect(recallRes.json.result).toBeDefined();
+
+    const results = recallRes.json.result.structuredContent?.results;
+    expect(Array.isArray(results)).toBe(true);
+    expect(results.length).toBeGreaterThan(0);
+
+    // metadata must be a parsed object (not a JSON string), per the
+    // memory_recall enrichment added in commit 2d85b8a
+    const hit = results.find((r: any) => r.text === uniqueText);
+    expect(hit).toBeDefined();
+    expect(hit.metadata).toBeDefined();
+    expect(typeof hit.metadata).toBe("object");
+    expect(hit.metadata.doc_id).toBe(docId);
+    expect(hit.metadata.source_session_id).toBe("session-xyz");
+    expect(hit.metadata.custom).toBe(42);
+  });
 });
