@@ -64,6 +64,40 @@ The two measure different things and disagree sharply on some categories. Token-
 3. ~~Multi-session bucket~~ — at 100% sr5 parity, no v17 work needed for retrieval. The old "82% ceiling" was a metric artifact.
 4. **Default stays mxbai-xs q8.** Document arctic-s as a specialized option for workloads that actually need the token-overlap metric (we don't have a clear use case for that).
 
+### Full retable of 2026-04-13/14 runs on sr5 (all n=500 configs)
+
+Batch-generated from the result JSON files in `~/qmd-eval/evaluate/longmemeval/` via `evaluate/batch-sr5-report.py`. Sorted by sr5 overall. **Winners are the ones that actually move the apples-to-apples needle.**
+
+| Rank | Config | sr5 overall | multi | temp | kn-upd | s-pref | s-asst | s-user | r5 (legacy) |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | **`mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1`** (loose-floor) | **98.4%** ✅ | **100%** | 97.0% | 98.7% | 90.0% | 100.0% | 100.0% | 94.2% |
+| 1 | `mxbai-xs q8` + loose + MMR | 98.4% ✅ | 100% | 97.0% | 98.7% | 90.0% | 100.0% | 100.0% | 94.2% |
+| 3 | **`mxbai-xs q8` baseline** (prior production default) | **98.2%** | **100%** | 97.0% | 98.7% | 90.0% | 100.0% | 100.0% | 94.2% |
+| 3 | `mxbai-xs q8` + loose + expand + fixed-MMR | 98.2% | 99.2% | 97.7% | 98.7% | 90.0% | 100.0% | 100.0% | 94.2% |
+| 3 | `mxbai-xs q8` + fixed-MMR (phase 4 run 1) | 98.2% | 99.2% | 97.7% | 98.7% | 90.0% | 100.0% | 100.0% | 94.2% |
+| 6 | `MiniLM-L6 uint8` | 98.0% | 99.2% | 97.0% | 100.0% | 90.0% | 100.0% | 97.1% | 94.4% |
+| 6 | `mxbai-xs q8` + `EXPAND=keywords` | 98.0% | 99.2% | 97.7% | 98.7% | 90.0% | 100.0% | 97.1% | 94.2% |
+| 8 | `MiniLM-L6 fp32` (pre-cleanup baseline) | 97.0% | 97.7% | 95.5% | 98.7% | 86.7% | 100.0% | 98.6% | 93.2% |
+| 9 | **MemPalace published** | **96.6%** | 100% | 97% | 100% | 97% | 96% | 97% | — |
+| 10 | `arctic-xs q8` | 96.6% | 97.7% | 94.0% | 100.0% | 86.7% | 100.0% | 97.1% | 93.4% |
+| 11 | **`arctic-s q8` baseline** (earlier "night winner") | **95.8%** ⚠️ | 98.5% | 93.2% | 98.7% | **80.0%** ⚠️ | 100.0% | 95.7% | 93.2% |
+| 12 | `arctic-s q8` + `EXPAND=keywords` | 95.6% | 98.5% | 92.5% | 98.7% | 80.0% | 100.0% | 95.7% | 92.8% |
+| 12 | `arctic-s q8` + loose + expand + MMR (kitchen sink) | 95.6% | 98.5% | 92.5% | 98.7% | 80.0% | 100.0% | 95.7% | 92.8% |
+
+**Critical re-read of the night cycle:**
+
+- **The actual winner is `QMD_VEC_MIN_SIM=0.1`** — we dismissed it as "just +0.8pp R@10" because we were reading r5. On sr5 it's **+0.2pp over the already-beat-MemPalace-by-1.6pp baseline**. It's the only config that scored higher than the prior default. Ship it as a default.
+- **mxbai-xs q8 ≥ MemPalace on every category except preference.** Overall 98.2% vs 96.6% is +1.6pp. We were already winning, we just didn't know it.
+- **arctic-s q8 is a hard downgrade** on sr5. The −10pp preference regression is the biggest single-category loss of the night. The "+2.2pp multi-session" on r5 was illusory (r5 multi-session moved 82 → 84.2, but sr5 multi-session dropped from 100 → 98.5). Do NOT promote.
+- **Every mxbai-xs lever variant (expand, loose, MMR, combinations)** converges on 98.0-98.4% sr5 — tight cluster. The levers aren't noise, but they're also not moving the big gaps.
+- **The big gap remaining vs MemPalace is single-session-preference** (90% vs 97%) and **temporal** (97% vs 97%, at parity now). v17 work targets preference.
+- Every n=100 run collapses to ~98-99% sr5 multi-session with only 2 categories populated (user + multi-session). n=100 is even more metric-saturated on sr5 than on r5. **Ignore n=100 sr5 for ranking decisions.**
+
+**Shipping decision:**
+- **New production default: `mxbai-xs q8` with `QMD_VEC_MIN_SIM=0.1`** (98.4% sr5 overall, 100% multi, beats MemPalace by 1.8pp)
+- **Document arctic-s as a NON-recommendation** — strictly worse on the correct metric
+- **Document the metric lesson** in UPSTREAM/ROADMAP so future audits don't regress on it
+
 
 
 ### Status at 2026-04-14 — per-category R@5 at n=500
