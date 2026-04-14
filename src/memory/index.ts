@@ -225,26 +225,13 @@ function parseTimeReference(query: string): TimeReference | null {
 }
 
 // =============================================================================
-// Embed helper — local ONNX backends (fastembed or transformers.js), remote,
-// or local LlamaCpp (GGUF fallback), in that order.
-// Precedence: QMD_EMBED_BACKEND=fastembed|transformers short-circuits
-// everything; else remote (if configured); else node-llama-cpp (if
-// QMD_LOCAL!=no); else null.
+// Embed helper — opt-in transformers.js ONNX backend, else remote, else null.
+// Gated by QMD_EMBED_BACKEND=transformers to avoid loading the native
+// onnxruntime-node binding (and its sharp dep) for callers that only want
+// FTS + remote. The native binding can crash on some Windows test envs.
 // =============================================================================
-
-/**
- * Lazy-loaded local ONNX embed backend. Two flavours:
- *  - `fastembed`     — hardcoded enum (MiniLM/BGE), zero-dep, very fast
- *  - `transformers`  — any HuggingFace ONNX repo, slightly heavier dep
- * Both short-circuit remote + LlamaCpp. Selected via QMD_EMBED_BACKEND.
- */
 let _onnxBackend: any = null;
 async function getFastEmbedBackend(): Promise<any> {
-  // Opt-in only via QMD_EMBED_BACKEND=transformers to avoid loading the
-  // @huggingface/transformers native onnxruntime-node binding (and its
-  // sharp dep) for callers that only want FTS+remote. The native binding
-  // can crash hard on some Windows test environments — we only pay that
-  // cost when the user has explicitly opted in.
   if (process.env.QMD_EMBED_BACKEND !== "transformers") return null;
   if (_onnxBackend) return _onnxBackend;
   try {
@@ -269,7 +256,7 @@ async function embedText(text: string): Promise<number[] | null> {
       if (emb) setCachedEmbedding(text, emb);
       return emb;
     } catch (err) {
-      process.stderr.write(`fastembed embed failed: ${err instanceof Error ? err.message : err}\n`);
+      process.stderr.write(`local embed failed: ${err instanceof Error ? err.message : err}\n`);
       return null;
     }
   }
@@ -317,7 +304,7 @@ async function embedTextBatch(texts: string[]): Promise<(number[] | null)[]> {
       }
       return out;
     } catch (err) {
-      process.stderr.write(`fastembed embedBatch failed, falling back: ${err instanceof Error ? err.message : err}\n`);
+      process.stderr.write(`local embedBatch failed, falling back: ${err instanceof Error ? err.message : err}\n`);
     }
   }
 
@@ -355,7 +342,7 @@ async function embedQuery(text: string): Promise<number[] | null> {
       if (emb) setCachedEmbedding(text, emb);
       return emb;
     } catch (err) {
-      process.stderr.write(`fastembed query failed: ${err instanceof Error ? err.message : err}\n`);
+      process.stderr.write(`local embed query failed: ${err instanceof Error ? err.message : err}\n`);
       return null;
     }
   }
@@ -843,8 +830,25 @@ export async function memoryRecall(
     }
   };
 
-  // 1+2. FTS and embedding run in parallel (embedding is the slow part)
-  const embeddingPromise = embedQuery(query);
+  // Zero-LLM multi-query expansion (gated by QMD_MEMORY_EXPAND=entities).
+  // Builds sub-queries from proper-noun entities in the question and fans
+  // out parallel vec KNN queries, merging hits by id (max similarity). Aims
+  // at the multi-session category where single-query recall misses cross-
+  // session supporting facts. Q0 (original) always included — worst case
+  // degrades to baseline + some noise instead of replacing signal.
+  const EXPAND_MODE = process.env.QMD_MEMORY_EXPAND;
+  const subQueries: string[] = [query];
+  if (EXPAND_MODE === "entities") {
+    const expandEntities = extractQueryEntities(query);
+    const expandKeywords = extractKeywords(query).slice(0, 6).join(" ");
+    for (const e of expandEntities.slice(0, 2)) {
+      const sub = expandKeywords ? `${expandKeywords} ${e}` : e;
+      if (sub !== query && !subQueries.includes(sub)) subQueries.push(sub);
+    }
+  }
+
+  // 1+2. FTS and embedding(s) run in parallel (embedding is the slow part)
+  const embeddingsPromise = Promise.all(subQueries.map(q => embedQuery(q)));
 
   // FTS search (synchronous, runs while embedding request is in flight)
   try {
@@ -928,63 +932,60 @@ export async function memoryRecall(
     } catch { /* table may not exist yet */ }
   }
 
-  // Vector search (await the embedding that started in parallel with FTS)
-  const queryEmbedding = await embeddingPromise;
-  if (queryEmbedding) {
+  // Vector search (await the embedding(s) that started in parallel with FTS)
+  const queryEmbeddings = await embeddingsPromise;
+  if (queryEmbeddings.some(e => e)) {
     try {
       // ── Scope-partitioned vec query ────────────────────────────────
       //
       // memories_vec ships with `scope TEXT PARTITION KEY` so sqlite-vec
-      // walks only the current scope's slice of the index. This makes
-      // KNN return scope-local top-K instead of global top-K — fixes
-      // the 89.4% R@5 ceiling on LME _s n=500 where global top-K only
-      // contributed ~K/500 hits per scope.
-      //
-      // Two query paths:
+      // walks only the current scope's slice of the index. Two paths:
       //   - scoped: WHERE scope = ? AND embedding MATCH ?  (preferred)
       //   - global: WHERE embedding MATCH ?               (fallback)
-      // Global path is used when no scope is set OR when querying the
-      // legacy "global" scope (which historically commingled with all
-      // scopes in addResult). Also used for pre-migration databases
-      // where the partition column doesn't exist.
-      //
       // The K-multiplier override remains for the global path and for
-      // edge cases where partition isolation might filter too aggressively.
+      // edge cases where partition isolation filters too aggressively.
       const kMultiplier = Number(process.env.QMD_VEC_K_MULTIPLIER ?? "3");
       const vecK = Math.max(limit, limit * kMultiplier);
 
-      let vecResults: Array<{ id: string; distance: number }>;
-      if (_memoriesVecHasPartition && scope) {
-        // Scoped query — sqlite-vec walks only `scope` partition.
-        // Also union with "global" scope memories which match anywhere.
-        try {
-          vecResults = db.prepare(
-            `SELECT id, distance FROM memories_vec
-             WHERE scope = ? AND embedding MATCH ? AND k = ?`
-          ).all(scope, new Float32Array(queryEmbedding), vecK) as Array<{ id: string; distance: number }>;
-          // Also pull global-scope memories so cross-scope facts surface.
-          const globalResults = db.prepare(
-            `SELECT id, distance FROM memories_vec
-             WHERE scope = ? AND embedding MATCH ? AND k = ?`
-          ).all("global", new Float32Array(queryEmbedding), Math.min(vecK, limit)) as Array<{ id: string; distance: number }>;
-          vecResults = vecResults.concat(globalResults);
-        } catch {
-          // Partition query unsupported on this sqlite-vec version → fall back
-          vecResults = db.prepare(
-            `SELECT id, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?`
-          ).all(new Float32Array(queryEmbedding), vecK * 20) as Array<{ id: string; distance: number }>;
+      const runVecKnn = (emb: number[]): Array<{ id: string; distance: number }> => {
+        if (_memoriesVecHasPartition && scope) {
+          try {
+            const scoped = db.prepare(
+              `SELECT id, distance FROM memories_vec
+               WHERE scope = ? AND embedding MATCH ? AND k = ?`
+            ).all(scope, new Float32Array(emb), vecK) as Array<{ id: string; distance: number }>;
+            const globalResults = db.prepare(
+              `SELECT id, distance FROM memories_vec
+               WHERE scope = ? AND embedding MATCH ? AND k = ?`
+            ).all("global", new Float32Array(emb), Math.min(vecK, limit)) as Array<{ id: string; distance: number }>;
+            return scoped.concat(globalResults);
+          } catch {
+            return db.prepare(
+              `SELECT id, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?`
+            ).all(new Float32Array(emb), vecK * 20) as Array<{ id: string; distance: number }>;
+          }
         }
-      } else {
-        // Global path — pre-partition DB or no scope filter requested.
-        // K bumped to compensate for the post-vector scope filter loss.
-        vecResults = db.prepare(
+        return db.prepare(
           `SELECT id, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?`
-        ).all(new Float32Array(queryEmbedding), vecK * 20) as Array<{ id: string; distance: number }>;
+        ).all(new Float32Array(emb), vecK * 20) as Array<{ id: string; distance: number }>;
+      };
+
+      // Merge vec hits across sub-queries by id, keeping max similarity.
+      // For single-query (non-expand) path, this is identical to the old
+      // behavior — one pass, one hit per id. For expand path, an id seen
+      // in multiple sub-queries keeps its strongest cosine.
+      const mergedHits = new Map<string, number>(); // id → max similarity
+      for (const qEmb of queryEmbeddings) {
+        if (!qEmb) continue;
+        for (const r of runVecKnn(qEmb)) {
+          const sim = 1 - r.distance;
+          const prev = mergedHits.get(r.id);
+          if (prev === undefined || sim > prev) mergedHits.set(r.id, sim);
+        }
       }
 
-      // Adaptive vector acceptance — pickVectorMatches handles the
-      // floor calculation. See its docstring for the full rationale.
-      const withSim = vecResults.map(r => ({ ...r, similarity: 1 - r.distance }));
+      // Adaptive vector acceptance — pickVectorMatches handles the floor.
+      const withSim = Array.from(mergedHits, ([id, similarity]) => ({ id, similarity }));
       for (const r of pickVectorMatches(withSim)) {
         const mem = getById.get(r.id) as Memory | null;
         if (mem) addResult(mem, r.similarity);
