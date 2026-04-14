@@ -59,11 +59,21 @@ function defaultCacheDir(): string {
 
 export class TransformersRerankBackend implements LLM {
   private readonly model: string;
-  private readonly classifier: any; // text-classification pipeline — loaded dynamically
+  // Direct model + tokenizer instead of pipeline("text-classification").
+  // The pipeline applies softmax over the model's class labels, but
+  // cross-encoder/ms-marco-MiniLM-L6-v2 has a SINGLE output neuron — softmax
+  // over one class always = 1.0, which collapsed every rerank score to 1.0
+  // and made the rerank a perfect no-op on rank order. Calling the model
+  // directly returns the raw pre-softmax logit, which IS the discriminative
+  // relevance score we want. Verified standalone: relevant docs score ~+8,
+  // irrelevant docs score ~−11 (range >19, plenty of signal).
+  private readonly tokenizer: any;
+  private readonly modelHandle: any;
 
-  private constructor(model: string, classifier: any) {
+  private constructor(model: string, tokenizer: any, modelHandle: any) {
     this.model = model;
-    this.classifier = classifier;
+    this.tokenizer = tokenizer;
+    this.modelHandle = modelHandle;
   }
 
   get embedModelName(): string {
@@ -91,27 +101,28 @@ export class TransformersRerankBackend implements LLM {
       const cacheDir = defaultCacheDir();
       try { mkdirSync(cacheDir, { recursive: true }); } catch { /* ignore */ }
 
-      // transformers.js env knobs — set before pipeline() call, identical
-      // to the embed backend's init path.
+      // transformers.js env knobs — set before model load, identical to
+      // the embed backend's init path.
       (tf as any).env.cacheDir = cacheDir;
       if (process.env.QMD_TRANSFORMERS_QUIET !== "off") {
         (tf as any).env.allowLocalModels = false;
       }
 
-      // transformers.js v3 auto-appends a dtype suffix to model_file_name
-      // when dtype is set (q8 → `_quantized`, uint8 → `_uint8`, etc.).
-      // Cross-encoder repos that ship pre-quantized files with explicit
-      // names (model_quint8_avx2.onnx) need the fileName to resolve
-      // verbatim — so we OMIT dtype when a fileName is passed and let
-      // transformers.js load the file as-is.
-      const opts: Record<string, unknown> = {};
+      // Same dtype/file name handling as the embed backend: when a fileName
+      // is set, omit dtype to avoid the v3 _quantized suffix munging.
+      const modelOpts: Record<string, unknown> = {};
       if (fileName) {
-        opts.model_file_name = fileName;
+        modelOpts.model_file_name = fileName;
       } else {
-        opts.dtype = dtype;
+        modelOpts.dtype = dtype;
       }
-      const classifier = await (tf as any).pipeline("text-classification", modelId, opts);
-      return new TransformersRerankBackend(modelId, classifier);
+
+      const tokenizer = await (tf as any).AutoTokenizer.from_pretrained(modelId);
+      const modelHandle = await (tf as any).AutoModelForSequenceClassification.from_pretrained(
+        modelId,
+        modelOpts,
+      );
+      return new TransformersRerankBackend(modelId, tokenizer, modelHandle);
     })();
 
     backends.set(cacheKey, loading);
@@ -123,10 +134,8 @@ export class TransformersRerankBackend implements LLM {
    * RerankResult with one entry per input doc, preserving original order
    * via `index`. Higher `score` = more relevant.
    *
-   * ms-marco cross-encoders output a single scalar logit per pair. When
-   * fed through transformers.js pipeline("text-classification"), the
-   * output is an array of {label, score} where the scalar lives under
-   * .score (the single-class head). We return that directly.
+   * Uses the raw model forward pass (not pipeline("text-classification"))
+   * to extract pre-softmax logits — see class comment above for why.
    */
   async rerank(
     query: string,
@@ -136,18 +145,24 @@ export class TransformersRerankBackend implements LLM {
     if (documents.length === 0) {
       return { results: [], model: this.model };
     }
-    // transformers.js text-classification pipeline accepts an array of
-    // {text, text_pair} objects for cross-encoder-style pair input.
-    const pairs = documents.map(d => ({ text: query, text_pair: d.text }));
-    const output = await this.classifier(pairs, { top_k: 1 });
-    // Output shape: either an array of {label, score} per pair, or an
-    // array of arrays (when top_k > 1). Normalize to one score per pair.
-    const rows: Array<{ label?: string; score?: number }> = Array.isArray(output?.[0])
-      ? output.map((a: any[]) => a[0] ?? {})
-      : (output as Array<any>);
+    // Tokenize all (query, doc.text) pairs in a single batched call.
+    // Padding ensures the batch tensor is well-shaped; truncation caps at
+    // the model's max length (512 tokens for ms-marco-MiniLM-L6-v2).
+    const queries = documents.map(() => query);
+    const docTexts = documents.map(d => d.text);
+    const inputs = this.tokenizer(queries, {
+      text_pair: docTexts,
+      padding: true,
+      truncation: true,
+    });
+    // Forward pass returns { logits: Tensor of shape [N, 1] } for the
+    // single-output cross-encoder head. .data is a Float32Array of length
+    // N; one logit per input pair.
+    const out = await this.modelHandle(inputs);
+    const logits = out.logits?.data ?? out.logits ?? [];
     const results = documents.map((doc, i) => ({
       file: doc.file,
-      score: typeof rows[i]?.score === "number" ? (rows[i]!.score as number) : 0,
+      score: typeof logits[i] === "number" ? (logits[i] as number) : 0,
       index: i,
     }));
     return { results, model: this.model };
