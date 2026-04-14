@@ -60,21 +60,40 @@ from memory_bench.models import Document, Query  # noqa: E402
 
 
 # -----------------------------------------------------------------------------
-# Scoring — retrieval (sr@k, r@k, mrr) + answer-availability (sh, f1)
+# Scoring — mirrors evaluate/longmemeval/eval.mts metric definitions exactly
+# so AMB-driven results are directly comparable to our historical native-eval
+# numbers. Three metric families:
 #
-# All scoring runs OFFLINE against the retrieved doc list and the dataset's
-# gold_ids / gold_answers. No LLM calls. Mirrors what an LLM-free retrieval
-# benchmark would compute.
+#   1. Session-id recall (sr@k) — apples-to-apples with MemPalace recall_any.
+#      k ∈ {5, 10, 15, 50}. Hits when any retrieved memory's id matches any
+#      gold session id.
+#
+#   2. Content recall (r@k) — token-overlap. k ∈ {5, 10}. Mirrors native
+#      computeRecallAtK: 1 if any single top-k memory has ≥50% gold-token
+#      overlap, OR if the top-k union has ≥70% overlap. mrr_content uses the
+#      same relevance bar at top-10.
+#
+#   3. Answer-quality proxies (f1 / em / sh) — native LME computes these
+#      against an LLM-generated `prediction` string. We don't generate, so
+#      we treat the **union of top-5 retrieved memory text** as the
+#      "prediction" and run the same definitions (computeF1, computeEM,
+#      computeSubstringHit) against it. This is metric-continuity with the
+#      historical eval at the cost of being a content-availability proxy
+#      rather than true answer quality.
+#
+# All scoring is offline. No LLM calls.
 # -----------------------------------------------------------------------------
 
-_TOKEN_RE = re.compile(r"[^\w\s'-]")
-_KS = (1, 5, 10, 20)  # k values to compute sr@k and r@k for
+_SR_KS = (5, 10, 15, 50)   # session-id recall@k (matches native eval.mts)
+_R_KS = (5, 10)            # content recall@k (matches native eval.mts)
+_MRR_K = 10                # MRR over top-10 (matches native eval.mts)
 
 
-def _tokenize(text: str) -> set[str]:
-    """Lowercase, strip punctuation, split on whitespace, drop very short tokens."""
-    cleaned = _TOKEN_RE.sub(" ", text.lower())
-    return {t for t in cleaned.split() if len(t) >= 2}
+def _tokenize_native(text) -> list[str]:
+    """Mirrors evaluate/longmemeval/eval.mts:131 tokenize() — lowercase,
+    strip non-word chars, split on whitespace, drop empties. Returns a list
+    (NOT a set) because order matters for the EM definition."""
+    return [t for t in re.sub(r"[^\w\s]", " ", str(text or "").lower()).split() if t]
 
 
 def _gold_to_str(gold) -> str:
@@ -87,79 +106,133 @@ def _gold_to_str(gold) -> str:
     return str(gold)
 
 
-def _token_overlap_at_k(retrieved: list[Document], gold_answers: list, k: int) -> int:
-    """1 if ≥70% of any gold answer's tokens appear in the union of the top-k
-    retrieved doc texts, OR any single top-k doc contains ≥70% of any gold
-    answer (mirrors evaluate/longmemeval/eval.mts r5 logic)."""
+def _memory_hits_truth(text: str, truth_tokens: list[str]) -> bool:
+    """Mirrors native memoryHitsTruth(): true iff this memory's tokens cover
+    ≥50% of the gold-truth tokens. Used as the relevance bar for r@k and MRR."""
+    if not truth_tokens:
+        return True
+    mem_tokens = set(_tokenize_native(text))
+    hits = sum(1 for t in truth_tokens if t in mem_tokens)
+    return (hits / len(truth_tokens)) >= 0.5
+
+
+def _content_recall_at_k(retrieved: list[Document], gold_answers: list, k: int) -> int:
+    """Mirrors native computeRecallAtK(): 1 if any single top-k memory passes
+    memoryHitsTruth (≥50% individual coverage) OR the top-k union covers ≥70%
+    of the gold tokens. Take max over gold_answers."""
     if not retrieved or not gold_answers:
         return 0
     top_k = retrieved[:k]
-    union_tokens: set[str] = set()
-    for doc in top_k:
-        union_tokens.update(_tokenize(doc.content))
     for gold in gold_answers:
-        gold_tokens = _tokenize(_gold_to_str(gold))
-        if not gold_tokens:
+        truth_tokens = _tokenize_native(_gold_to_str(gold))
+        if not truth_tokens:
             continue
-        if len(gold_tokens & union_tokens) / len(gold_tokens) >= 0.70:
+        # Per-doc 50% threshold
+        if any(_memory_hits_truth(doc.content, truth_tokens) for doc in top_k):
             return 1
+        # Union 70% threshold
+        all_tokens: set[str] = set()
         for doc in top_k:
-            doc_tokens = _tokenize(doc.content)
-            if not doc_tokens:
-                continue
-            if len(gold_tokens & doc_tokens) / len(gold_tokens) >= 0.70:
-                return 1
+            all_tokens.update(_tokenize_native(doc.content))
+        total_hits = sum(1 for t in truth_tokens if t in all_tokens)
+        if (total_hits / len(truth_tokens)) >= 0.70:
+            return 1
     return 0
 
 
-def _substring_hit(retrieved: list[Document], gold_answers: list, k: int = 5) -> int:
-    """1 if any gold answer string appears (case-insensitive) as a substring
-    of any top-k retrieved doc. Catches short factual answers (counts, dates,
-    yes/no) that token-overlap under-counts. Used by LoCoMo for short answers."""
-    if not retrieved or not gold_answers:
-        return 0
-    top_k = retrieved[:k]
-    for gold in gold_answers:
-        needle = _gold_to_str(gold).strip().lower()
-        if not needle or len(needle) < 2:
-            continue
-        for doc in top_k:
-            if needle in doc.content.lower():
-                return 1
-    return 0
-
-
-def _token_f1(retrieved: list[Document], gold_answers: list, k: int = 5) -> float:
-    """Token-level F1 between the union of top-k retrieved doc tokens and the
-    best-matching gold answer's tokens. Returns the max F1 over gold answers."""
+def _content_mrr(retrieved: list[Document], gold_answers: list, k: int = _MRR_K) -> float:
+    """Mirrors native computeMRR(): 1/rank of first memory in top-k that
+    passes memoryHitsTruth, max over gold_answers."""
     if not retrieved or not gold_answers:
         return 0.0
     top_k = retrieved[:k]
-    pred_tokens: set[str] = set()
-    for doc in top_k:
-        pred_tokens.update(_tokenize(doc.content))
     best = 0.0
     for gold in gold_answers:
-        gold_tokens = _tokenize(_gold_to_str(gold))
-        if not gold_tokens or not pred_tokens:
+        truth_tokens = _tokenize_native(_gold_to_str(gold))
+        if not truth_tokens:
+            best = max(best, 1.0)
             continue
-        common = len(gold_tokens & pred_tokens)
-        if common == 0:
-            continue
-        precision = common / len(pred_tokens)
-        recall = common / len(gold_tokens)
-        f1 = 2 * precision * recall / (precision + recall)
-        best = max(best, f1)
+        for i, doc in enumerate(top_k):
+            if _memory_hits_truth(doc.content, truth_tokens):
+                best = max(best, 1.0 / (i + 1))
+                break
     return best
 
 
+def _build_prediction(retrieved: list[Document], k: int = 5) -> str:
+    """No LLM in this harness — treat the concatenation of top-k retrieved
+    memory text as the 'prediction' for the native f1/em/sh definitions.
+    Yields a content-availability proxy directly comparable to the native
+    eval.mts numbers in the limit where the LLM perfectly extracts the
+    answer from any context."""
+    return " ".join(doc.content for doc in retrieved[:k])
+
+
+def _native_f1(prediction: str, gold_answers: list) -> float:
+    """Mirrors native computeF1(prediction, groundTruth). Token-level F1
+    between prediction tokens and gold tokens. Returns max over gold_answers."""
+    p = _tokenize_native(prediction)
+    if not gold_answers:
+        return 0.0
+    best = 0.0
+    for gold in gold_answers:
+        t = _tokenize_native(_gold_to_str(gold))
+        if not p and not t:
+            best = max(best, 1.0); continue
+        if not p or not t:
+            continue
+        ts = set(t)
+        overlap = sum(1 for x in p if x in ts)
+        if overlap == 0:
+            continue
+        prec = overlap / len(p)
+        rec = overlap / len(t)
+        best = max(best, (2 * prec * rec) / (prec + rec))
+    return best
+
+
+def _native_em(prediction: str, gold_answers: list) -> int:
+    """Mirrors native computeEM(): tokenized prediction joined equals
+    tokenized gold joined (whole-string match after tokenization).
+    Returns max over gold_answers. Almost always 0 in retrieval-only mode
+    because the 'prediction' is the full union of retrieved doc text — but
+    keep it for metric continuity with historical native eval."""
+    p_joined = " ".join(_tokenize_native(prediction))
+    if not gold_answers:
+        return 0
+    for gold in gold_answers:
+        t_joined = " ".join(_tokenize_native(_gold_to_str(gold)))
+        if p_joined == t_joined:
+            return 1
+    return 0
+
+
+def _native_sh(prediction: str, gold_answers: list) -> int:
+    """Mirrors native computeSubstringHit(): tokenized prediction joined
+    contains tokenized gold joined as a substring. Catches short factual
+    answers (counts, names, dates) that F1 under-counts."""
+    p_joined = " ".join(_tokenize_native(prediction))
+    if not gold_answers:
+        return 0
+    if not p_joined:
+        return 0
+    for gold in gold_answers:
+        t_joined = " ".join(_tokenize_native(_gold_to_str(gold)))
+        if not t_joined:
+            return 1  # empty gold = trivial hit
+        if t_joined in p_joined:
+            return 1
+    return 0
+
+
 def score_query(retrieved: list[Document], gold_ids: list[str], gold_answers: list) -> dict:
-    """Compute all metrics for a single query. Returns a flat dict keyed by
-    metric name. The retriever should return enough candidates to support the
-    largest k in _KS (we ask providers for k=20)."""
+    """Compute the full historical metric set for a single query. Returns a
+    flat dict. Provider must return enough candidates to support max(_SR_KS)
+    = 50 (we ask providers for k=20 by default; sr15/sr50 will saturate at
+    sr20 for sparse-hit cases — explicitly note in summary)."""
     gold_set = set(gold_ids) if gold_ids else set()
 
-    # Rank of first session-id hit (1-indexed). None if no hit in the list.
+    # Rank of first session-id hit for sr@k + mrr_session
     rank_first_sr: int | None = None
     for i, doc in enumerate(retrieved):
         if doc.id in gold_set:
@@ -167,13 +240,23 @@ def score_query(retrieved: list[Document], gold_ids: list[str], gold_answers: li
             break
 
     metrics: dict = {}
-    for k in _KS:
+
+    # 1. Session-id recall @ k (apples-to-apples with MemPalace recall_any)
+    for k in _SR_KS:
         metrics[f"sr{k}"] = int(rank_first_sr is not None and rank_first_sr <= k)
-    metrics["mrr"] = (1.0 / rank_first_sr) if rank_first_sr else 0.0
-    for k in (1, 5, 10):
-        metrics[f"r{k}"] = _token_overlap_at_k(retrieved, gold_answers, k)
-    metrics["sh"] = _substring_hit(retrieved, gold_answers, k=5)
-    metrics["f1"] = _token_f1(retrieved, gold_answers, k=5)
+    metrics["mrr_session"] = (1.0 / rank_first_sr) if rank_first_sr else 0.0
+
+    # 2. Content recall @ k (mirrors native computeRecallAtK)
+    for k in _R_KS:
+        metrics[f"r{k}"] = _content_recall_at_k(retrieved, gold_answers, k)
+    metrics["mrr"] = _content_mrr(retrieved, gold_answers, k=_MRR_K)  # native MRR semantics
+
+    # 3. Answer-quality proxies — native f1/em/sh against top-5 union as "prediction"
+    prediction = _build_prediction(retrieved, k=5)
+    metrics["f1"] = _native_f1(prediction, gold_answers)
+    metrics["em"] = _native_em(prediction, gold_answers)
+    metrics["sh"] = _native_sh(prediction, gold_answers)
+
     return metrics
 
 
@@ -271,13 +354,23 @@ def run_provider_on_dataset(
             by_category[cat] = {"n": cat_n, **{k: sum(x[k] for x in rows) / cat_n for k in metric_keys}}
 
         # Print compact summary line + per-category table
-        print(f"  done — sr5={overall['sr5']:.1%} sr10={overall['sr10']:.1%} mrr={overall['mrr']:.3f} r5={overall['r5']:.1%} sh={overall['sh']:.1%} f1={overall['f1']:.3f} retrieve_wall={retrieve_wall:.1f}s")
+        print(
+            f"  done — sr5={overall['sr5']:.1%} sr10={overall['sr10']:.1%} sr15={overall['sr15']:.1%} sr50={overall['sr50']:.1%}"
+            f"  r5={overall['r5']:.1%} r10={overall['r10']:.1%}  mrr={overall['mrr']:.3f}"
+            f"  f1={overall['f1']:.3f} em={overall['em']:.1%} sh={overall['sh']:.1%}"
+            f"  retrieve_wall={retrieve_wall:.1f}s"
+        )
         if len(by_category) > 1:
             print(f"  per-category (n={n}):")
-            print(f"    {'category':<32} {'n':<5} {'sr5':<7} {'sr10':<7} {'mrr':<7} {'r5':<7} {'sh':<7} {'f1':<7}")
+            print(f"    {'category':<32} {'n':<4} {'sr5':<7} {'sr10':<7} {'sr15':<7} {'r5':<7} {'r10':<7} {'mrr':<7} {'f1':<7} {'em':<7} {'sh':<7}")
             for cat in sorted(by_category.keys()):
                 c = by_category[cat]
-                print(f"    {cat:<32} {c['n']:<5} {c['sr5']:<7.1%} {c['sr10']:<7.1%} {c['mrr']:<7.3f} {c['r5']:<7.1%} {c['sh']:<7.1%} {c['f1']:<7.3f}")
+                print(
+                    f"    {cat:<32} {c['n']:<4} "
+                    f"{c['sr5']:<7.1%} {c['sr10']:<7.1%} {c['sr15']:<7.1%} "
+                    f"{c['r5']:<7.1%} {c['r10']:<7.1%} {c['mrr']:<7.3f} "
+                    f"{c['f1']:<7.3f} {c['em']:<7.1%} {c['sh']:<7.1%}"
+                )
 
         summary = {
             "config": config_name,
@@ -335,16 +428,23 @@ def main() -> None:
                 print(f"  FAILED: {cfg_name} × {ds_name}: {e!r}")
 
     # Print final comparison table — flat overview across all (config, dataset) cells.
+    # Mirrors the historical native-eval columns (sr5, sr10, sr15, r5, r10, mrr, f1, em, sh)
+    # so AMB-driven numbers can be slotted into the ROADMAP retable directly.
     print("\n\n=== FINAL ===")
-    print(f"{'config':<18} {'dataset':<13} {'n':<5} {'sr5':<8} {'sr10':<8} {'mrr':<8} {'r5':<8} {'sh':<8} {'f1':<8} {'wall':<10}")
+    print(
+        f"{'config':<16} {'dataset':<12} {'n':<5} "
+        f"{'sr5':<7} {'sr10':<7} {'sr15':<7} {'r5':<7} {'r10':<7} {'mrr':<7} "
+        f"{'f1':<7} {'em':<7} {'sh':<7} {'wall':<8}"
+    )
     for s in summaries:
         o = s.get("overall", {})
         wall = f"{s['ingest_wall_s'] + s['retrieve_wall_s']:.0f}s"
         print(
-            f"{s['config']:<18} {s['dataset']:<13} {s['n']:<5} "
-            f"{o.get('sr5', 0):<8.1%} {o.get('sr10', 0):<8.1%} {o.get('mrr', 0):<8.3f} "
-            f"{o.get('r5', 0):<8.1%} {o.get('sh', 0):<8.1%} {o.get('f1', 0):<8.3f} "
-            f"{wall:<10}"
+            f"{s['config']:<16} {s['dataset']:<12} {s['n']:<5} "
+            f"{o.get('sr5', 0):<7.1%} {o.get('sr10', 0):<7.1%} {o.get('sr15', 0):<7.1%} "
+            f"{o.get('r5', 0):<7.1%} {o.get('r10', 0):<7.1%} {o.get('mrr', 0):<7.3f} "
+            f"{o.get('f1', 0):<7.3f} {o.get('em', 0):<7.1%} {o.get('sh', 0):<7.1%} "
+            f"{wall:<8}"
         )
 
 
