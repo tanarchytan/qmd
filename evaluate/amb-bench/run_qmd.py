@@ -37,6 +37,7 @@ import os
 import re
 import sys
 import time
+from collections import defaultdict
 from dataclasses import asdict
 from pathlib import Path
 
@@ -59,10 +60,15 @@ from memory_bench.models import Document, Query  # noqa: E402
 
 
 # -----------------------------------------------------------------------------
-# Scoring (mirror evaluate/longmemeval/eval.mts r5 + sr5 logic)
+# Scoring — retrieval (sr@k, r@k, mrr) + answer-availability (sh, f1)
+#
+# All scoring runs OFFLINE against the retrieved doc list and the dataset's
+# gold_ids / gold_answers. No LLM calls. Mirrors what an LLM-free retrieval
+# benchmark would compute.
 # -----------------------------------------------------------------------------
 
 _TOKEN_RE = re.compile(r"[^\w\s'-]")
+_KS = (1, 5, 10, 20)  # k values to compute sr@k and r@k for
 
 
 def _tokenize(text: str) -> set[str]:
@@ -71,43 +77,104 @@ def _tokenize(text: str) -> set[str]:
     return {t for t in cleaned.split() if len(t) >= 2}
 
 
-def compute_r5(retrieved: list[Document], gold_answers: list) -> int:
-    """Token-overlap r5: 1 if ≥70% of any gold answer's tokens appear in any
-    retrieved doc text, OR any single retrieved doc text contains ≥70% of any
-    gold answer. Mirrors eval.mts r5 logic at session-id metric audit.
+def _gold_to_str(gold) -> str:
+    """LoCoMo can hand back ints / floats / lists / dicts as gold answers.
+    Coerce to a single string for tokenization."""
+    if isinstance(gold, str):
+        return gold
+    if isinstance(gold, (list, tuple)):
+        return " ".join(_gold_to_str(g) for g in gold)
+    return str(gold)
 
-    LoCoMo gold answers can be ints/floats/lists, not just strings, so
-    coerce everything to str before tokenizing."""
+
+def _token_overlap_at_k(retrieved: list[Document], gold_answers: list, k: int) -> int:
+    """1 if ≥70% of any gold answer's tokens appear in the union of the top-k
+    retrieved doc texts, OR any single top-k doc contains ≥70% of any gold
+    answer (mirrors evaluate/longmemeval/eval.mts r5 logic)."""
     if not retrieved or not gold_answers:
         return 0
-    retrieved_tokens: set[str] = set()
-    for doc in retrieved:
-        retrieved_tokens.update(_tokenize(doc.content))
+    top_k = retrieved[:k]
+    union_tokens: set[str] = set()
+    for doc in top_k:
+        union_tokens.update(_tokenize(doc.content))
     for gold in gold_answers:
-        gold_str = str(gold) if not isinstance(gold, str) else gold
-        gold_tokens = _tokenize(gold_str)
+        gold_tokens = _tokenize(_gold_to_str(gold))
         if not gold_tokens:
             continue
-        overlap = len(gold_tokens & retrieved_tokens) / len(gold_tokens)
-        if overlap >= 0.70:
+        if len(gold_tokens & union_tokens) / len(gold_tokens) >= 0.70:
             return 1
-        # Also check per-doc — a single doc containing the answer tokens
-        for doc in retrieved:
+        for doc in top_k:
             doc_tokens = _tokenize(doc.content)
             if not doc_tokens:
                 continue
-            per_doc = len(gold_tokens & doc_tokens) / len(gold_tokens)
-            if per_doc >= 0.70:
+            if len(gold_tokens & doc_tokens) / len(gold_tokens) >= 0.70:
                 return 1
     return 0
 
 
-def compute_sr5(retrieved: list[Document], gold_ids: list[str]) -> int:
-    """Session-id recall_any@5: 1 if any retrieved doc's id matches any gold id."""
-    if not retrieved or not gold_ids:
+def _substring_hit(retrieved: list[Document], gold_answers: list, k: int = 5) -> int:
+    """1 if any gold answer string appears (case-insensitive) as a substring
+    of any top-k retrieved doc. Catches short factual answers (counts, dates,
+    yes/no) that token-overlap under-counts. Used by LoCoMo for short answers."""
+    if not retrieved or not gold_answers:
         return 0
-    gold = set(gold_ids)
-    return int(any(d.id in gold for d in retrieved))
+    top_k = retrieved[:k]
+    for gold in gold_answers:
+        needle = _gold_to_str(gold).strip().lower()
+        if not needle or len(needle) < 2:
+            continue
+        for doc in top_k:
+            if needle in doc.content.lower():
+                return 1
+    return 0
+
+
+def _token_f1(retrieved: list[Document], gold_answers: list, k: int = 5) -> float:
+    """Token-level F1 between the union of top-k retrieved doc tokens and the
+    best-matching gold answer's tokens. Returns the max F1 over gold answers."""
+    if not retrieved or not gold_answers:
+        return 0.0
+    top_k = retrieved[:k]
+    pred_tokens: set[str] = set()
+    for doc in top_k:
+        pred_tokens.update(_tokenize(doc.content))
+    best = 0.0
+    for gold in gold_answers:
+        gold_tokens = _tokenize(_gold_to_str(gold))
+        if not gold_tokens or not pred_tokens:
+            continue
+        common = len(gold_tokens & pred_tokens)
+        if common == 0:
+            continue
+        precision = common / len(pred_tokens)
+        recall = common / len(gold_tokens)
+        f1 = 2 * precision * recall / (precision + recall)
+        best = max(best, f1)
+    return best
+
+
+def score_query(retrieved: list[Document], gold_ids: list[str], gold_answers: list) -> dict:
+    """Compute all metrics for a single query. Returns a flat dict keyed by
+    metric name. The retriever should return enough candidates to support the
+    largest k in _KS (we ask providers for k=20)."""
+    gold_set = set(gold_ids) if gold_ids else set()
+
+    # Rank of first session-id hit (1-indexed). None if no hit in the list.
+    rank_first_sr: int | None = None
+    for i, doc in enumerate(retrieved):
+        if doc.id in gold_set:
+            rank_first_sr = i + 1
+            break
+
+    metrics: dict = {}
+    for k in _KS:
+        metrics[f"sr{k}"] = int(rank_first_sr is not None and rank_first_sr <= k)
+    metrics["mrr"] = (1.0 / rank_first_sr) if rank_first_sr else 0.0
+    for k in (1, 5, 10):
+        metrics[f"r{k}"] = _token_overlap_at_k(retrieved, gold_answers, k)
+    metrics["sh"] = _substring_hit(retrieved, gold_answers, k=5)
+    metrics["f1"] = _token_f1(retrieved, gold_answers, k=5)
+    return metrics
 
 
 # -----------------------------------------------------------------------------
@@ -166,18 +233,22 @@ def run_provider_on_dataset(
         ingest_wall = time.time() - t0
         print(f"  ingest done in {ingest_wall:.1f}s")
 
-        # Retrieve + score
+        # Retrieve k=20 (max k we score @) + compute all metrics per query.
+        # Both LME and LoCoMo expose category info on Query.meta — LME uses
+        # `question_type`, LoCoMo uses `category`. Stash whichever exists so
+        # the per-category breakdown works for both.
         per_q = []
         t0 = time.time()
         for i, q in enumerate(queries):
-            retrieved, _ = provider.retrieve(q.query, k=5, user_id=q.user_id)
-            sr5 = compute_sr5(retrieved, q.gold_ids)
-            r5 = compute_r5(retrieved, q.gold_answers)
+            retrieved, _ = provider.retrieve(q.query, k=20, user_id=q.user_id)
+            metrics = score_query(retrieved, q.gold_ids, q.gold_answers)
+            category = None
+            if q.meta:
+                category = q.meta.get("question_type") or q.meta.get("category")
             per_q.append({
                 "query_id": q.id,
-                "question_type": q.meta.get("question_type") if q.meta else None,
-                "sr5": sr5,
-                "r5": r5,
+                "category": category,
+                **metrics,
                 "gold_ids": list(q.gold_ids),
                 "retrieved_ids": [d.id for d in retrieved],
             })
@@ -187,17 +258,34 @@ def run_provider_on_dataset(
         retrieve_wall = time.time() - t0
 
         n = len(per_q)
-        sr5_mean = sum(x["sr5"] for x in per_q) / n if n else 0.0
-        r5_mean = sum(x["r5"] for x in per_q) / n if n else 0.0
-        print(f"  done — sr5={sr5_mean:.1%} r5={r5_mean:.1%} retrieve_wall={retrieve_wall:.1f}s")
+        # Aggregate overall + per-category
+        metric_keys = [k for k in per_q[0].keys() if k not in ("query_id", "category", "gold_ids", "retrieved_ids")] if per_q else []
+        overall = {k: (sum(x[k] for x in per_q) / n if n else 0.0) for k in metric_keys}
+        by_category: dict[str, dict] = {}
+        cat_buckets: dict[str, list] = defaultdict(list)
+        for r in per_q:
+            cat = r["category"] or "uncategorized"
+            cat_buckets[cat].append(r)
+        for cat, rows in cat_buckets.items():
+            cat_n = len(rows)
+            by_category[cat] = {"n": cat_n, **{k: sum(x[k] for x in rows) / cat_n for k in metric_keys}}
+
+        # Print compact summary line + per-category table
+        print(f"  done — sr5={overall['sr5']:.1%} sr10={overall['sr10']:.1%} mrr={overall['mrr']:.3f} r5={overall['r5']:.1%} sh={overall['sh']:.1%} f1={overall['f1']:.3f} retrieve_wall={retrieve_wall:.1f}s")
+        if len(by_category) > 1:
+            print(f"  per-category (n={n}):")
+            print(f"    {'category':<32} {'n':<5} {'sr5':<7} {'sr10':<7} {'mrr':<7} {'r5':<7} {'sh':<7} {'f1':<7}")
+            for cat in sorted(by_category.keys()):
+                c = by_category[cat]
+                print(f"    {cat:<32} {c['n']:<5} {c['sr5']:<7.1%} {c['sr10']:<7.1%} {c['mrr']:<7.3f} {c['r5']:<7.1%} {c['sh']:<7.1%} {c['f1']:<7.3f}")
 
         summary = {
             "config": config_name,
             "dataset": dataset_name,
             "split": split,
             "n": n,
-            "sr5_overall": sr5_mean,
-            "r5_overall": r5_mean,
+            "overall": overall,
+            "by_category": by_category,
             "ingest_wall_s": ingest_wall,
             "retrieve_wall_s": retrieve_wall,
             "per_question": per_q,
