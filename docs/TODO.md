@@ -35,32 +35,41 @@ default-off, untested at n=500, and could move multi-session if turned on.
 
 ---
 
-## §1 — Multi-session ceiling attack (active v17 goal)
+## §1 — Single-session-preference gap attack (active v17 goal)
 
-The 82% R@5 multi-session ceiling on LME _s n=500 is the headline bottleneck.
-All items in this section target that metric.
+> **Retargeted 2026-04-14 post-metric-audit.** The old "82% multi-session
+> ceiling" was a r5 (token-overlap) artifact — on sr5 multi-session has
+> been at 100% the whole time. The real remaining gap vs MemPalace is
+> **single-session-preference at 90.0% sr5 vs MemPalace's 96.7% (−6.7pp)**.
+> This section now targets that bucket. See ROADMAP "v17 priority shift"
+> and footnote (c) for the full audit.
 
-### Confirmed lifts shipped 2026-04-14
+### Parked levers (already tested at n=500, flat on preference sr5)
 
-- [x] **arctic-s q8 embed model** — `QMD_TRANSFORMERS_MODEL=Snowflake/snowflake-arctic-embed-s` → **+2.2pp** multi-session (82% → 84.2%), −1pp overall R@5. First model to break 83% ceiling on LME.
-- [x] **Zero-LLM keyword-group expansion** — `QMD_MEMORY_EXPAND=keywords` → **+1pp** multi-session on mxbai-xs q8 (82% → 83%). Fans out 1 base + 2 keyword-cluster sub-queries.
-- [x] **Loose cosine floor escape hatch** — `QMD_VEC_MIN_SIM=0.1` → +0.8pp R@10 (not R@5). Lets more candidates survive the adaptive gate on tight-distribution q8 models.
-- [x] **RAW-compatible dialog diversity** — `QMD_MEMORY_MMR=session` fires `applyDialogDiversity` even in RAW eval mode. Null signal at n=100 (top-5 already diverse enough for mxbai); awaiting phase-4 n=500 fix confirmation.
+- [x] **`QMD_MEMORY_EXPAND=keywords`** — zero-LLM keyword fanout. n=500 result: 90.0% preference sr5 (tied with baseline). Moves overall 98.2 → 98.0 (tiny regression). Parked for preference.
+- [x] **`QMD_VEC_MIN_SIM=0.1` loose floor** — +0.2pp on overall sr5, **flat on preference** (90.0%). Still the production default for the overall lift, but does not close the preference gap.
+- [x] **`QMD_MEMORY_MMR=session`** — RAW-compat dialog diversity. n=500: 98.4% overall, 90.0% preference. Tied with loose-floor baseline.
+- [x] **Cross-encoder rerank** (`cross-encoder/ms-marco-MiniLM-L6-v2` via `transformers.js`) — shipped 2026-04-14 (commit `773b079`), n=500 A/B (`d3da644`): **flat on sr5** (98.4% overall, 90.0% preference). r5 preference jumped 90→100% (lexical rerank finds better in-session passages) but sr5 is unchanged — the failure is at candidate generation, not rerank. Flagged off. Code retained for future use cases.
 
-### Next measurements (phase 4 — in flight)
+### Lesson from the parked batch
 
-- [ ] arctic-s q8 × `QMD_MEMORY_EXPAND=keywords` n=500 — targets ≥85% multi-session (stacked +2.2pp model + +1pp expand).
-- [ ] arctic-s q8 × loose-floor × expand × fixed-MMR n=500 — full-stack test.
-- [ ] mxbai-xs q8 × loose × expand × fixed-MMR n=500 — isolates the MMR fix signal on the current production default.
+Every rerank-stage and post-retrieval-filter lever tested so far has been
+**flat on preference sr5**. This is the strongest possible signal that
+**the right sessions are not in the top-K candidate pool to begin with**.
+Preference questions paraphrase the user's stated preference heavily
+(e.g. "recommend cultural events" ↔ "user practices Spanish on weekends"),
+so cosine between the raw query and the right session is below our
+top-K cutoff. Rerank can't recover what isn't in the pool. **v17 work
+must widen the candidate generation stage**, not re-score it.
 
-### Queued experiments (v17)
+### Queued experiments (v17, in order of expected preference-sr5 lift)
 
-- [ ] **Cross-encoder rerank via `transformers.js`** — `mixedbread-ai/mxbai-rerank-base-v1` ONNX, ~80 lines mirroring `TransformersEmbedBackend`. Biggest expected lift if embed+expand plateau. Blocks: none. Priority: **highest**.
-- [ ] **Per-turn ingest A/B on LME** — flip `QMD_INGEST_PER_TURN=on`, rebuild dbs, rerun n=500. Turns ~50 memories/scope into ~500, increasing granularity. Untested, cheap, possibly unlocks sub-session retrieval. Priority: **highest**.
-- [ ] **Model-aware floor calibration** — `QMD_VEC_FLOOR_RATIO=<0-1>` env knob to replace the hardcoded `relRatio=0.5` in `pickVectorMatches`. Auto-calibrate per-model based on observed top-1 distribution at sanity-probe time. mxbai-xs q8 wants ~0.3, MiniLM fp32 wants 0.5.
-- [ ] **arctic-xs int8/uint8/q4 at n=500** — only q8 tested at n=500. Quantization broke the 83% ceiling for MiniLM uint8; may do the same for arctic-xs. Cheap (~15m each).
-- [ ] **arctic-m q8 revisit with loose floor** — arctic-m q8 was strictly worse at n=100 (mem=28 vs 48) because the adaptive floor over-filtered on 768d. Worth one n=500 pass with `QMD_VEC_MIN_SIM=0.1` to see if 768d has latent signal.
-- [ ] **arctic-s dtype sweep (int8/uint8)** — current winner is q8 only. Same quant logic as MiniLM precedent.
+- [ ] **HyDE (Hypothetical Document Embedding)** — generate a fake "ideal answer" passage with a local LLM, embed the hypothetical instead of the raw query, retrieve against that. Bridges the query↔answer paraphrase gap that is killing preference. Blocks: need a generation-capable local backend (node-llama-cpp was ripped; options are `transformers.js` text-generation, a remote call, or a small ONNX chat model). Priority: **highest**.
+- [ ] **LLM query expansion (remote)** — full sentence-level paraphrase via a remote call (cheaper than local HyDE to try first). Previous `EXPAND=keywords` was zero-LLM and only fanned out keyword clusters; this would fan out whole paraphrase sentences. Priority: **high** if HyDE is blocked on backend wiring.
+- [ ] **Per-turn ingest A/B on LME** — flip `QMD_INGEST_PER_TURN=on`, rebuild dbs, rerun n=500. Turns ~50 memories/scope into ~500. More finely-chunked ingest may increase the probability that a preference-stating turn survives top-K retrieval. Still untested after the 2026-04-14 WSL crashes. Priority: **high** (candidate-pool lever, cheap).
+- [ ] **Candidate pool size** — currently top-40 into rerank; MemPalace retrieves wider and filters. Raise `limit * N` blend ratio in `memoryRecall` block 5a. Priority: **medium**.
+- [ ] **Multi-vector / ColBERT late interaction** — per-token vectors, MaxSim scoring. Biggest expected lift on preference-style retrieval but a major refactor (new storage path, MaxSim kernel, new embed backend). Park until HyDE + per-turn + pool-size are exhausted.
+- [ ] **Model-aware floor calibration** — `QMD_VEC_FLOOR_RATIO=<0-1>` env knob to replace hardcoded `relRatio=0.5` in `pickVectorMatches`. Lower ratio widens candidate pool on tight-distribution q8 models. Priority: **medium**.
 
 ---
 
@@ -71,7 +80,7 @@ on LME-class workloads.
 
 ### Category 2 — Multi-pass / hybrid retrieval
 
-- [ ] **Cross-encoder rerank** (memory-lancedb-pro, Hindsight) — ranked #1 lever. See §1.
+- [x] ~~**Cross-encoder rerank**~~ — shipped 2026-04-14 via `transformers.js` (`src/llm/transformers-rerank.ts`). n=500 A/B flat on sr5; flagged off; see §1 parked-levers list.
 - [x] ~~Entity graph traversal in recall with smart gating~~ — **already shipped v16** as `QMD_RECALL_KG=on` (`src/memory/index.ts:1169`). Three-condition gating (opt-in, ≥1 proper-noun entity, top score < 0.3) avoids the v8 blunt-injection failure mode. Untested at n=500 against multi-session — could be worth turning on in a phase 5 A/B.
 - [ ] **4-parallel-path retrieval** (Hindsight) — semantic + BM25 + entity graph + temporal filter + cross-encoder rerank. Currently 2 paths (BM25 + vector). The KG path exists but is gated; cross-encoder is the missing fourth. Still the biggest identified gap vs SOTA.
 
