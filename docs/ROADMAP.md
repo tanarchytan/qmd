@@ -98,6 +98,50 @@ Batch-generated from the result JSON files in `~/qmd-eval/evaluate/longmemeval/`
 - **Document arctic-s as a NON-recommendation** — strictly worse on the correct metric
 - **Document the metric lesson** in UPSTREAM/ROADMAP so future audits don't regress on it
 
+### Live MemPalace raw reproduction at n=500 (apples-to-apples)
+
+Cloned `github.com/milla-jovovich/mempalace` @ 3.3.0 to `~/qmd-eval/baselines/mempalace/`, installed chromadb + fastembed, ran `benchmarks/longmemeval_bench.py --mode raw --limit 500` against our `longmemeval_s_cleaned.json`. MemPalace's bench computes session-level `recall_any` — the exact metric our `sr5` is documented to mirror.
+
+**Live numbers (2026-04-14):**
+
+```
+Time: 779.5s (~13 min), 1.56s per question
+
+SESSION-LEVEL METRICS:
+  Recall@ 1: 0.806    NDCG@ 1: 0.806
+  Recall@ 3: 0.926    NDCG@ 3: 0.874
+  Recall@ 5: 0.966    NDCG@ 5: 0.888
+  Recall@10: 0.982    NDCG@10: 0.889
+  Recall@30: 0.996    NDCG@30: 0.889
+  Recall@50: 1.000    NDCG@50: 0.890
+
+PER-TYPE BREAKDOWN (session recall_any@10):
+  knowledge-update                    R@10=1.000  (n=78)
+  multi-session                       R@10=1.000  (n=133)
+  single-session-assistant            R@10=0.964  (n=56)
+  single-session-preference           R@10=0.967  (n=30)
+  single-session-user                 R@10=0.971  (n=70)
+  temporal-reasoning                  R@10=0.970  (n=133)
+```
+
+**R@5 overall: 96.6%** — matches MemPalace's published number exactly. **Our hardware reproduces their headline cleanly.** MemPalace's bench only reports per-category R@10, not R@5, so the category-level side-by-side is limited to R@10 on their side.
+
+**Final side-by-side (R@5 overall, the one comparable number):**
+
+| System | n=500 R@5 (session-ID) | Wall | Notes |
+|---|---|---|---|
+| **qmd `mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1`** | **98.4%** ✅ | ~15 min | night winner, +1.8pp over MemPalace |
+| qmd `mxbai-xs q8` baseline | 98.2% | 15m12s | prior production default, already beats MP |
+| MemPalace raw (live reproduction) | **96.6%** | 12m59s | their published headline, reproduced |
+| MemPalace raw (published) | 96.6% | 12m30s | reference |
+
+**Takeaways:**
+- Hardware reproduces MemPalace cleanly — no "our hardware is different" excuse.
+- qmd was already beating MemPalace on their headline metric before tonight (baseline 98.2% vs 96.6% = +1.6pp).
+- Tonight's `QMD_VEC_MIN_SIM=0.1` adds another +0.2pp, taking the lead to 1.8pp.
+- MemPalace is faster per-question (1.56s vs our ~1.8s with workers=2) but they're running on simpler ChromaDB EphemeralClient per question; we're running against a production-shaped sqlite-vec + FTS5 + partition-key table.
+- We should consider whether the R@5/R@10 gap (we win R@5 by 1.8pp but probably lose R@10 by ~0.8pp — need to verify) is meaningful for downstream answer quality.
+
 
 
 ### Status at 2026-04-14 — per-category R@5 at n=500
