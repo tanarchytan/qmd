@@ -420,7 +420,5 @@ describe.skipIf(!!process.env.CI)("Hybrid Search (RRF)", () => {
 // =============================================================================
 
 afterAll(async () => {
-  // Ensure native resources are released to avoid ggml-metal asserts on process exit.
-  // disposeDefaultLlamaCpp removed in cleanup — transformers backend is GC'd
   rmSync(tempDir, { recursive: true, force: true });
 });

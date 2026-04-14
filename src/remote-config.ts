@@ -109,15 +109,6 @@ export function createRemoteConfigFromEnv(): RemoteLLMConfig | null {
 }
 
 // =============================================================================
-// QMD_LOCAL flag — kept as a stub after the 2026-04-13 cleanup that removed
-// node-llama-cpp + fastembed-js. Always returns false. Local embed is now
-// handled exclusively by TransformersEmbedBackend (auto-loaded by memory/store).
-// =============================================================================
-
-/** @deprecated Always false; LlamaCpp removed. */
-export function isLocalEnabled(): boolean { return false; }
-
-// =============================================================================
 // Cached RemoteLLM singleton — env doesn't change at runtime
 // =============================================================================
 

@@ -22,7 +22,6 @@ import {
   type VectorSearchOptions,
   type ExpandQueryOptions,
 } from "../src/index.js";
-import { setDefaultLlamaCpp } from "../src/llm.js";
 
 // =============================================================================
 // Test Helpers
@@ -962,7 +961,6 @@ describe("embed", () => {
     });
 
     const fakeLlm = createFakeEmbedLlm();
-    setDefaultLlamaCpp(createFakeTokenizer() as any);
     store.internal.llm = fakeLlm as any;
 
     try {
@@ -977,7 +975,6 @@ describe("embed", () => {
       expect(result.docsProcessed).toBe(3);
       expect(result.chunksEmbedded).toBe(3);
     } finally {
-      setDefaultLlamaCpp(null);
       await store.close();
     }
   });
@@ -992,7 +989,6 @@ describe("embed", () => {
       await expect(store.embed({ maxDocsPerBatch: 0 })).rejects.toThrow("maxDocsPerBatch");
       await expect(store.embed({ maxBatchBytes: 0 })).rejects.toThrow("maxBatchBytes");
     } finally {
-      setDefaultLlamaCpp(null);
       await store.close();
     }
   });

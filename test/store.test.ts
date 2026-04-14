@@ -13,8 +13,6 @@ import { unlink, mkdtemp, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
-import * as llmModule from "../src/llm.js";
-import { disposeDefaultLlamaCpp, setDefaultLlamaCpp } from "../src/llm.js";
 import {
   createStore,
   verifySqliteVecLoaded,
@@ -254,9 +252,6 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // Ensure native resources are released to avoid ggml-metal asserts on process exit.
-  await disposeDefaultLlamaCpp();
-
   try {
     // Clean up test directory
     const { readdir, unlink } = await import("node:fs/promises");
@@ -2528,39 +2523,11 @@ describe.skip("LlamaCpp Integration (removed in 2026-04-13 cleanup)", () => {
     await cleanupTestDb(store);
   });
 
-  test("rerank deduplicates identical chunks across files", async () => {
-    const store = await createTestStore();
-    const rerankSpy = vi.fn(async (_query: string, docs: { file: string; text: string }[]) => ({
-      results: docs.map((doc, index) => ({
-        file: doc.file,
-        score: 1 - index * 0.1,
-        index,
-      })),
-      model: "mock-reranker",
-    }));
-
-    const llmSpy = vi.spyOn(llmModule, "getDefaultLlamaCpp").mockReturnValue({
-      rerank: rerankSpy,
-    } as any);
-
-    try {
-      const docs = [
-        { file: "doc1.md", text: "Shared chunk text" },
-        { file: "doc2.md", text: "Shared chunk text" },
-      ];
-
-      const first = await store.rerank("shared", docs);
-      const second = await store.rerank("shared", docs);
-
-      expect(first).toHaveLength(2);
-      expect(second).toHaveLength(2);
-      expect(rerankSpy).toHaveBeenCalledTimes(1);
-      expect(rerankSpy.mock.calls[0]?.[1]).toEqual([{ file: "doc2.md", text: "Shared chunk text" }]);
-    } finally {
-      llmSpy.mockRestore();
-      await cleanupTestDb(store);
-    }
-  });
+  // "rerank deduplicates identical chunks across files" test removed in the
+  // 2026-04-14 LlamaCpp stub cleanup. It mocked getDefaultLlamaCpp() which is
+  // no longer wired into store.rerank. The chunk-dedup behavior is still
+  // worth testing — re-implement via the actual rerank path (RemoteLLM or
+  // injected LLM) and re-add. Tracked in docs/TODO.md §3.
 });
 
 // =============================================================================
@@ -2705,7 +2672,6 @@ describe("Embedding batching", () => {
     const db = store.db;
     const fakeLlm = createFakeEmbedLlm();
 
-    setDefaultLlamaCpp(createFakeTokenizer() as any);
     store.llm = fakeLlm as any;
 
     try {
@@ -2724,7 +2690,6 @@ describe("Embedding batching", () => {
       expect(result.chunksEmbedded).toBe(3);
       expect(db.prepare(`SELECT COUNT(*) as count FROM content_vectors`).get()).toEqual({ count: 3 });
     } finally {
-      setDefaultLlamaCpp(null);
       await cleanupTestDb(store);
     }
   });
@@ -2734,7 +2699,6 @@ describe("Embedding batching", () => {
     const db = store.db;
     const fakeLlm = createFakeEmbedLlm();
 
-    setDefaultLlamaCpp(createFakeTokenizer() as any);
     store.llm = fakeLlm as any;
 
     const docOne = "# One\n\n" + "A".repeat(36);
@@ -2759,7 +2723,6 @@ describe("Embedding batching", () => {
       expect(result.docsProcessed).toBe(3);
       expect(result.chunksEmbedded).toBe(3);
     } finally {
-      setDefaultLlamaCpp(null);
       await cleanupTestDb(store);
     }
   });
@@ -2770,7 +2733,6 @@ describe("Embedding batching", () => {
     const fakeLlm = createFakeEmbedLlm();
     const model = "hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf";
 
-    setDefaultLlamaCpp(createFakeTokenizer() as any);
     store.llm = fakeLlm as any;
 
     try {
@@ -2783,7 +2745,6 @@ describe("Embedding batching", () => {
       expect(fakeLlm.embedBatchModelCalls).toEqual([{ model }]);
       expect(db.prepare(`SELECT DISTINCT model FROM content_vectors`).all()).toEqual([{ model }]);
     } finally {
-      setDefaultLlamaCpp(null);
       await cleanupTestDb(store);
     }
   });
@@ -2799,7 +2760,6 @@ describe("Embedding batching", () => {
         "maxBatchBytes"
       );
     } finally {
-      setDefaultLlamaCpp(null);
       await cleanupTestDb(store);
     }
   });

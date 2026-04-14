@@ -21,7 +21,6 @@ import {
   type ExpandedQuery,
   type Store,
 } from "../src/store.js";
-import { disposeDefaultLlamaCpp } from "../src/llm.js";
 
 // =============================================================================
 // parseStructuredQuery Tests (CLI Parser)
@@ -294,7 +293,6 @@ describe("structuredSearch", () => {
 
   afterAll(async () => {
     store.close();
-    await disposeDefaultLlamaCpp();
     if (testDir) {
       await rm(testDir, { recursive: true, force: true });
     }

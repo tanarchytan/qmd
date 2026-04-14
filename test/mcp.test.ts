@@ -10,7 +10,6 @@ import { openDatabase, loadSqliteVec } from "../src/db.js";
 import type { Database } from "../src/db.js";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getDefaultLlamaCpp, disposeDefaultLlamaCpp } from "../src/llm";
 import { unlinkSync } from "node:fs";
 import { mkdtemp, writeFile, readdir, unlink, rmdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -27,11 +26,6 @@ import { syncConfigToDb } from "../src/store";
 let testDb: Database;
 let testDbPath: string;
 let testConfigDir: string;
-
-afterAll(async () => {
-  // Ensure native resources are released to avoid ggml-metal asserts on process exit.
-  await disposeDefaultLlamaCpp();
-});
 
 function initTestDatabase(db: Database): void {
   loadSqliteVec(db);
@@ -225,10 +219,6 @@ import type { RankedResult } from "../src/store";
 
 describe("MCP Server", () => {
   beforeAll(async () => {
-    // LlamaCpp uses node-llama-cpp for local model inference (no HTTP mocking needed)
-    // Use shared singleton to avoid creating multiple instances with separate GPU resources
-    getDefaultLlamaCpp();
-
     // Reset index name in case another test file mutated it (bun test shares process)
     setConfigIndexName("index");
 

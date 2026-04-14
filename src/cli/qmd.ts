@@ -80,7 +80,7 @@ import {
   type ReindexResult,
   type ChunkStrategy,
 } from "../store.js";
-import { disposeDefaultLlamaCpp, DEFAULT_EMBED_MODEL_URI, DEFAULT_GENERATE_MODEL_URI, DEFAULT_RERANK_MODEL_URI } from "../llm.js";
+import { DEFAULT_EMBED_MODEL_URI, DEFAULT_GENERATE_MODEL_URI, DEFAULT_RERANK_MODEL_URI } from "../llm.js";
 import {
   formatSearchResults,
   formatDocuments,
@@ -102,7 +102,7 @@ import {
   loadConfig,
 } from "../collections.js";
 import { getEmbeddedQmdSkillContent, getEmbeddedQmdSkillFiles } from "../embedded-skills.js";
-import { isLocalEnabled, getRemoteConfig } from "../remote-config.js";
+import { getRemoteConfig } from "../remote-config.js";
 import { memoryStore, memoryRecall, memoryForget, memoryStats, extractAndStore, runDecayPass, importConversation, exportMemories, importMemories } from "../memory/index.js";
 
 // Enable production mode - allows using default database path
@@ -3325,7 +3325,6 @@ if (isMain) {
   }
 
   if (cli.command !== "mcp") {
-    await disposeDefaultLlamaCpp();
     process.exit(0);
   }
 
