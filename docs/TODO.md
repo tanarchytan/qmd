@@ -215,6 +215,7 @@ on LME-class workloads.
 - [ ] **`QMD_SANITY_PROBE`** — per-model top-1 cosine distribution sampler at startup, feeds the model-aware floor calibration in §1.
 - [ ] **Libuv `UV_HANDLE_CLOSING` shutdown flake** (test/cli.test.ts recall test) — pre-existing Node 25 + better-sqlite3 teardown race. Skipped. Fix when Node 26 lands or upstream resolves.
 - [ ] **LOCOMO eval LLM judge** — current F1/EM/BLEU only. Missing LLM-judge grade.
+- [ ] **AMB cross-bench `--with-judge` mode** — add an optional generation + LLM-judge step to `evaluate/amb-bench/run_qmd.py` that takes the top-K retrieved memories, asks a generator (Gemini Flash) to answer the query from that context, and asks a judge LLM to score the answer 0/1 vs gold. Produces an LLM-judged accuracy column directly comparable to Hindsight Table 3 / Supermemory / Zep / mem0 published numbers. Cost: ~2 LLM calls per question × ~500 questions × N configs = manageable on Gemini free tier per-config. Block: requires committing to a judge model + prompt, and we're focused on getting retrieval shipped first. Priority: **medium**, queued for after L# blend lands and the retrieval-only cross-bench produces its first n=500 numbers.
 
 ---
 

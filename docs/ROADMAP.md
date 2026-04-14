@@ -73,6 +73,20 @@ Only the qmd configs that are either current production candidates or
 direct comparison anchors are kept. Cross-system rows (MemPalace, mem0,
 hindsight) are preserved or queued for the bench cycle.
 
+> **⚠️ Methodological caveat.** This table reports **retrieval-only metrics**
+> (sr@k = session-id recall, r@k = token-overlap on retrieved text). Several
+> reference systems we care about — Hindsight, Supermemory, Zep, mem0 — only
+> publish **LLM-judged end-to-end accuracy** (they generate an answer with a
+> downstream LLM and ask a judge LLM to score it). **The two metrics are not
+> directly comparable.** A high-retrieval / weak-generation system scores high
+> on ours and low on theirs; a low-retrieval / strong-LLM system can do the
+> opposite. The "Reference systems (LLM-judged)" sub-table below is for
+> directional context only — never read across the methodological boundary
+> as if they were the same number. Hindsight's published 91.4% is QA accuracy
+> on Gemini-3, not retrieval recall. Source: "Hindsight is 20/20" (Latimer
+> et al., Vectorize, arXiv:2512.12818v1), Table 3. We are deferring our own
+> LLM-judged accuracy column until retrieval is shipped — see TODO §3.
+
 **Metrics columns:**
 - `sr5` — session-ID `recall_any@5`, the apples-to-apples retrieval metric.
   This is what we score. MemPalace publishes this as `R@5`.
@@ -99,7 +113,25 @@ hindsight) are preserved or queued for the bench cycle.
 | `mxbai-xs q8` baseline (prior default) | 98.2% | 90.0% | 100% | 97.0% | 98.7% | 100% | 100% | 94.2% | 15m12s | — | beat MemPalace before any night work |
 | **MemPalace raw** (live + published) ⁽ᵃ⁾ | **96.6%** | 96.7% | 99.2% | 94.7% | 100.0% | 96.4% | 91.4% | not measured ⁽ᶠ⁾ | 12m59s | 96.6% | reference anchor; live-reproduced 2026-04-14 |
 | **mem0** ⁽ᵇ⁾ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | 67.6% (LME _s) | bench setup pending, see TODO §1 |
-| ~~Hindsight~~ | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 91.4% (LME end-to-end) | **not benched — paid Vectorize cloud only**, see ⁽ᵇ⁾ |
+
+#### Reference systems — LLM-judged accuracy (Hindsight Table 3, NOT comparable to sr5 above)
+
+Per-category accuracy from "Hindsight is 20/20" (arXiv:2512.12818v1) Table 3.
+Methodology: full pipeline (memory ingest → retrieve → answer with named LLM
+→ judge LLM scores 0/1 per question). **These are not retrieval recall numbers.**
+Use this table only for directional context against systems that don't publish
+retrieval-only metrics. The qmd row is intentionally blank because we do not
+run a generation+judge step in our pipeline (see methodological caveat above).
+
+| System | s-user | s-asst | s-pref | kn-upd | temp-reas | multi-sess | **Overall** |
+|---|---|---|---|---|---|---|---|
+| **Hindsight (Gemini-3)** ⭐ | 97.1 | 96.4 | **80.0** | 94.9 | 91.0 | 87.2 | **91.4** |
+| Hindsight (OSS-120B) | 100.0 | 98.2 | 86.7 | 92.3 | 85.7 | 81.2 | 89.0 |
+| Hindsight (OSS-20B) | 95.7 | 94.6 | 66.7 | 84.6 | 79.7 | 79.7 | 83.6 |
+| Supermemory (Gemini-3) | 98.6 | 98.2 | 70.0 | 89.7 | 82.0 | 76.7 | 85.2 |
+| Supermemory (GPT-4o) | 97.1 | 96.4 | 70.0 | 88.5 | 76.7 | 71.4 | 81.6 |
+| Zep (GPT-4o) | 92.9 | 80.4 | 56.7 | 83.3 | 62.4 | 57.9 | 71.2 |
+| qmd (this repo) | — | — | — | — | — | — | — ⁽ᵍ⁾ |
 
 `(a)` MemPalace raw n=500 was re-run on 2026-04-14 against the same `longmemeval_s_cleaned.json` we use. Overall R@5 **96.6% — exact match to their published headline.** Per-category cells are actual per-question hit counts parsed from the bench stdout log and joined with `question_type` via `evaluate/mempalace-per-cat.py`. MemPalace's bench computes session-level `recall_any` — apples-to-apples with our `sr5`. **The cloned mempalace repo at `~/qmd-eval/baselines/mempalace/` was deleted 2026-04-14 after the bench landed; the metric tooling and per-question logs are preserved.**
 
@@ -110,6 +142,10 @@ hindsight) are preserved or queued for the bench cycle.
 `(e)` r5 column re-added 2026-04-14 after the L1 r5 collapse exposed the metric's real meaning. Originally we tracked r5 as the "retrieval headline" and were mortified when it dropped from 94.2% → 65.6%. The metric audit had already established sr5 as the correct retrieval metric, but r5 isn't useless — it tracks **answer-text availability in retrieved memory text**, which is what an LLM running on top of qmd would actually consume as context. The L1 collapse is mechanical: stripping assistant turns from the session-level memory text removes most of the answer tokens that token-overlap was matching, even though the session-id retrieval still hits. **Treat r5 as a hard requirement on L# blend:** the blend must keep r5 within ~5pp of the L0 baseline (94.2%) while preserving the L1 sr5-preference lift. If L# blend lands sr5 preference ≥95% AND r5 overall ≥89%, ship it. If r5 stays collapsed, the blend isn't returning enough text content per recall and we have a deeper L1-shipping problem to solve before promoting it.
 
 `(f)` MemPalace's r5 (token-overlap) was never measured. Their bench computes session-id `recall_any` only; the retrieved memory texts per question are not dumped by their bench. To populate this cell we'd need to re-clone `~/qmd-baselines/mempalace`, modify their bench to write per-question retrieved chunks, then run our r5 logic against them (~30 min). **Prefer the AMB-driven cross-bench (TODO §1)** which captures retrieved text for any provider natively and would give us r5 + sr5 + speed for mem0 / MemPalace in one harness. Mark this cell as not-measured rather than missing.
+
+`(g)` qmd row in the LLM-judged sub-table is blank because qmd ships as a retrieval framework — it returns ranked memory chunks via `memoryRecall` and does not generate or judge an answer. To populate the row we'd need to add a `--with-judge` mode to `evaluate/amb-bench/run_qmd.py` that pipes top-K through Gemini Flash and a judge LLM, scoring per-question accuracy 0/1 the way Hindsight Table 3 does. **Deferred to TODO §3** — we're getting the retrieval pipeline right first. Once retrieval is shipped, an LLM-judged reference run gives us a directly-comparable apples-to-apples number against published Hindsight / Supermemory / Zep accuracy.
+
+**Cross-table observation worth noting (carefully).** Hindsight's best system (Gemini-3) scores **80.0% LLM-judged accuracy on single-session-preference**, while qmd's bare loose-floor baseline scores **90.0% sr5 (retrieval recall)** on the same bucket. **These are not directly comparable** (different metrics, see methodological caveat) but the spread is suggestive: even in the absolute best case where qmd's retrieval feeds a perfect generator + judge, qmd is shipping at least 10pp more correct preference *sessions* into the LLM context than Hindsight's full pipeline manages to score correctly. The L1 result (96.7% sr5 preference) widens that retrieval lead to ~16pp. **None of this proves qmd would beat Hindsight end-to-end** — generation + judge could lose all of it — but it does say the retrieval pipeline is not the constraint on this bucket. The constraint, if there is one, is downstream.
 
 **Direct apples-to-apples delta** (qmd `mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1` minus MemPalace raw live):
 
@@ -1639,52 +1675,76 @@ Gap vs MemPalace: 21.3pp on R@10. Main difference: MemPalace stores 800-char chu
 
 ---
 
-## 📚 Further Reading — Sources Worth Investigating
+## 📚 Further Reading
 
-Compiled from Tinkerclaw papers + our own research. Papers most relevant to QMD's current bottlenecks.
+### Active references (inform current v17 work)
 
-### Direct relevance to atomic-vs-chunk problem
+- **Complementary Learning Systems** (McClelland, McNaughton, O'Reilly 1995) — 
+  hippocampus/neocortex theory. Directly backs L0+L1 dual-index and the L# blend:
+  fast episodic (L0) + slow semantic (L1) must run in parallel.
+- **RAPTOR** (Sarthi et al. 2024) — arXiv:2401.18059. Recursive abstractive tree.
+  Informs L# blend weight design: abstract queries (preferences) match high-level
+  nodes (L1/L2), concrete queries (assistant-said) match L0.
+- **SYNAPSE** (Jiang et al. 2026) — arXiv:2601.02744. **NEW.** Spreading activation
+  for LLM agent memory graphs. Triple hybrid retrieval (embedding + BM25 + graph
+  activation traversal). LoCoMo benchmarked. Directly relevant to Category 10
+  KG-in-recall — solves the v8 "generic entries dominate" problem via lateral
+  inhibition + temporal decay. Supersedes Collins & Loftus 1975 as the practical
+  implementation for LLM agents.
+- **DSPy** (Khattab et al. 2023) — declarative LLM pipelines. Candidate for
+  auto-optimizing v11.1 answer prompt against LME eval harness. §3 tooling.
 
-- **RAPTOR** (Sarthi et al. 2024) — Recursive Abstractive Processing for Tree-Organized Retrieval. arXiv:2401.18059. Tree of recursive summaries enables querying at multiple granularities.
-- **A-MEM** (Xu et al. 2025) — Agentic Memory for LLM Agents. arXiv:2502.12345. Self-organizing memory.
-- **Memory-R1** (Yan et al. 2025) — RL-Trained Memory Management for LLM Agents. arXiv:2505.14075.
-- **GraphRAG** (Edge et al. 2024) — From Local to Global. arXiv:2404.16130. Community-based graph RAG.
-- **MemoryBank** (Zhong et al. 2023) — arXiv:2305.10250. Long-term memory enhancement with Ebbinghaus forgetting curve.
+### Queued references (v18+ or gated on v17 outcome)
 
-### Memory architecture theory
+- **Memory-R1** (Yan et al. 2025) — arXiv:2508.19828 (**NOT** 2505.14075).
+  RL-trained Memory Manager (ADD/UPDATE/DELETE/NOOP) + Answer Agent with Memory
+  Distillation. Evaluated on LoCoMo — outperforms Mem0, A-Mem, Zep, LangMem.
+  Answer Agent's distillation is a learned version of `memoryReflect()`;
+  Memory Manager is learned `extractAndStore`. v18+ direction for replacing
+  hand-tuned importance scoring (Category 7) and CRUD heuristics.
+- **AgeMem** (Yu et al. 2026) — arXiv:2601.01885. **NEW.** Unified LTM+STM
+  management via 3-stage progressive RL. Supersedes Memory-R1 as the more
+  complete RL approach. v18+ if RL-based memory management becomes viable.
+- **GraphRAG** (Edge et al. 2024) — arXiv:2404.16130. Community-based graph RAG.
+  Relevant to Category 10 if entity graph traversal becomes a lever post-L#.
 
-- **Complementary Learning Systems** (McClelland, McNaughton, O'Reilly 1995) — hippocampus/neocortex theory backing dual-tier storage. Theoretical foundation for atomic + chunk separation.
-- **Spreading Activation Theory** (Collins & Loftus 1975) — backs knowledge graph activation patterns
-- **Hippocampal Memory Indexing** (Teyler & DiScenna 1986) — sparse pointers vs full content (Total Recall's approach)
-- **Wilson & McNaughton 1994** — sleep replay/consolidation (justifies decay + tier promotion)
+### Background / architecture theory
 
-### Cache eviction (relevant to memory pruning + decay)
+- **Complementary Learning Systems** — also listed active; the 1995 paper
+  provides the dual-system theory underlying L# blend.
+- **LRU-K** (O'Neil et al. 1993) — SIGMOD. Type-weighted eviction.
+- **MMR** — Carbonell & Goldstein 1998. Already shipped.
+- **LongMemEval** (Wu et al. 2024) — arXiv:2410.10813. Primary benchmark.
+- **"Memory in the Age of AI Agents"** survey (Hu et al. 2025) —
+  arXiv:2512.13564. **NEW.** Comprehensive curated paper list. Useful for
+  discovering gaps. GitHub: Shichun-Liu/Agent-Memory-Paper-List.
 
-- **LRU-K** (O'Neil et al. 1993) — SIGMOD. Type-weighted eviction Tinkerclaw uses.
-- **LIRS** (Jiang & Zhang 2002) — SIGMETRICS. Low inter-reference recency replacement.
-- **Belady 1966** — IBM Systems Journal. Original cache replacement algorithm theory.
+### Engineering references (non-academic, production implementations)
 
-### Benchmarks
+- **Tinkerclaw** (globalcaos, 2025-2026) — github.com/globalcaos/tinkerclaw.
+  OpenClaw fork with 21,504 commits. Internal design docs (NOT peer-reviewed
+  papers, despite the README calling them "research papers"). Techniques already
+  extracted into QMD: importance log-modulation (Instant Recall doc), LRU-K
+  eviction (Total Recall doc), Push Pack pattern (Total Recall doc), cleaning-
+  lady cron (Sleep Consolidation doc). Remaining Tinkerclaw-specific techniques
+  in §2: Identity Persistence (persona maintenance, Category 19), Round Table
+  (cross-session routing, Category 20), Fractal Reasoning (hierarchical self-
+  improvement, not relevant to retrieval).
 
-- **LongMemEval** (Wu et al. 2024) — arXiv:2410.10813. Worth running alongside LoCoMo.
-- **LOCA-bench** (Zeng et al. 2024) — arXiv:2402.07962. Long-context agent eval.
+### Dropped from active consideration
 
-### Other agent memory systems
-
-- **MemGPT** (Packer et al. 2023) — arXiv:2310.08560. Already integrated (Letta/two-tier).
-- **Generative Agents** (Park et al. 2023) — UIST. Reflection + memory streams.
-- **Reflexion** (Shinn et al. 2023) — NeurIPS. Verbal RL on memory.
-- **Voyager** (Wang et al. 2023) — arXiv:2305.16291. Skill library as memory.
-- **Mem0 paper** (2024) — arXiv:2504.19413. Already integrated.
-
-### Tinkerclaw companion papers (worth reading for v12+)
-
-- **Identity Persistence** (Serra 2026) — persona-aware context engineering
-- **Round Table** (Serra 2026) — cross-session signal routing
-- **Fractal Reasoning** (Serra 2026) — hierarchical reasoning across context boundaries
-
-### Implementation libraries / techniques
-
-- **MMR (Maximal Marginal Relevance)** — Carbonell & Goldstein 1998. Standard IR diversification.
-- **DSPy** (Khattab et al. 2023) — declarative LLM pipelines, useful for prompt optimization
-- **PromptBreeder** (Fernando et al. 2023) — self-improving prompts via evolution
+- ~~A-MEM (Xu 2025, arXiv:2502.12110)~~ — NeurIPS 2025 poster. Zettelkasten-
+  inspired dynamic memory organization. Architecturally interesting but targets
+  memory organization, not retrieval ranking. QMD's preference gap is a
+  centroid/ranking problem. Keep as awareness; not actionable for v17.
+- ~~MemoryBank / Ebbinghaus~~ — Weibull decay works; decay not the bottleneck.
+- ~~Collins & Loftus 1975~~ — superseded by SYNAPSE (2026) which implements
+  spreading activation for LLM agents directly.
+- ~~Hippocampal Memory Indexing (1986)~~ — theoretical only.
+- ~~Wilson & McNaughton 1994~~ — sleep consolidation already shipped.
+- ~~LIRS / Belady~~ — parked in §4, no production signal.
+- ~~LOCA-bench~~ — committed to LME + LoCoMo.
+- ~~MemGPT, Mem0, Generative Agents~~ — already integrated.
+- ~~Voyager~~ — skill library paradigm, not conversational memory.
+- ~~Reflexion~~ — parked §4, major arch change.
+- ~~PromptBreeder~~ — superseded by DSPy.
