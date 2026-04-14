@@ -380,13 +380,40 @@ class QmdMemoryProvider(MemoryProvider):
     # side. Cap kept modest (32) so JSON-RPC payloads stay reasonable.
     _INGEST_BATCH_SIZE = 32
 
+    def _maybe_user_only(self, content: str) -> str:
+        """L1 (user-turns-only) ingest filter. Both LME and LoCoMo serialize
+        Document.content as `json.dumps(turns)`. When QMD_INGEST_USER_ONLY=on
+        is set in env_overrides, parse the JSON, filter to turns with
+        role == "user", re-serialize. Falls back to unmodified content if the
+        parse fails or no role field is present (e.g. LoCoMo uses speaker_a/
+        speaker_b not role, so filtering is a noop there)."""
+        if self._env_overrides.get("QMD_INGEST_USER_ONLY") != "on":
+            return content
+        try:
+            turns = json.loads(content)
+            if not isinstance(turns, list):
+                return content
+            user_turns = [t for t in turns if isinstance(t, dict) and t.get("role") == "user"]
+            if not user_turns:
+                return content  # no role split → don't strip everything, keep as-is
+            return json.dumps(user_turns)
+        except (json.JSONDecodeError, TypeError):
+            return content
+
     def ingest(self, documents: list[Document]) -> None:
-        """Batched ingest via memory_store_batch (qmd commit f9a03fb+).
+        """Batched ingest via memory_store_batch (qmd commit f7a7086+).
         ~8-10x faster than per-doc memory_store calls because the embedding
         backend (transformers.js mxbai-xs q8) batches a chunk of texts in
         one forward pass, and hash-dedup + inserts both batch into single
         SQLite round-trips. Mirrors AMB hybrid_search.ingest()'s pattern of
-        collecting all texts then calling encode() once."""
+        collecting all texts then calling encode() once.
+
+        L1 filtering (user-turns-only) is applied here at the adapter level
+        because qmd's library memory_store path doesn't read the
+        QMD_INGEST_USER_ONLY env var (that var is only honored by
+        evaluate/longmemeval/eval.mts). Doing it in the adapter is the
+        smallest-scope fix and lets us test L1 through AMB without changing
+        qmd's library API."""
         for i in range(0, len(documents), self._INGEST_BATCH_SIZE):
             chunk = documents[i:i + self._INGEST_BATCH_SIZE]
             items = []
@@ -395,7 +422,7 @@ class QmdMemoryProvider(MemoryProvider):
                 if doc.timestamp:
                     metadata["timestamp"] = doc.timestamp
                 items.append({
-                    "text": doc.content,
+                    "text": self._maybe_user_only(doc.content),
                     "scope": doc.user_id or "global",
                     "metadata": metadata,
                 })
