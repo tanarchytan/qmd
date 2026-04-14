@@ -70,6 +70,7 @@ Batch-generated from the result JSON files in `~/qmd-eval/evaluate/longmemeval/`
 
 | Rank | Config | sr5 overall | multi | temp | kn-upd | s-pref | s-asst | s-user | r5 (legacy) |
 |---|---|---|---|---|---|---|---|---|---|
+| ⏳ | **`mxbai-xs q8` + loose + cross-encoder rerank** ⁽ᶜ⁾ | **TBD** | TBD | TBD | TBD | **TBD** ⭐ | TBD | TBD | TBD |
 | 1 | **`mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1`** (loose-floor) | **98.4%** ✅ | **100%** | 97.0% | 98.7% | 90.0% | 100.0% | 100.0% | 94.2% |
 | 1 | `mxbai-xs q8` + loose + MMR | 98.4% ✅ | 100% | 97.0% | 98.7% | 90.0% | 100.0% | 100.0% | 94.2% |
 | 3 | **`mxbai-xs q8` baseline** (prior production default) | **98.2%** | **100%** | 97.0% | 98.7% | 90.0% | 100.0% | 100.0% | 94.2% |
