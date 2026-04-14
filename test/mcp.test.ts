@@ -871,7 +871,15 @@ describe("MCP Server", () => {
 import { startMcpHttpServer, type HttpServerHandle } from "../src/mcp/server";
 import { enableProductionMode } from "../src/store";
 
-describe.skipIf(!!process.env.CI)("MCP HTTP Transport", () => {
+// CI gate removed 2026-04-14: original gate was added in commit 55f1646
+// (2026-03-10) with reason "Skip MCP HTTP Transport tests in CI (they
+// instantiate a real LlamaCpp)". LlamaCpp was removed in the 2026-04-13
+// cleanup. These tests no longer touch any LLM — memory_store hits FTS5
+// and SQLite, memory_recall falls back to FTS5 when no embed backend is
+// configured (CI does not set QMD_EMBED_BACKEND=transformers). Re-enabled
+// to catch HTTP transport regressions like the bin/qmd exec-bit and
+// metadata round-trip bugs found in the AMB cross-bench smoke test.
+describe("MCP HTTP Transport", () => {
   let handle: HttpServerHandle;
   let baseUrl: string;
   let httpTestDbPath: string;
