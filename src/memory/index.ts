@@ -1216,9 +1216,11 @@ export async function memoryRecall(
   }
 
   // Vector search (await the embedding(s) that started in parallel with FTS)
-  profileMark("fts_and_embed", ftsStart);
-  const vecStart = PROFILE ? performance.now() : 0;
+  profileMark("fts", ftsStart);
+  const embedWaitStart = PROFILE ? performance.now() : 0;
   const queryEmbeddings = await embeddingsPromise;
+  profileMark("embed_wait", embedWaitStart);
+  const vecStart = PROFILE ? performance.now() : 0;
   if (queryEmbeddings.some(e => e)) {
     try {
       // ── Scope-partitioned vec query ────────────────────────────────
