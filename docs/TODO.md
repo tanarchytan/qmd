@@ -2,12 +2,39 @@
 
 > Consolidated from `docs/ROADMAP.md` (categories 1-20, competitive audit, open
 > optimization opportunities) + night 2026-04-13→14 A/B discoveries +
-> 2026-04-14 code audit against the as-shipped src/.
-> Last updated: 2026-04-14.
+> 2026-04-14 code audit against the as-shipped src/ + 2026-04-15 rerank fix
+> and chunking arc.
+> Last updated: 2026-04-15.
 >
-> **Reading order:** scan §0 for "shipped but untested in eval" — these have
-> the highest leverage tonight. §1 for near-term moves. §2 for feature parity
-> with reference systems. §3 for infrastructure/tooling. §4 for parked ideas.
+> **Reading order:** §-1 for IMMEDIATE resume action (smoke v5 blocked on
+> WSL). §0 for "shipped but untested in eval". §1 for near-term moves. §2
+> for feature parity with reference systems. §3 for infrastructure/tooling.
+> §4 for parked ideas.
+
+---
+
+## §-1 — IMMEDIATE on resume (blocked by WSL recovery)
+
+- [ ] **Run smoke v5 at n=100** to validate the chunking + rerank fix
+  end-to-end. Reproduction recipe in
+  `memory/project_session_handoff_20260415.md`. Pass criteria:
+  - (a) qmd-default LME sr5 ≥88%, mrr ≥0.85, r5 ≥92% (baseline restored
+    after reverting the 2000-char truncation)
+  - (b) qmd-cerank produces DIFFERENT numbers than qmd-default on at least
+    one metric (confirms rerank backend AutoModel rewrite actually changes
+    rank order via real discriminative logits)
+  - (c) Chunking ingest wall ≤200s per cold provider on LME, retrieval
+    quality unchanged or better than v3 baseline
+  - (d) qmd-l1 LME sr5 ≥91% (L1 adapter hack still works alongside
+    chunking)
+- [ ] **If smoke v5 passes:** scale to n=500 LME + full LoCoMo run. This
+  is the cross-bench data point the whole 2026-04-14→15 arc has been
+  building toward.
+- [ ] **WSL2 workaround:** shutdown before each smoke run, workers≤2,
+  one run per session. WSL catastrophic failure (`E_UNEXPECTED`) under
+  sustained chunking workload has happened 4 times across two sessions.
+  User reboot at end of 2026-04-15 session should help. If it reproduces,
+  consider running the bench on Windows host directly.
 
 ---
 

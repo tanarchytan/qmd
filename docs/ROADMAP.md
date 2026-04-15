@@ -1,11 +1,163 @@
 # QMD Roadmap
 
 > For agents: this file tracks all pending work and benchmark history. Read this first when resuming a session.
-> Last updated: 2026-04-12 (post-graphify, pre-compaction snapshot)
+> Last updated: 2026-04-15 (post-rerank-fix + chunking, smoke v5 blocked on WSL)
 
 **Package:** `@tanarchy/qmd` — npm (`@dev` tag for dev branch, `@fork` tag for stable)
 **Repo:** `github.com/tanarchytan/qmd` — `main` (stable) + `dev` (active development)
 **Branch:** Work on `dev`, merge to `main` when stable.
+
+---
+
+## 🔥 2026-04-15 session — rerank silent no-op FIXED, chunking shipped
+
+**Headline:** Cross-encoder rerank has been a **silent no-op on rank order**
+since commit `773b079` (2026-04-14 ship). `qmd-default` and `qmd-cerank`
+produced byte-identical cross-bench results across n=20 and n=100 because
+every rerank score came back as exactly `1.0`, making the 40/60 blend
+`0.4*cosine + 0.6*1.0 = 0.4*cosine + 0.6` preserve cosine ordering.
+
+### Root cause
+
+`TransformersRerankBackend.rerank()` used
+`pipeline("text-classification")` from transformers.js. That pipeline
+applies softmax over the model's class labels. But
+`cross-encoder/ms-marco-MiniLM-L6-v2` has a **single output neuron** —
+it's a relevance regressor, not a multi-class classifier. Softmax over
+one class is always = 1.0 regardless of the underlying logit. The
+pipeline was silently throwing away all the discriminative signal.
+
+`function_to_apply: 'none'` did NOT help — the pipeline still applies
+softmax internally on this architecture.
+
+### The fix (commit `dd2a7c1`)
+
+Bypass the pipeline entirely. Call `AutoTokenizer` +
+`AutoModelForSequenceClassification` directly. The model returns
+`{logits: Tensor[N, 1]}` with one raw pre-softmax logit per pair.
+
+**Standalone verification** (query "what are cats"):
+
+| Document | Raw logit |
+|---|---|
+| "cats are small carnivorous mammals kept as pets" | **+8.73** |
+| "feline pets are popular companion animals" | **−1.32** |
+| "mountains are tall geological formations" | **−10.99** |
+| "the apple is on the table" | **−11.32** |
+
+Range = 20.05 logit-units. Plenty of signal for the existing qmd
+score-blend at `memoryRecall` line 1244 to produce meaningful rank
+changes.
+
+### Regression test shipped (`test/transformers-rerank.test.ts`)
+
+Asserts `relevant - irrelevant > 5` logit-units. Gated behind
+`QMD_RUN_TRANSFORMERS_TEST=1` env var so CI doesn't pull the 23MB model
+on every PR. Passes locally in 4.3s. **This is the test commit
+`773b079` should have shipped** — it would have caught the softmax bug
+instantly. Wired into the existing vitest CI run path via the env gate.
+
+### Chunking shipped (commit `a478549`)
+
+Real perf + quality fix for the ~10KB LME session text problem.
+
+- New `MemoryStoreOptions.chunk?: boolean` flag.
+- `memoryStoreBatch` gains a Phase 0 expansion: when `chunk: true` and
+  text > 1536 chars (≈512 tokens), split via `chunkDocument()` from
+  `src/store/chunking.ts`. Each chunk becomes its own row sharing
+  `metadata.doc_id` (auto-assigned UUID if caller didn't set one) +
+  `metadata.chunk_seq` + `metadata.chunk_pos`.
+- Chunk-items flow through the existing hash-dedup + batched embed +
+  bulk INSERT path unchanged. Each chunk is its own vector in
+  `memories_vec`.
+- Result projection collapses per-chunk results back to per-original-
+  item: original input gets the FIRST chunk's id; status is `created`
+  if any chunk landed new, `duplicate` only if every chunk was already
+  present.
+- MCP `memory_store_batch` tool surfaces the `chunk` field.
+- AMB adapter sets `chunk: true` on every item and dedupes retrieval by
+  `metadata.doc_id` with `k*4` prefetch, keeping the first (highest-
+  scoring) chunk per unique doc. Without this, 1 doc with 5 chunks in
+  the top-K would block 4 other docs from appearing.
+
+Mirrors AMB hybrid_search's multi-vector pattern. Reuses existing
+`chunkDocument()` — no new table, no schema changes, no new dependency.
+Pure additive feature.
+
+### Truncation regression reverted (same commit as rerank fix)
+
+The 2000-char cap from smoke v4 (commit `678033b`) catastrophically
+regressed LME metrics at n=100:
+
+| Metric | v3 (no trunc) | v4 (2000-char) | Δ |
+|---|---|---|---|
+| LME sr5 | 88.0% | 79.0% | −9pp |
+| LME mrr | 0.863 | **0.373** | **−49pp** |
+| LME r5 | 93.0% | 52.0% | −41pp |
+| LME sh | 69.0% | 31.0% | −38pp |
+
+Truncation cut answer-bearing content past char 2000. Chunking is the
+correct fix — splits long docs into pieces instead of throwing content
+away. Reverted in commit `dd2a7c1` alongside the rerank fix.
+
+### NOT YET VALIDATED END-TO-END
+
+Smoke v5 at n=100 to verify chunking + rerank fix was **killed by
+`Wsl/Service/E_UNEXPECTED`** before producing any data. Second WSL2
+catastrophic failure this session. Same bug as the night cycle —
+WSL2 cgroup limit under sustained transformers.js + sqlite-vec
+workload.
+
+**Resume action:** after WSL restart (user is rebooting after this
+session), re-run smoke v5 once per WSL session. Expected pass criteria:
+
+1. qmd-default LME sr5 ≥88%, mrr ≥0.85, r5 ≥92% (baseline restored)
+2. qmd-cerank produces DIFFERENT numbers than qmd-default on at least
+   one metric (confirms rerank fix)
+3. Chunking ingest wall ≤200s per cold provider, retrieval quality
+   unchanged or better than v3 baseline
+4. qmd-l1 LME sr5 ≥91% (L1 still works alongside chunking)
+
+Reproduction recipe in `project_session_handoff_20260415.md`.
+
+### Secondary wins from this session (not the headline)
+
+- `52d4189` — eval incremental save (partial writes every 10 questions)
+  so WSL crashes + kills don't lose entire runs. Shipped after two
+  crashes lost complete runs in the night cycle.
+- `d70fa7a` — 129 lines of dead LlamaCpp stub layer removed from
+  `src/llm.ts`, `remote-config.ts`, 5 test files. Confirmed by grep
+  that nothing in `src/` calls `getDefaultLlamaCpp()` anymore.
+- `58e4655` — `bin/qmd` exec-bit was missing from the git index.
+  Windows ignored the bit; any Linux/WSL clone had a non-executable
+  shell script. Caught by AMB smoke test.
+- `f8e4e9d` — `src/llm/remote.ts:400` was importing
+  `evaluate/_shared/llm-cache.ts`, which expanded tsc's auto-detected
+  rootDir to the repo root and mapped `src/cli/qmd.ts` to
+  `dist/src/cli/qmd.js` on fresh Linux clones. Moved llm-cache into
+  `src/llm/cache.ts`, pinned `tsconfig.build.json` `rootDir: "src"`.
+  **This was the "fresh clone doesn't build" puzzle.**
+- `aca1b15` — re-enabled `describe("MCP HTTP Transport")` in CI. The
+  `skipIf(!!process.env.CI)` gate was added 2026-03-10 because tests
+  "instantiate a real LlamaCpp"; LlamaCpp was removed. 50 passed + 4
+  still-skipped in 4.37s with CI=true. Restores real CI signal on the
+  qmd MCP HTTP contract — would have caught the bin/qmd exec-bit
+  instantly.
+- `ec6caf7` — 222 lines of dead LlamaCpp test blocks removed from
+  `test/mcp.test.ts` and `test/store.test.ts`. Included tests that
+  had been silently skipped for 2+ months via `describe.skip`.
+- `677114f` — MCP metadata round-trip vitest test added to
+  `test/mcp.test.ts`. Asserts `metadata.doc_id` survives
+  `memory_store` → `memory_recall`.
+- `3ac94d6` — `memoryStoreBatch` bulk multi-VALUES INSERTs, new
+  `skipHistory` option, `ensureScopePartitions` helper + new
+  `memory_register_scopes` MCP tool. Perf optimizations that DIDN'T
+  move the needle on n=100 — the actual bottleneck was tokenization
+  on long text, which chunking addresses.
+- `cf8c7f6` — `INDEX_PATH` per-provider isolation. The AMB adapter
+  was setting `QMD_CACHE_DIR` (which qmd doesn't read); all 3 configs
+  in the sweep were sharing `~/.cache/qmd/index.sqlite` and producing
+  near-identical cross-config results via state leakage. Real bug.
 
 ---
 
