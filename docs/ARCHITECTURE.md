@@ -4,6 +4,18 @@ How qmd's memory framework actually works, end-to-end. Covers ingest,
 recall, reranking, decay/dream consolidation, knowledge graph, and the
 tiered storage model. Source-file references at the end of each section.
 
+> **On benchmark metrics:** see `docs/notes/metrics.md` for the full
+> walkthrough of `recall_any@K` (binary, what
+> agentmemory/mem0/MemPalace publish as "R@K") vs `R@K` (fractional,
+> LongMemEval paper definition) vs `Cov@K` (qmd-specific token-overlap
+> content coverage, **NOT** comparable externally) vs LLM-judge QA
+> accuracy (what Supermemory/Hindsight publish, requires `evaluate_qa.py`).
+> The eval harness in `evaluate/longmemeval/eval.mts` reports all three
+> retrieval families side-by-side. **Never compare a qmd "R@5" to a
+> competitor's "R@5" without checking which family each one is in** —
+> see the 2026-04-15 ROADMAP entry for the day this rule cost us six
+> hours.
+
 ## Overview
 
 qmd is a memory framework for AI agents. It does the things you'd expect

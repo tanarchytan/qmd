@@ -1,7 +1,52 @@
 # QMD Roadmap
 
 > For agents: this file tracks all pending work and benchmark history. Read this first when resuming a session.
-> Last updated: 2026-04-15 (post-rerank-fix + chunking, smoke v5 blocked on WSL)
+> Last updated: 2026-04-15 (metric rigor + n=500 corrected baseline)
+
+---
+
+## 🟢 2026-04-15 — metric rigor fixes shipped, corrected n=500 baseline
+
+**Headline:** Closed the metric-naming-collision arc. The whole "82%
+multi-session ceiling" we chased earlier was qmd's token-overlap content
+coverage being mistaken for retrieval recall. qmd's true session-id
+binary recall (the metric agentmemory/mem0/MemPalace publish as "R@5")
+already beats agentmemory's 95.2% headline.
+
+**eval.mts rigor fixes (commit `815c56b`):**
+- Added fractional `R@K` per LongMemEval paper (`|gold ∩ retrieved_top_k| / |gold|`)
+- Fixed NDCG IDCG bug (`min(k, |gold|)` instead of found-gold count) — NDCG@10 went 0.828 → 0.917 and now correctly diverges from MRR on multi-session
+- Added `dedupBySession` helper so chunked ingest paths can't double-count
+- Added abstention null-skip (defensive — our LME _s cleaned has 0 abstention)
+- Renamed token-overlap metrics to `computeContent*` to stop the collision
+
+**n=500 corrected baseline (mxbai-xs q8, 14m16s):**
+
+| Bucket | n | recall_any@5 (binary) | R@5 (fractional) | NDCG@10 | MRR |
+|---|---|---|---|---|---|
+| knowledge-update | 78 | 97% | 96% | 0.960 | 0.953 |
+| **multi-session** | 133 | **99%** | **88%** | 0.905 | 0.944 |
+| single-session-assistant | 56 | 100% | 100% | 1.000 | 1.000 |
+| single-session-preference | 30 | 93% | 93% | 0.776 | 0.713 |
+| single-session-user | 70 | 100% | 100% | 0.955 | 0.941 |
+| temporal-reasoning | 133 | 95% | 89% | 0.878 | 0.874 |
+| **OVERALL** | 500 | **97.6%** | **92.9%** | **0.917** | **0.919** |
+
+Multi-session `R@5 = 88%` (fractional) vs `recall_any@5 = 99%` (binary)
+is the live verification that `dedupBySession` + `sessionIdOf` work
+correctly — fractional must be ≤ binary on questions with multiple gold
+sessions, and the gap appears only where it should.
+
+**Externally-comparable claims:**
+- vs agentmemory/mem0/MemPalace: cite `recall_any@5 = 97.6%` (their "R@5")
+- vs LongMemEval paper: cite `R@5 = 92.9%` (fractional)
+- vs Supermemory/Hindsight: not possible without LLM-judge QA mode (deferred)
+
+The real remaining gap is **single-session-preference NDCG@10 = 0.776 /
+MRR = 0.713** — that bucket's first-relevant-result lands later than
+elsewhere. Next investigation target.
+
+---
 
 **Package:** `@tanarchy/qmd` — npm (`@dev` tag for dev branch, `@fork` tag for stable)
 **Repo:** `github.com/tanarchytan/qmd` — `main` (stable) + `dev` (active development)
