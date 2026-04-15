@@ -29,7 +29,7 @@ loadQmdEnv();
 
 const { openDatabase } = await import(toUrl(join(QMD_DIR, "src/db.ts")));
 const { initializeDatabase } = await import(toUrl(join(QMD_DIR, "src/store/db-init.ts")));
-const { memoryStore, memoryStoreBatch, memoryRecall, extractAndStore, extractReflections, consolidateEntityFacts, runDecayPass, memoryReflect } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
+const { memoryStore, memoryStoreBatch, memoryRecall, extractAndStore, extractReflections, consolidateEntityFacts, runDecayPass, memoryReflect, turnsToText } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
 
 type Database = ReturnType<typeof openDatabase>;
 
@@ -427,8 +427,7 @@ async function main() {
             turnBatch.push({ text, scope, metadata: { source_session_id: sessionId, turn_index: t } });
           }
         }
-        const sessionTurns = userOnlySession ? turns.filter(t => t.role === "user") : turns;
-        const sessionText = sessionTurns.map(t => `${t.role}: ${t.content}`).join("\n");
+        const sessionText = turnsToText(turns, userOnlySession);
         if (storeSessions && date) {
           turnBatch.push({ text: `[${date}]\n${sessionText}`, scope, importance: 0.7, metadata: { source_session_id: sessionId } });
         }

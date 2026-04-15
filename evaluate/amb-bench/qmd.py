@@ -391,25 +391,19 @@ class QmdMemoryProvider(MemoryProvider):
     # mxbai-xs is 384d. Override via env if you swap embed model.
     _EMBED_DIMENSIONS = 384
 
-    def _maybe_user_only(self, content: str) -> str:
-        """L1 (user-turns-only) ingest filter. Both LME and LoCoMo serialize
-        Document.content as `json.dumps(turns)`. When QMD_INGEST_USER_ONLY=on
-        is set in env_overrides, parse the JSON, filter to turns with
-        role == "user", re-serialize. Falls back to unmodified content if the
-        parse fails or no role field is present (e.g. LoCoMo uses speaker_a/
-        speaker_b not role, so filtering is a noop there)."""
-        if self._env_overrides.get("QMD_INGEST_USER_ONLY") != "on":
-            return content
+    def _to_turns(self, content: str) -> list[dict] | None:
+        """Parse Document.content as conversation turns. LME + LoCoMo both
+        serialize turns as json.dumps(list[dict]) with `role` + `content`.
+        Returns None for non-turn content (leave adapter to pass text as-is)."""
         try:
             turns = json.loads(content)
-            if not isinstance(turns, list):
-                return content
-            user_turns = [t for t in turns if isinstance(t, dict) and t.get("role") == "user"]
-            if not user_turns:
-                return content  # no role split → don't strip everything, keep as-is
-            return json.dumps(user_turns)
         except (json.JSONDecodeError, TypeError):
-            return content
+            return None
+        if not isinstance(turns, list):
+            return None
+        if not all(isinstance(t, dict) and "role" in t and "content" in t for t in turns):
+            return None
+        return turns
 
     def ingest(self, documents: list[Document]) -> None:
         """Batched ingest via memory_store_batch + pre-warmed vec0 partitions.
@@ -426,12 +420,13 @@ class QmdMemoryProvider(MemoryProvider):
         3. **Per-item flags**: skipHistory=True (no audit trail needed for
            bench), category="other" (skips the per-item regex classifier).
 
-        L1 filtering (user-turns-only) is applied here because qmd's library
-        memoryStore path doesn't read QMD_INGEST_USER_ONLY (that var is only
-        honored by evaluate/longmemeval/eval.mts). Doing it in the adapter is
-        the smallest-scope fix and lets us test L1 through AMB without
-        changing qmd's library API.
+        L1 filtering (user-turns-only) is now a first-class qmd library
+        feature: pass structured `turns` + `userOnly` on each batch item
+        and qmd normalizes them via turnsToText. Falls back to passing raw
+        text when content isn't a turns JSON blob (LoCoMo sometimes gives
+        plain strings).
         """
+        user_only = self._env_overrides.get("QMD_INGEST_USER_ONLY") == "on"
         # Pre-warm partitions for the full scope set in one tool call.
         # Idempotent — re-registering existing scopes is a no-op on the qmd side.
         unique_scopes = sorted({doc.user_id or "global" for doc in documents})
@@ -452,23 +447,22 @@ class QmdMemoryProvider(MemoryProvider):
                 metadata: dict = {"doc_id": doc.id}
                 if doc.timestamp:
                     metadata["timestamp"] = doc.timestamp
-                # Apply L1 user-only filter if enabled in env_overrides.
-                text = self._maybe_user_only(doc.content)
-                items.append({
-                    "text": text,
+                item: dict = {
                     "scope": doc.user_id or "global",
                     "metadata": metadata,
-                    # Bench doesn't need history tracking — skip the
-                    # per-item memory_history INSERT.
                     "skipHistory": True,
-                    # Skip the per-item classifier regex pass.
                     "category": "other",
-                    # Chunk long docs into ~512-token pieces for better
-                    # multi-vector coverage. Each chunk shares metadata.doc_id
-                    # so retrieval can dedupe back to the source doc.
                     "chunk": True,
-                })
-            self._call_tool("memory_store_batch", {"items": items})
+                }
+                turns = self._to_turns(doc.content)
+                if turns is not None:
+                    item["turns"] = turns
+                    if user_only:
+                        item["userOnly"] = True
+                else:
+                    item["text"] = doc.content
+                items.append(item)
+            self._call_tool("memory_add_batch", {"items": items})
 
     def retrieve(
         self,
@@ -484,7 +478,7 @@ class QmdMemoryProvider(MemoryProvider):
         # collapse to fewer unique docs than the caller asked for.
         prefetch = k * 4
         result = self._call_tool(
-            "memory_recall",
+            "memory_search",
             {"query": query, "scope": scope, "limit": prefetch},
         )
         # MCP tools return their structured payload under structuredContent.

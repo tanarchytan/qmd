@@ -103,7 +103,7 @@ import {
 } from "../collections.js";
 import { getEmbeddedQmdSkillContent, getEmbeddedQmdSkillFiles } from "../embedded-skills.js";
 import { getRemoteConfig } from "../remote-config.js";
-import { memoryStore, memoryRecall, memoryForget, memoryStats, extractAndStore, runDecayPass, importConversation, exportMemories, importMemories } from "../memory/index.js";
+import { memoryStore, memoryRecall, memoryForget, memoryStats, extractAndStore, runDecayPass, importConversation, exportMemories, importMemories, runCleanupPass, runReflectionPass } from "../memory/index.js";
 
 // Enable production mode - allows using default database path
 // Tests must set INDEX_PATH or use createStore() with explicit path
@@ -422,10 +422,10 @@ async function showStatus(): Promise<void> {
   // Models — local embed via @huggingface/transformers (TransformersEmbedBackend).
   // Rerank/generate are remote-only post-cleanup.
   console.log(`\n${c.bold}Local Embed${c.reset}`);
-  console.log(`  Model:       ${process.env.QMD_EMBED_MODEL ?? DEFAULT_EMBED_MODEL_URI}`);
-  console.log(`  Dtype:       ${process.env.QMD_EMBED_DTYPE ?? "q8"}`);
-  if (process.env.QMD_EMBED_FILE) {
-    console.log(`  File:        ${process.env.QMD_EMBED_FILE}`);
+  console.log(`  Model:       ${process.env.QMD_TRANSFORMERS_MODEL ?? process.env.QMD_EMBED_MODEL ?? DEFAULT_EMBED_MODEL_URI}`);
+  console.log(`  Dtype:       ${process.env.QMD_TRANSFORMERS_DTYPE ?? "q8"}`);
+  if (process.env.QMD_TRANSFORMERS_FILE) {
+    console.log(`  File:        ${process.env.QMD_TRANSFORMERS_FILE}`);
   }
 
   // Show remote providers when configured (always, not just when local is off)
@@ -2377,6 +2377,7 @@ function parseCLI() {
       files: { type: "boolean" },
       json: { type: "boolean" },
       explain: { type: "boolean" },
+      "explain-json": { type: "boolean" },  // alias for --json --explain
       collection: { type: "string", short: "c", multiple: true },  // Filter by collection(s)
       // Collection options
       name: { type: "string" },  // collection name
@@ -2413,6 +2414,13 @@ function parseCLI() {
   if (indexName) {
     setIndexName(indexName);
     setConfigIndexName(indexName);
+  }
+
+  // --explain-json is sugar for `--json --explain` — single flag so
+  // tooling pipelines can ask for the full retrieval trace with one switch.
+  if (values["explain-json"]) {
+    values.json = true;
+    values.explain = true;
   }
 
   // Determine output format
@@ -2662,6 +2670,7 @@ function showHelp(): void {
   console.log("  --no-rerank                - Skip LLM reranking (use RRF scores only, much faster on CPU)");
   console.log("  --line-numbers             - Include line numbers in output");
   console.log("  --explain                  - Include retrieval score traces (query --json/CLI)");
+  console.log("  --explain-json             - Shortcut for --json --explain (full structured trace)");
   console.log("  --files | --json | --csv | --md | --xml  - Output format");
   console.log("  -c, --collection <name>    - Filter by one or more collections");
   console.log("");
@@ -3008,7 +3017,7 @@ if (isMain) {
       console.log(`${c.bold}qmd pull is deprecated${c.reset}`);
       console.log(`Local embed via @huggingface/transformers downloads on first use.`);
       console.log(`Default model: ${DEFAULT_EMBED_MODEL_URI}`);
-      console.log(`Override via QMD_EMBED_MODEL / QMD_EMBED_DTYPE / QMD_EMBED_FILE.`);
+      console.log(`Override via QMD_TRANSFORMERS_MODEL / QMD_TRANSFORMERS_DTYPE / QMD_TRANSFORMERS_FILE.`);
       break;
     }
 
@@ -3298,6 +3307,45 @@ if (isMain) {
       } else {
         console.error("Usage: qmd memory <store|recall|forget|extract|stats|decay|import|export> [args]");
         process.exit(1);
+      }
+      closeDb();
+      break;
+    }
+
+    case "dream": {
+      // Manual consolidation pass — mirrors the OpenClaw plugin's dream gate.
+      // Runs decay + optional eviction + reflection synthesis over recent
+      // memories. Safe to call on-demand; respects existing tier/importance.
+      const db = getDb();
+      const scopeArg = cli.args[0];
+      const cleanup = runCleanupPass(db, {
+        minMemoriesForEviction: 1000,
+        maxAgeDays: 30,
+        minImportance: 0.4,
+        minAccessCount: 2,
+        lruWindowDays: 7,
+      });
+      const decayLog = cleanup.decay
+        ? `decay ${cleanup.decay.processed}→${cleanup.decay.promoted}p/${cleanup.decay.demoted}d`
+        : "decay skipped";
+      const evictLog = cleanup.eviction
+        ? `eviction ${cleanup.eviction.evicted}/${cleanup.eviction.evaluated}`
+        : "eviction skipped";
+      console.log(`cleanup — ${decayLog}, ${evictLog}, ${cleanup.totalMemoriesBefore} → ${cleanup.totalMemoriesAfter} memories`);
+      try {
+        const reflect = await runReflectionPass(db, {
+          scope: scopeArg,
+          windowDays: 7,
+          minMemories: 5,
+          maxReflections: 5,
+        });
+        if (reflect.skipped) {
+          console.log(`reflection skipped: ${reflect.reason || "unknown"}`);
+        } else {
+          console.log(`reflections generated — ${reflect.reflections}`);
+        }
+      } catch (err) {
+        console.error(`reflection failed: ${err instanceof Error ? err.message : err}`);
       }
       closeDb();
       break;

@@ -1018,13 +1018,16 @@ describe("MCP HTTP Transport", () => {
     expect(contentType).toContain("application/json");
 
     const toolNames = json.result.tools.map((t: any) => t.name);
-    expect(toolNames).toContain("query");
-    expect(toolNames).toContain("get");
-    expect(toolNames).toContain("status");
+    expect(toolNames).toContain("doc_search");
+    expect(toolNames).toContain("doc_get");
+    expect(toolNames).toContain("doc_status");
+    // Old names must be gone — canonical-only surface.
+    expect(toolNames).not.toContain("query");
+    expect(toolNames).not.toContain("memory_store");
+    expect(toolNames).not.toContain("memory_recall");
   });
 
-  test("POST /mcp tools/call query returns results", async () => {
-    // Initialize
+  test("POST /mcp tools/call doc_search returns results", async () => {
     await mcpRequest({
       jsonrpc: "2.0", id: 1, method: "initialize",
       params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1.0" } },
@@ -1032,17 +1035,15 @@ describe("MCP HTTP Transport", () => {
 
     const { status, json } = await mcpRequest({
       jsonrpc: "2.0", id: 3, method: "tools/call",
-      params: { name: "query", arguments: { searches: [{ type: "lex", query: "readme" }] } },
+      params: { name: "doc_search", arguments: { searches: [{ type: "lex", query: "readme" }] } },
     });
     expect(status).toBe(200);
     expect(json.result).toBeDefined();
-    // Should have content array with text results
     expect(json.result.content.length).toBeGreaterThan(0);
     expect(json.result.content[0].type).toBe("text");
   });
 
-  test("POST /mcp tools/call get returns document", async () => {
-    // Initialize
+  test("POST /mcp tools/call doc_get returns document", async () => {
     await mcpRequest({
       jsonrpc: "2.0", id: 1, method: "initialize",
       params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1.0" } },
@@ -1050,7 +1051,7 @@ describe("MCP HTTP Transport", () => {
 
     const { status, json } = await mcpRequest({
       jsonrpc: "2.0", id: 4, method: "tools/call",
-      params: { name: "get", arguments: { path: "readme.md" } },
+      params: { name: "doc_get", arguments: { path: "readme.md" } },
     });
     expect(status).toBe(200);
     expect(json.result).toBeDefined();
@@ -1061,13 +1062,13 @@ describe("MCP HTTP Transport", () => {
   // Memory tools — metadata round-trip
   //
   // Regression test for the AMB cross-bench adapter: external callers need
-  // to round-trip arbitrary doc IDs through qmd via the metadata field added
-  // in commit 2d85b8a. memory_store must accept metadata, memory_recall must
-  // surface it as a parsed object on structuredContent.results[i].metadata.
-  // Without this contract, sr5-style scoring against gold IDs is impossible.
+  // to round-trip arbitrary doc IDs through qmd via the metadata field.
+  // memory_add must accept metadata, memory_search must surface it as a
+  // parsed object on structuredContent.results[i].metadata. Without this
+  // contract, sr5-style scoring against gold IDs is impossible.
   // ---------------------------------------------------------------------------
 
-  test("POST /mcp tools/call memory_store + memory_recall round-trips metadata.doc_id", async () => {
+  test("POST /mcp tools/call memory_add + memory_search round-trips metadata.doc_id", async () => {
     // Initialize
     await mcpRequest({
       jsonrpc: "2.0", id: 1, method: "initialize",
@@ -1082,7 +1083,7 @@ describe("MCP HTTP Transport", () => {
     const storeRes = await mcpRequest({
       jsonrpc: "2.0", id: 100, method: "tools/call",
       params: {
-        name: "memory_store",
+        name: "memory_add",
         arguments: {
           text: uniqueText,
           scope,
@@ -1098,7 +1099,7 @@ describe("MCP HTTP Transport", () => {
     const recallRes = await mcpRequest({
       jsonrpc: "2.0", id: 101, method: "tools/call",
       params: {
-        name: "memory_recall",
+        name: "memory_search",
         arguments: { query: uniqueText, scope, limit: 5 },
       },
     });
@@ -1109,8 +1110,7 @@ describe("MCP HTTP Transport", () => {
     expect(Array.isArray(results)).toBe(true);
     expect(results.length).toBeGreaterThan(0);
 
-    // metadata must be a parsed object (not a JSON string), per the
-    // memory_recall enrichment added in commit 2d85b8a
+    // metadata must be a parsed object (not a JSON string)
     const hit = results.find((r: any) => r.text === uniqueText);
     expect(hit).toBeDefined();
     expect(hit.metadata).toBeDefined();
@@ -1118,5 +1118,81 @@ describe("MCP HTTP Transport", () => {
     expect(hit.metadata.doc_id).toBe(docId);
     expect(hit.metadata.source_session_id).toBe("session-xyz");
     expect(hit.metadata.custom).toBe(42);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Canonical CRUD surface — memory_get / memory_list / memory_delete /
+  // memory_dream. memory_add + memory_search are exercised by the
+  // metadata round-trip test above.
+  // ---------------------------------------------------------------------------
+
+  test("POST /mcp tools/call memory_get + memory_list + memory_delete", async () => {
+    await mcpRequest({
+      jsonrpc: "2.0", id: 1, method: "initialize",
+      params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1.0" } },
+    });
+
+    const nonce = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const uniqueText = `zxqvtm7 lwkrj3 canonical-crud-nonce-${nonce} timestamp ${Date.now()}`;
+    const scope = `mcp-canonical-${Date.now()}-${nonce}`;
+
+    const addRes = await mcpRequest({
+      jsonrpc: "2.0", id: 200, method: "tools/call",
+      params: { name: "memory_add", arguments: { text: uniqueText, scope, metadata: { tag: "canonical" } } },
+    });
+    expect(addRes.status).toBe(200);
+
+    const searchRes = await mcpRequest({
+      jsonrpc: "2.0", id: 201, method: "tools/call",
+      params: { name: "memory_search", arguments: { query: uniqueText, scope, limit: 5 } },
+    });
+    const results = searchRes.json.result.structuredContent?.results;
+    const hit = results.find((r: any) => r.text === uniqueText);
+    expect(hit).toBeDefined();
+
+    // memory_get by id
+    const getRes = await mcpRequest({
+      jsonrpc: "2.0", id: 202, method: "tools/call",
+      params: { name: "memory_get", arguments: { id: hit.id } },
+    });
+    expect(getRes.status).toBe(200);
+    expect(getRes.json.result.structuredContent?.id).toBe(hit.id);
+    expect(getRes.json.result.structuredContent?.text).toBe(uniqueText);
+
+    // memory_list scoped browse
+    const listRes = await mcpRequest({
+      jsonrpc: "2.0", id: 203, method: "tools/call",
+      params: { name: "memory_list", arguments: { scope, limit: 10 } },
+    });
+    expect(listRes.status).toBe(200);
+    const listed = listRes.json.result.structuredContent?.results;
+    expect(Array.isArray(listed)).toBe(true);
+    expect(listed.some((r: any) => r.id === hit.id)).toBe(true);
+
+    // memory_delete
+    const delRes = await mcpRequest({
+      jsonrpc: "2.0", id: 204, method: "tools/call",
+      params: { name: "memory_delete", arguments: { id: hit.id } },
+    });
+    expect(delRes.status).toBe(200);
+    expect(delRes.json.result.content[0].text).toMatch(/deleted/);
+  });
+
+  test("POST /mcp tools/call memory_dream runs consolidation pass", async () => {
+    await mcpRequest({
+      jsonrpc: "2.0", id: 1, method: "initialize",
+      params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1.0" } },
+    });
+
+    const dreamRes = await mcpRequest({
+      jsonrpc: "2.0", id: 300, method: "tools/call",
+      params: { name: "memory_dream", arguments: {} },
+    });
+    expect(dreamRes.status).toBe(200);
+    expect(dreamRes.json.result.content[0].text).toMatch(/dream —/);
+    const sc = dreamRes.json.result.structuredContent;
+    expect(sc.cleanup).toBeDefined();
+    expect(typeof sc.cleanup.totalMemoriesBefore).toBe("number");
+    expect(sc.reflection).toBeDefined();
   });
 });

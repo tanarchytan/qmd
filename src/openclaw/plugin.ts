@@ -6,8 +6,8 @@
  * session transcript export automatically.
  *
  * This plugin ADDS on top of the built-in backend:
- * - Conversation memory (memory_store/recall/forget/extract/update)
- * - Knowledge graph (knowledge_store/query/invalidate)
+ * - Conversation memory (memory_add/search/delete/extract/update)
+ * - Knowledge graph (knowledge_add/search/invalidate)
  * - Auto-capture: extracts memories from conversations after each turn
  * - Auto-recall: injects relevant memories before each turn
  * - Dream consolidation: decay pass + session corpus ingestion
@@ -346,7 +346,7 @@ const qmdPlugin = definePluginEntry({
 
     const tools = [
       {
-        name: "qmd_memory_store",
+        name: "qmd_memory_add",
         description: "Store a memory with auto-dedup and auto-classification",
         parameters: { type: "object", properties: { text: { type: "string" }, category: { type: "string" }, importance: { type: "number" } }, required: ["text"] },
         execute: async (_id: string, params: any) => {
@@ -356,7 +356,7 @@ const qmdPlugin = definePluginEntry({
         },
       },
       {
-        name: "qmd_memory_recall",
+        name: "qmd_memory_search",
         description: "Search memories by natural language",
         parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "number" } }, required: ["query"] },
         execute: async (_id: string, params: any) => {
@@ -368,7 +368,7 @@ const qmdPlugin = definePluginEntry({
         },
       },
       {
-        name: "qmd_memory_forget",
+        name: "qmd_memory_delete",
         description: "Delete a memory by ID",
         parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
         execute: async (_id: string, params: any) => {
@@ -386,7 +386,7 @@ const qmdPlugin = definePluginEntry({
         },
       },
       {
-        name: "qmd_knowledge_store",
+        name: "qmd_knowledge_add",
         description: "Store a temporal fact (auto-invalidates conflicts)",
         parameters: { type: "object", properties: { subject: { type: "string" }, predicate: { type: "string" }, object: { type: "string" } }, required: ["subject", "predicate", "object"] },
         execute: async (_id: string, params: any) => {
@@ -398,7 +398,7 @@ const qmdPlugin = definePluginEntry({
         },
       },
       {
-        name: "qmd_knowledge_query",
+        name: "qmd_knowledge_search",
         description: "Query the knowledge graph",
         parameters: { type: "object", properties: { subject: { type: "string" }, predicate: { type: "string" } } },
         execute: async (_id: string, params: any) => {

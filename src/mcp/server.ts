@@ -40,7 +40,7 @@ import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections
 // already get this via src/cli/qmd.ts:110 — calling here is a noop for them
 // and a critical safety net for everyone else. Upstream tobi/qmd 9dd8a73.
 enableProductionMode();
-import { memoryStore, memoryStoreBatch, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, extractAndStore, ensureScopePartitions, knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeTimeline, knowledgeStats, MEMORY_CATEGORIES } from "../memory/index.js";
+import { memoryStore, memoryStoreBatch, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, runCleanupPass, runReflectionPass, memoryReflect, extractAndStore, ensureScopePartitions, knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeTimeline, knowledgeStats, MEMORY_CATEGORIES } from "../memory/index.js";
 
 // =============================================================================
 // Types for structured content
@@ -206,6 +206,7 @@ async function createMcpServer(store: QMDStore): Promise<McpServer> {
   // Pre-fetch default collection names for search tools
   const defaultCollectionNames = await store.getDefaultCollectionNames();
 
+
   // ---------------------------------------------------------------------------
   // Resource: qmd://{path} - read-only access to documents by path
   // Note: No list() - documents are discovered via search tools
@@ -264,9 +265,9 @@ async function createMcpServer(store: QMDStore): Promise<McpServer> {
   });
 
   server.registerTool(
-    "query",
+    "doc_search",
     {
-      title: "Query",
+      title: "Document Search",
       description: `Search the knowledge base using a query document — one or more typed sub-queries combined for best recall.
 
 ## Query Types
@@ -391,7 +392,7 @@ Intent-aware lex (C++ performance, not sports):
   // ---------------------------------------------------------------------------
 
   server.registerTool(
-    "get",
+    "doc_get",
     {
       title: "Get Document",
       description: "Retrieve the full content of a document by its file path or docid. Use paths or docids (#abc123) from search results. Suggests similar files if not found.",
@@ -456,7 +457,7 @@ Intent-aware lex (C++ performance, not sports):
   // ---------------------------------------------------------------------------
 
   server.registerTool(
-    "multi_get",
+    "doc_get_batch",
     {
       title: "Multi-Get Documents",
       description: "Retrieve multiple documents by glob pattern (e.g., 'journals/2025-05*.md') or comma-separated list. Skips files larger than maxBytes.",
@@ -529,7 +530,7 @@ Intent-aware lex (C++ performance, not sports):
   // ---------------------------------------------------------------------------
 
   server.registerTool(
-    "status",
+    "doc_status",
     {
       title: "Index Status",
       description: "Show the status of the QMD index: collections, document counts, and health information.",
@@ -617,10 +618,10 @@ Intent-aware lex (C++ performance, not sports):
   // =========================================================================
 
   server.registerTool(
-    "memory_store",
+    "memory_add",
     {
       title: "Store Memory",
-      description: "Store a fact, preference, decision, or other memory. Deduplicates automatically (exact match + semantic similarity). Returns the memory ID. Optional `metadata` round-trips arbitrary JSON fields (e.g. source_session_id, doc_id) that show up in `memory_recall` results — use this to map qmd memories back to your own object IDs.",
+      description: "Store a fact, preference, decision, or other memory. Deduplicates automatically (exact match + semantic similarity). Returns the memory ID. Optional `metadata` round-trips arbitrary JSON fields (e.g. source_session_id, doc_id) that show up in `memory_search` results — use this to map qmd memories back to your own object IDs.",
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
         text: z.string().describe("The memory content to store (verbatim text)"),
@@ -641,14 +642,16 @@ Intent-aware lex (C++ performance, not sports):
   );
 
   server.registerTool(
-    "memory_store_batch",
+    "memory_add_batch",
     {
       title: "Store Memories (Batch)",
-      description: "Batched version of memory_store. Embeds all texts in ONE provider call instead of N — typically 8-10x faster for bulk ingest because the embedding backend (transformers.js, remote API) batches much more efficiently than per-call. Hash dedup is batched into a single SQL round-trip, inserts use multi-value VALUES (one statement per table), and the whole pass runs in a single transaction. Each item supports the same fields as memory_store plus `skipHistory` to opt out of the per-memory memory_history write — useful for bulk ingest where audit history isn't needed.",
+      description: "Batched version of memory_add. Embeds all texts in ONE provider call instead of N — typically 8-10x faster for bulk ingest because the embedding backend (transformers.js, remote API) batches much more efficiently than per-call. Hash dedup is batched into a single SQL round-trip, inserts use multi-value VALUES (one statement per table), and the whole pass runs in a single transaction. Each item supports the same fields as memory_add plus `skipHistory` to opt out of the per-memory memory_history write — useful for bulk ingest where audit history isn't needed.",
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
         items: z.array(z.object({
-          text: z.string().describe("Memory content"),
+          text: z.string().optional().describe("Memory content. Omit when passing `turns` instead."),
+          turns: z.array(z.object({ role: z.string(), content: z.string() })).optional().describe("Conversation turns. If set, takes precedence over `text` — joined into a flat text blob (one line per `role: content`). Use alongside `userOnly` for Schift L1-style ingest."),
+          userOnly: z.boolean().optional().describe("When true and `turns` is set, drop assistant turns before joining. Replaces the eval-harness env-var L1 path + AMB adapter JSON hack."),
           category: z.enum(["preference", "fact", "decision", "entity", "reflection", "other"]).optional().describe("Skip the regex classifier by pre-setting the category. Use 'other' to opt out of classification entirely."),
           scope: z.string().optional(),
           importance: z.number().min(0).max(1).optional(),
@@ -692,7 +695,7 @@ Intent-aware lex (C++ performance, not sports):
   );
 
   server.registerTool(
-    "memory_recall",
+    "memory_search",
     {
       title: "Recall Memories",
       description: "Search memories by natural language query. Uses hybrid search (semantic + keyword). Returns ranked results with their stored `metadata` parsed to JSON, so callers can map results back to their own object IDs.",
@@ -730,7 +733,7 @@ Intent-aware lex (C++ performance, not sports):
   );
 
   server.registerTool(
-    "memory_forget",
+    "memory_delete",
     {
       title: "Forget Memory",
       description: "Delete a specific memory by ID.",
@@ -833,12 +836,192 @@ Intent-aware lex (C++ performance, not sports):
     }
   );
 
+  // ---------------------------------------------------------------------------
+  // Tool: memory_get (Retrieve memory by id)
+  // ---------------------------------------------------------------------------
+
+  server.registerTool(
+    "memory_get",
+    {
+      title: "Get Memory",
+      description: "Retrieve a single memory by its id. Returns the memory row with parsed metadata, or null if not found.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {
+        id: z.string().describe("Memory id (as returned by memory_add or memory_search)"),
+      },
+    },
+    async ({ id }: { id: string }) => {
+      const db = store.internal.db;
+      const row = db.prepare(`SELECT * FROM memories WHERE id = ?`).get(id) as
+        | { id: string; text: string; category: string; scope: string; importance: number; tier: string; created_at: number; metadata: string | null }
+        | undefined;
+      if (!row) {
+        return { content: [{ type: "text", text: `Memory ${id} not found.` }] };
+      }
+      let parsed: Record<string, unknown> | null = null;
+      if (row.metadata) {
+        try { parsed = JSON.parse(row.metadata) as Record<string, unknown>; } catch { /* ignore */ }
+      }
+      const enriched = { ...row, metadata: parsed };
+      return {
+        content: [{ type: "text", text: `[${row.category}] (scope: ${row.scope}, tier: ${row.tier}) ${row.text}\n  id: ${row.id}` }],
+        structuredContent: enriched,
+      };
+    }
+  );
+
+  // ---------------------------------------------------------------------------
+  // Tool: memory_list (Browse memories by filter)
+  // ---------------------------------------------------------------------------
+
+  server.registerTool(
+    "memory_list",
+    {
+      title: "List Memories",
+      description: "Browse memories by filter. Non-semantic — returns rows ordered by created_at desc. Use memory_search for relevance-ranked retrieval.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {
+        scope: z.string().optional().describe("Filter by scope"),
+        category: z.enum(["preference", "fact", "decision", "entity", "reflection", "other"]).optional().describe("Filter by category"),
+        tier: z.enum(["peripheral", "working", "core"]).optional().describe("Filter by tier"),
+        limit: z.number().optional().describe("Max rows (default: 50)"),
+        offset: z.number().optional().describe("Skip N rows for pagination"),
+      },
+    },
+    async ({ scope, category, tier, limit, offset }: { scope?: string; category?: string; tier?: string; limit?: number; offset?: number }) => {
+      const db = store.internal.db;
+      const clauses: string[] = [];
+      const params: unknown[] = [];
+      if (scope) { clauses.push("scope = ?"); params.push(scope); }
+      if (category) { clauses.push("category = ?"); params.push(category); }
+      if (tier) { clauses.push("tier = ?"); params.push(tier); }
+      const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+      const cappedLimit = Math.min(Math.max(1, limit ?? 50), 500);
+      const skipOffset = Math.max(0, offset ?? 0);
+      const rows = db.prepare(
+        `SELECT id, text, category, scope, tier, importance, created_at, metadata FROM memories ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+      ).all(...params, cappedLimit, skipOffset) as Array<{ id: string; text: string; category: string; scope: string; tier: string; importance: number; created_at: number; metadata: string | null }>;
+      const enriched = rows.map(r => {
+        let parsed: Record<string, unknown> | null = null;
+        if (r.metadata) { try { parsed = JSON.parse(r.metadata) as Record<string, unknown>; } catch { /* ignore */ } }
+        return { ...r, metadata: parsed };
+      });
+      if (enriched.length === 0) {
+        return { content: [{ type: "text", text: "No memories match." }] };
+      }
+      const lines = enriched.map((r, i) =>
+        `${i + 1 + skipOffset}. [${r.category}/${r.tier}] (scope: ${r.scope}) ${r.text}\n   id: ${r.id}`
+      );
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        structuredContent: { results: enriched, limit: cappedLimit, offset: skipOffset },
+      };
+    }
+  );
+
+  // ---------------------------------------------------------------------------
+  // Tool: memory_reflect (Synthesize an answer from retrieved memories)
+  // ---------------------------------------------------------------------------
+
+  server.registerTool(
+    "memory_reflect",
+    {
+      title: "Reflect Over Memories",
+      description: "Hindsight-style synthesis: retrieve top-K memories for a question, then ask the configured remote LLM to compress them into a fact list. Returns the synthesized answer context plus the underlying sources. No-op when no remote LLM is configured.",
+      annotations: { readOnlyHint: true, openWorldHint: true },
+      inputSchema: {
+        question: z.string().describe("The question to reflect on"),
+        scope: z.string().optional().describe("Filter memories by scope"),
+        limit: z.number().optional().describe("Top-K memories to feed the reflector (default: 20)"),
+        maxFacts: z.number().optional().describe("Max facts the LLM should extract (default: 8)"),
+      },
+    },
+    async ({ question, scope, limit, maxFacts }: { question: string; scope?: string; limit?: number; maxFacts?: number }) => {
+      const db = store.internal.db;
+      const topK = Math.min(Math.max(1, limit ?? 20), 100);
+      const recalled = await memoryRecall(db, { query: question, scope, limit: topK });
+      if (recalled.length === 0) {
+        return {
+          content: [{ type: "text", text: "No memories found for this question." }],
+          structuredContent: { synthesis: null, sources: [] },
+        };
+      }
+      let synthesis: string | null = null;
+      try {
+        synthesis = await memoryReflect(question, recalled, { maxFacts: maxFacts ?? 8 });
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Reflection failed: ${err instanceof Error ? err.message : err}` }],
+          structuredContent: { synthesis: null, sources: recalled },
+        };
+      }
+      const body = synthesis ?? "(no remote LLM configured — returning raw memories)";
+      return {
+        content: [{ type: "text", text: `${body}\n\n---\nSources: ${recalled.length} memories` }],
+        structuredContent: { synthesis, sources: recalled },
+      };
+    }
+  );
+
+  // ---------------------------------------------------------------------------
+  // Tool: memory_dream (Run consolidation pass on demand)
+  // ---------------------------------------------------------------------------
+
+  server.registerTool(
+    "memory_dream",
+    {
+      title: "Dream Consolidation",
+      description: "Run a full consolidation pass: decay + eviction + LLM reflection synthesis. Mirrors the OpenClaw plugin's nightly dream gate. Safe to call on-demand; respects tier/importance. Reflection no-ops when no remote LLM is configured.",
+      annotations: { readOnlyHint: false, openWorldHint: true },
+      inputSchema: {
+        scope: z.string().optional().describe("Restrict reflection to this scope (decay pass is global)"),
+        windowDays: z.number().optional().describe("Reflect over memories from the last N days (default: 7)"),
+        minMemoriesForEviction: z.number().optional().describe("Threshold for LRU eviction (default: 1000)"),
+      },
+    },
+    async ({ scope, windowDays, minMemoriesForEviction }: { scope?: string; windowDays?: number; minMemoriesForEviction?: number }) => {
+      const db = store.internal.db;
+      const cleanup = runCleanupPass(db, {
+        minMemoriesForEviction: minMemoriesForEviction ?? 1000,
+        maxAgeDays: 30,
+        minImportance: 0.4,
+        minAccessCount: 2,
+        lruWindowDays: 7,
+      });
+      let reflectResult: { reflections: number; skipped: boolean; reason?: string };
+      try {
+        reflectResult = await runReflectionPass(db, {
+          scope,
+          windowDays: windowDays ?? 7,
+          minMemories: 5,
+          maxReflections: 5,
+        });
+      } catch (err) {
+        reflectResult = { reflections: 0, skipped: true, reason: err instanceof Error ? err.message : String(err) };
+      }
+      const decayLog = cleanup.decay
+        ? `decay ${cleanup.decay.processed}→${cleanup.decay.promoted}p/${cleanup.decay.demoted}d`
+        : "decay skipped";
+      const evictLog = cleanup.eviction
+        ? `eviction ${cleanup.eviction.evicted}/${cleanup.eviction.evaluated}`
+        : "eviction skipped";
+      const reflectLog = reflectResult.skipped
+        ? `reflection skipped (${reflectResult.reason ?? "unknown"})`
+        : `reflections ${reflectResult.reflections}`;
+      const summary = `dream — ${decayLog}, ${evictLog}, ${reflectLog}, ${cleanup.totalMemoriesBefore} → ${cleanup.totalMemoriesAfter} memories`;
+      return {
+        content: [{ type: "text", text: summary }],
+        structuredContent: { cleanup, reflection: reflectResult },
+      };
+    }
+  );
+
   // =========================================================================
   // Knowledge graph tools — temporal entity-relationship triples
   // =========================================================================
 
   server.registerTool(
-    "knowledge_store",
+    "knowledge_add",
     {
       title: "Store Knowledge",
       description: [
@@ -866,7 +1049,7 @@ Intent-aware lex (C++ performance, not sports):
   );
 
   server.registerTool(
-    "knowledge_query",
+    "knowledge_search",
     {
       title: "Query Knowledge",
       description: [
@@ -982,7 +1165,7 @@ Intent-aware lex (C++ performance, not sports):
   // Tool: manage — administrative operations (embed, update, cleanup, sync)
   // =========================================================================
   server.registerTool(
-    "manage",
+    "doc_manage",
     {
       title: "Manage QMD Index",
       description: [

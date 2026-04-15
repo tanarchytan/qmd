@@ -83,7 +83,7 @@ export type Memory = {
 };
 
 export type MemoryStoreOptions = {
-  text: string;
+  text?: string;
   category?: MemoryCategory;
   scope?: string;
   importance?: number;
@@ -111,7 +111,39 @@ export type MemoryStoreOptions = {
    * passes through unchunked but still gets a `metadata.doc_id` assigned.
    */
   chunk?: boolean;
+  /**
+   * Optional conversation turns. When set, `text` is derived by joining the
+   * turns (one per line as `role: content`). Callers that already have a
+   * flat text blob should set `text` directly — `turns` is the structured
+   * alternative for conversation ingest.
+   *
+   * Pairs with `userOnly` to implement Schift's L1 cache hierarchy pattern:
+   * strip assistant turns before embedding so the user's preference signal
+   * dominates the centroid instead of being drowned in verbose assistant
+   * replies. See TODO §1.
+   */
+  turns?: Array<{ role: string; content: string }>;
+  /**
+   * When true and `turns` is set, keep only turns whose role starts with
+   * "user" before joining. No-op without `turns`. Replaces the old
+   * eval.mts env var path and the AMB adapter JSON hack.
+   */
+  userOnly?: boolean;
 };
+
+/**
+ * Join conversation turns into a flat text blob matching the eval harness +
+ * AMB adapter ingest format. Filters to user turns when `userOnly` is set.
+ * Exported so callers (eval, adapters) can use the same normalization
+ * without reaching into memory internals.
+ */
+export function turnsToText(
+  turns: Array<{ role: string; content: string }>,
+  userOnly = false
+): string {
+  const kept = userOnly ? turns.filter(t => t.role?.toLowerCase().startsWith("user")) : turns;
+  return kept.map(t => `${t.role}: ${t.content}`).join("\n");
+}
 
 export type MemoryTier = "peripheral" | "working" | "core";
 
@@ -489,7 +521,10 @@ export async function memoryStore(
   db: Database,
   options: MemoryStoreOptions
 ): Promise<{ id: string; status: "created" | "duplicate"; duplicate_id?: string }> {
-  const text = options.text.trim();
+  if (options.turns) {
+    options = { ...options, text: turnsToText(options.turns, options.userOnly === true) };
+  }
+  const text = (options.text ?? "").trim();
   if (!text) throw new Error("Memory text cannot be empty");
 
   const hash = contentHash(text);
@@ -582,6 +617,19 @@ export async function memoryStore(
 }
 
 /**
+ * Convenience wrapper: store a memory from conversation turns. Thin sugar
+ * over memoryStore — normalizes turns → text via `turnsToText` and delegates.
+ * Same dedup + embedding behavior as memoryStore.
+ */
+export async function memoryStoreFromTurns(
+  db: Database,
+  turns: Array<{ role: string; content: string }>,
+  options: Omit<MemoryStoreOptions, "text" | "turns"> & { userOnly?: boolean } = {}
+): Promise<{ id: string; status: "created" | "duplicate"; duplicate_id?: string }> {
+  return memoryStore(db, { ...options, turns });
+}
+
+/**
  * Batch insert memories with shared embedding round-trip.
  *
  * Optimization for ingest pipelines (eval, OpenClaw bulk import) that
@@ -615,7 +663,12 @@ export async function memoryStoreBatch(
   const expandedOriginIdx: number[] = [];
   const CHUNK_MAX_CHARS = 1536; // ≈ 512 tokens at 3 chars/token (mxbai-xs window)
   for (let i = 0; i < items.length; i++) {
-    const it = items[i]!;
+    const raw = items[i]!;
+    // Normalize turns → text up front. Callers may pass either `text` or
+    // `turns`; if `turns` is set, it takes precedence + respects userOnly.
+    const it: MemoryStoreOptions = raw.turns
+      ? { ...raw, text: turnsToText(raw.turns, raw.userOnly === true) }
+      : raw;
     if (it.chunk && it.text && it.text.length > CHUNK_MAX_CHARS) {
       // Auto-assign a stable doc_id if the caller didn't provide one, so
       // chunk grouping survives the round-trip through metadata.
@@ -643,7 +696,7 @@ export async function memoryStoreBatch(
   const results: { id: string; status: "created" | "duplicate" }[] = new Array(expanded.length);
 
   // Phase 1: hash dedup (single round-trip) — operates on the expanded set
-  const hashes = expanded.map(it => contentHash(it.text.trim()));
+  const hashes = expanded.map(it => contentHash((it.text ?? "").trim()));
   const placeholders = hashes.map(() => "?").join(",");
   const existingRows = db.prepare(
     `SELECT id, content_hash FROM memories WHERE content_hash IN (${placeholders})`
@@ -653,7 +706,7 @@ export async function memoryStoreBatch(
   // Phase 2: collect texts that need embedding (operates on the EXPANDED set)
   const toEmbed: { idx: number; text: string }[] = [];
   for (let i = 0; i < expanded.length; i++) {
-    const text = expanded[i]!.text.trim();
+    const text = (expanded[i]!.text ?? "").trim();
     if (!text) {
       results[i] = { id: "", status: "duplicate" };
       continue;

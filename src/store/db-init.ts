@@ -292,12 +292,25 @@ export function ensureVecTableInternal(db: Database, dimensions: number): void {
     const existingDims = match?.[1] ? parseInt(match[1], 10) : null;
     if (existingDims === dimensions && hasHashSeq && hasCosine) return;
     if (existingDims !== null && existingDims !== dimensions) {
-      throw new Error(
-        `Embedding dimension mismatch: existing vectors are ${existingDims}d but the current model produces ${dimensions}d. ` +
-        `Run 'qmd embed -f' to re-embed with the new model.`
+      // Auto-reindex path: drop the old vec table + purge content_vectors so
+      // subsequent queries silently fall back to BM25 until the next embed
+      // pass repopulates. Opt out via QMD_STRICT_DIM_MISMATCH=on for pipelines
+      // that want the old fail-loud behavior.
+      if (process.env.QMD_STRICT_DIM_MISMATCH === "on") {
+        throw new Error(
+          `Embedding dimension mismatch: existing vectors are ${existingDims}d but the current model produces ${dimensions}d. ` +
+          `Run 'qmd embed -f' to re-embed with the new model.`
+        );
+      }
+      process.stderr.write(
+        `qmd: embedding dimension changed (${existingDims}d → ${dimensions}d). ` +
+        `Dropping stale vectors; run 'qmd embed -f' to repopulate.\n`
       );
+      db.exec("DROP TABLE IF EXISTS vectors_vec");
+      try { db.exec("DELETE FROM content_vectors"); } catch { /* table may not exist yet */ }
+    } else {
+      db.exec("DROP TABLE IF EXISTS vectors_vec");
     }
-    db.exec("DROP TABLE IF EXISTS vectors_vec");
   }
   db.exec(`CREATE VIRTUAL TABLE vectors_vec USING vec0(hash_seq TEXT PRIMARY KEY, embedding float[${dimensions}] distance_metric=cosine)`);
 }

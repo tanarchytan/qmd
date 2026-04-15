@@ -2214,26 +2214,29 @@ describe("Vector Table", () => {
     await cleanupTestDb(store);
   });
 
-  test("ensureVecTable throws on dimension mismatch instead of silently rebuilding", async () => {
+  test("ensureVecTable auto-reindexes on dimension mismatch; strict mode still throws", async () => {
     const store = await createTestStore();
 
     // Create with 768 dimensions
     store.ensureVecTable(768);
-
-    // Check dimensions
-    const tableInfo = store.db.prepare(`
+    const before = store.db.prepare(`
       SELECT sql FROM sqlite_master WHERE type='table' AND name='vectors_vec'
     `).get() as { sql: string };
-    expect(tableInfo.sql).toContain("float[768]");
+    expect(before.sql).toContain("float[768]");
 
-    // Attempting to use a different dimension should throw (not silently drop data)
-    expect(() => store.ensureVecTable(1024)).toThrow(/dimension mismatch/i);
-
-    // Original table should still exist untouched
-    const tableInfoAfter = store.db.prepare(`
+    // Default: auto-reindex — drops stale table, recreates at new dim, warns.
+    delete process.env.QMD_STRICT_DIM_MISMATCH;
+    expect(() => store.ensureVecTable(1024)).not.toThrow();
+    const after = store.db.prepare(`
       SELECT sql FROM sqlite_master WHERE type='table' AND name='vectors_vec'
     `).get() as { sql: string };
-    expect(tableInfoAfter.sql).toContain("float[768]");
+    expect(after.sql).toContain("float[1024]");
+
+    // Opt-in strict mode: old failure preserved for pipelines that need it.
+    store.ensureVecTable(1024); // no-op at current dim
+    process.env.QMD_STRICT_DIM_MISMATCH = "on";
+    expect(() => store.ensureVecTable(768)).toThrow(/dimension mismatch/i);
+    delete process.env.QMD_STRICT_DIM_MISMATCH;
 
     await cleanupTestDb(store);
   });

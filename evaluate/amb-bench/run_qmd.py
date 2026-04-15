@@ -410,6 +410,13 @@ def main() -> None:
         ("locomo", LoComoDataset(), "locomo10"),
     ]
 
+    only_configs = {c.strip() for c in os.environ.get("AMB_CONFIGS", "").split(",") if c.strip()}
+    if only_configs:
+        configs = [c for c in configs if c[0] in only_configs]
+    only_datasets = {d.strip() for d in os.environ.get("AMB_DATASETS", "").split(",") if d.strip()}
+    if only_datasets:
+        datasets = [d for d in datasets if d[0] in only_datasets]
+
     # Quick smoke-test mode — env-driven so we can sanity check on a tiny slice
     limit = int(os.environ.get("AMB_LIMIT", "0")) or None
     if limit:

@@ -187,9 +187,11 @@ qmd memory export [file.json]         # Export memories
 
 ## MCP Tools
 
-Document search: `query`, `get`, `multi_get`, `status`, `briefing`, `manage`
-Memory: `memory_store`, `memory_recall`, `memory_forget`, `memory_update`, `memory_extract`, `memory_stats`
-Knowledge: `knowledge_store`, `knowledge_query`, `knowledge_invalidate`, `knowledge_entities`, `knowledge_timeline`, `knowledge_stats`
+CRUD-aligned naming (`{domain}_{verb}`).
+
+Document search: `doc_search`, `doc_get`, `doc_get_batch`, `doc_status`, `briefing`, `doc_manage`
+Memory: `memory_add`, `memory_add_batch`, `memory_search`, `memory_get`, `memory_list`, `memory_update`, `memory_delete`, `memory_extract`, `memory_reflect`, `memory_dream`, `memory_stats`, `memory_register_scopes`
+Knowledge: `knowledge_add`, `knowledge_search`, `knowledge_invalidate`, `knowledge_entities`, `knowledge_timeline`, `knowledge_stats`
 
 ## Important constraints
 
