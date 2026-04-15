@@ -1383,7 +1383,24 @@ export async function memoryRecall(
   //     Default model: cross-encoder/ms-marco-MiniLM-L-6-v2, file
   //     model_quint8_avx2 (~23 MB, ~5-10 ms per pair CPU).
   const crossEncoderRerank = process.env.QMD_MEMORY_RERANK === "cross-encoder";
-  if ((crossEncoderRerank || (!RAW && options.rerank !== false)) && sorted.length > 1) {
+  // Strong-signal skip: when the top RRF result is high-confidence with a
+  // clear gap to second place, skip rerank entirely. The rerank can only
+  // hurt easy questions (cross-encoder lexical re-sorting may push a
+  // topically-adjacent wrong session above the right one — see
+  // 2026-04-15 cerank n=100 result, R@5 -0.9pp vs no-rerank). Mirrors
+  // the same gate used for query expansion above. Opt out via
+  // QMD_RERANK_STRONG_SIGNAL_SKIP=off if you want unconditional rerank.
+  let strongSignalSkip = false;
+  if (sorted.length > 1 && process.env.QMD_RERANK_STRONG_SIGNAL_SKIP !== "off") {
+    const sortedScores = sorted.map(r => r.score);
+    const topScore = sortedScores[0] ?? 0;
+    const secondScore = sortedScores[1] ?? 0;
+    const maxScore = Math.max(...sortedScores);
+    const normTop = maxScore > 0 ? topScore / maxScore : 0;
+    const normGap = maxScore > 0 ? (topScore - secondScore) / maxScore : 0;
+    strongSignalSkip = normTop >= 0.85 && normGap >= 0.15;
+  }
+  if ((crossEncoderRerank || (!RAW && options.rerank !== false)) && sorted.length > 1 && !strongSignalSkip) {
     const rerankCandidates = sorted.slice(0, Math.min(sorted.length, limit * 3));
     try {
       if (crossEncoderRerank) {
