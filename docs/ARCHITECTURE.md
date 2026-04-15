@@ -6,18 +6,41 @@ tiered storage model. Source-file references at the end of each section.
 
 ## Overview
 
-qmd is a single-process memory framework that runs against one SQLite
-database (`~/.cache/qmd/index.sqlite` by default). All retrieval is
-hybrid — BM25 (FTS5) fused with dense vectors (sqlite-vec) via
-Reciprocal Rank Fusion — and the entire pipeline is local-first. Remote
-LLM providers are optional (used only for ingest-time extraction,
-post-retrieval synthesis, and the optional remote rerank backend).
+qmd is a memory framework for AI agents. It does the things you'd expect
+a real memory framework to do — hybrid retrieval, knowledge graph,
+temporal decay, tiered storage, reflection synthesis, conflict
+resolution, conversation import — and ships them as one cohesive
+package. SQLite is its current storage primitive, but the framework
+identity is the **memory layer**, not the database underneath.
 
-The design goal: **on-device hybrid memory that runs without infra.**
-No vector server, no graph DB, no message queue. SQLite + a few
-extensions, with all the layers (vector, text, knowledge graph,
-temporal decay, tiered storage, reflection) packed into the same
-`memories` table family.
+What qmd does today:
+
+- **Hybrid retrieval** — BM25 + dense vectors fused via Reciprocal Rank
+  Fusion, with adaptive cosine floors, post-RRF boosts, and optional
+  cross-encoder rerank
+- **Temporal knowledge graph** — subject/predicate/object triples with
+  validity windows, queryable point-in-time, auto-invalidating on
+  contradiction
+- **Tiered storage with Weibull decay** — composite recency / frequency
+  / intrinsic scoring, three-tier promotion (peripheral → working →
+  core), LRU-K-style eviction
+- **Conflict resolution** — exact + cosine + LLM-judged ADD/UPDATE/
+  DELETE/NONE merging
+- **Reflection synthesis** — Generative-Agents pattern that distills
+  recent memory into compressed lessons stored as new memories
+- **Multi-format conversation import** — five conversation formats
+  normalized into the same memory layer
+- **Dream consolidation** — a single bundled call (decay + eviction +
+  reflection) that mirrors the OpenClaw "dream" pattern
+- **Canonical CRUD MCP surface** — 26 tools across `memory_*`,
+  `knowledge_*`, `doc_*` namespaces, aligned with the de-facto naming
+  used by mem0 / Letta / MemPalace
+
+It happens to run on **SQLite + sqlite-vec + FTS5** today because that
+combination is embedded, atomic, portable, and requires zero infra.
+Future backends (LanceDB, pgvector) are documented as a pluggable path
+in the roadmap. The storage layer is replaceable; the memory framework
+is the value.
 
 ## Storage layer
 
@@ -716,18 +739,21 @@ At db open (in `src/db.ts`):
 After this, all qmd operations are direct SQL prepared statements via
 better-sqlite3. No ORM, no query builder.
 
-### What qmd is NOT
+### What qmd is NOT (positioning, not capability gaps)
 
-- Not a graph database — just a SQLite table with a few indexes
-- Not a vector database — sqlite-vec is the only vector primitive,
-  everything else is on top
-- Not a search engine — FTS5 handles BM25, qmd just composes it with
-  vector results
-- Not an agent framework — just provides memory primitives that
-  agents call via MCP / CLI / SDK
-- Not a workflow engine — synchronous in-process pipelines, no jobs
-- Not a hosted service — local-first by design, every call runs in
-  the caller's process
+- **Not an agent framework** — qmd provides memory primitives; agents
+  drive them via MCP / CLI / SDK. Pair with OpenClaw, Letta, or your
+  own loop.
+- **Not a workflow engine** — synchronous in-process pipelines, no
+  job queue, no scheduler. Cron is your problem.
+- **Not a hosted service** — local-first by design. Every call runs in
+  the caller's process. There's no qmd cloud.
+- **Not bound to SQLite forever** — sqlite-vec + FTS5 is the current
+  default backend because it's embedded and zero-infra. Pluggable
+  storage (LanceDB, pgvector) is on the roadmap as the framework grows
+  beyond single-agent shapes.
 
-The whole architecture is "SQLite + extensions + a few hundred lines
-of pipeline logic". That's the pitch.
+qmd's identity is the memory framework — hybrid retrieval, KG, decay,
+tiers, reflection, conflict resolution, the orchestration that ties
+them together. SQLite is an implementation detail of today's default
+backend, not the product.
