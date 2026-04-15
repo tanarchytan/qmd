@@ -1038,6 +1038,18 @@ export async function memoryRecall(
   db: Database,
   options: MemoryRecallOptions
 ): Promise<MemoryRecallResult[]> {
+  // Per-stage profiling under QMD_RECALL_PROFILE=on. Emits one JSON line
+  // to stderr after the call finishes. Stages: fts, vec, rerank, kg,
+  // diversify, total. Use to identify hot-path optimization candidates
+  // when wall spikes (today's high-tier sweep saw 10s search latency on
+  // a handful of questions — profiling tells us which stage owned it).
+  const PROFILE = process.env.QMD_RECALL_PROFILE === "on";
+  const profile: Record<string, number> = {};
+  const profileStart = PROFILE ? performance.now() : 0;
+  const profileMark = (stage: string, start: number) => {
+    if (PROFILE) profile[stage] = Math.round(performance.now() - start);
+  };
+
   const query = options.query.trim();
   if (!query) return [];
   const limit = options.limit || 10;
@@ -1118,6 +1130,7 @@ export async function memoryRecall(
   }
 
   // 1+2. FTS and embedding(s) run in parallel (embedding is the slow part)
+  const ftsStart = PROFILE ? performance.now() : 0;
   const embeddingsPromise = Promise.all(subQueries.map(q => embedQuery(q)));
 
   // FTS search (synchronous, runs while embedding request is in flight)
@@ -1203,6 +1216,8 @@ export async function memoryRecall(
   }
 
   // Vector search (await the embedding(s) that started in parallel with FTS)
+  profileMark("fts_and_embed", ftsStart);
+  const vecStart = PROFILE ? performance.now() : 0;
   const queryEmbeddings = await embeddingsPromise;
   if (queryEmbeddings.some(e => e)) {
     try {
@@ -1382,6 +1397,8 @@ export async function memoryRecall(
   //     RAW so eval harnesses can A/B rerank as a first-class lever.
   //     Default model: cross-encoder/ms-marco-MiniLM-L-6-v2, file
   //     model_quint8_avx2 (~23 MB, ~5-10 ms per pair CPU).
+  profileMark("vec", vecStart);
+  const rerankStart = PROFILE ? performance.now() : 0;
   const crossEncoderRerank = process.env.QMD_MEMORY_RERANK === "cross-encoder";
   // Strong-signal skip: when the top RRF result is high-confidence with a
   // clear gap to second place, skip rerank entirely. The rerank can only
@@ -1527,6 +1544,8 @@ export async function memoryRecall(
     sorted = sorted.slice(0, limit);
   }
 
+  profileMark("rerank_and_post", rerankStart);
+
   // Touch access counts for recalled memories (batched in transaction for performance)
   const now = Date.now();
   const touchStmt = db.prepare(`UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?`);
@@ -1536,6 +1555,11 @@ export async function memoryRecall(
     db.exec("COMMIT");
   } catch { db.exec("ROLLBACK"); }
 
+  if (PROFILE) {
+    profile.total = Math.round(performance.now() - profileStart);
+    profile.results = sorted.length;
+    process.stderr.write(`qmd-recall-profile ${JSON.stringify(profile)}\n`);
+  }
   return sorted;
 }
 
