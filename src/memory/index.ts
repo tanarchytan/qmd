@@ -338,6 +338,34 @@ async function embedText(text: string): Promise<number[] | null> {
  * Falls back to per-text embedText() if no batch API is available.
  * Cache hits short-circuit before the network call.
  */
+// Max texts per embed forward pass. transformers.js batches the full
+// input tensor in a single forward pass, so an unbounded call at N=640
+// chunks × 512 tokens blows past WASM heap and OOMs. Historical safe
+// value is 32, matching the native LME path that worked. Override with
+// QMD_EMBED_MICROBATCH for remote providers that handle larger batches
+// efficiently. Applies to local AND remote provider calls so a rogue
+// caller can't saturate either path.
+const EMBED_MICROBATCH_SIZE = (() => {
+  const raw = process.env.QMD_EMBED_MICROBATCH;
+  const parsed = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 32;
+})();
+
+async function embedInMicroBatches(
+  texts: string[],
+  fn: (slice: string[]) => Promise<({ embedding: number[] } | null)[]>,
+): Promise<(number[] | null)[]> {
+  const out: (number[] | null)[] = new Array(texts.length).fill(null);
+  for (let start = 0; start < texts.length; start += EMBED_MICROBATCH_SIZE) {
+    const slice = texts.slice(start, start + EMBED_MICROBATCH_SIZE);
+    const results = await fn(slice);
+    for (let j = 0; j < slice.length; j++) {
+      out[start + j] = results[j]?.embedding || null;
+    }
+  }
+  return out;
+}
+
 async function embedTextBatch(texts: string[]): Promise<(number[] | null)[]> {
   const out: (number[] | null)[] = new Array(texts.length).fill(null);
   const missingIdx: number[] = [];
@@ -352,9 +380,9 @@ async function embedTextBatch(texts: string[]): Promise<(number[] | null)[]> {
   const fe = await getFastEmbedBackend();
   if (fe) {
     try {
-      const results = await fe.embedBatch(missingTexts);
+      const embeds = await embedInMicroBatches(missingTexts, (slice) => fe.embedBatch(slice));
       for (let j = 0; j < missingTexts.length; j++) {
-        const emb = results[j]?.embedding || null;
+        const emb = embeds[j] ?? null;
         out[missingIdx[j]!] = emb;
         if (emb) setCachedEmbedding(missingTexts[j]!, emb);
       }
@@ -368,9 +396,9 @@ async function embedTextBatch(texts: string[]): Promise<(number[] | null)[]> {
   if (remoteConfig?.embed) {
     try {
       const remote = getRemoteLLM()!;
-      const results = await remote.embedBatch(missingTexts);
+      const embeds = await embedInMicroBatches(missingTexts, (slice) => remote.embedBatch(slice));
       for (let j = 0; j < missingTexts.length; j++) {
-        const emb = results[j]?.embedding || null;
+        const emb = embeds[j] ?? null;
         out[missingIdx[j]!] = emb;
         if (emb) setCachedEmbedding(missingTexts[j]!, emb);
       }
