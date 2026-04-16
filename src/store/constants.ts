@@ -50,6 +50,13 @@ export const MEMORY_RRF_W_VEC = 0.1;
 // 0.0/1.0 crashes (s-user 100→77%) — 10% original weight is critical tiebreaker.
 // 0.4/0.6 through 0.2/0.8 are monotonically worse as original weight increases.
 // Cross-encoder logits are min-max normalized before blending.
+// Rerank blend on RRF pipeline: RRF scores (~0.01-0.03) are too small
+// relative to min-max normalized rerank scores (0-1). Any blend gives
+// rerank near-total dominance regardless of weight. Need score
+// normalization before blending — TODO for next session.
+// On old additive: 0.1/0.9 was optimal (MRR 0.937).
+// On RRF: rerank regresses at every blend tested. Ship without rerank
+// until score normalization is implemented.
 export const MEMORY_RERANK_BLEND_ORIGINAL = 0.1;
 export const MEMORY_RERANK_BLEND_RERANK = 0.9;
 
