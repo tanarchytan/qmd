@@ -1,7 +1,60 @@
 # QMD Roadmap
 
 > For agents: this file tracks all pending work and benchmark history. Read this first when resuming a session.
-> Last updated: 2026-04-16 (env var cleanup + tunable sweep + agentmemory head-to-head)
+> Last updated: 2026-04-17 (RRF restructure, rerank normalization, keyword expansion default, L1 parked)
+
+---
+
+## 🟢 2026-04-17 — pipeline restructure complete, keyword expansion default
+
+**Headline:** Replaced additive score fusion with proper rank-based RRF
+(A→F staged architecture). Keyword expansion promoted to default after
++4pp preference rAny5 win. Cross-encoder rerank score normalization
+fixed. Production path: RRF 0.9/0.1 + keyword expansion, optional rerank.
+
+### Changes shipped (10 commits)
+
+| Commit | What |
+|---|---|
+| `734e357` | RRF restructure: rank-based fusion, dynamic injections |
+| `dcb200d` | Normalize RRF scores to [0,1] before rerank blend |
+| `919188e` | Temporal 3rd RRF list + keyword expansion default |
+| `bee34d7` | extractAndStore passes metadata (Phase 6.5 disproven) |
+
+### Production metrics (n=500 LME, 2026-04-17)
+
+| Bucket | n | recall_any@5 | R@5 | MRR | NDCG@10 |
+|---|---|---|---|---|---|
+| knowledge-update | 78 | 99% | 97% | 0.955 | 0.958 |
+| multi-session | 133 | 99% | 90% | 0.950 | 0.911 |
+| single-session-assistant | 56 | 100% | 100% | 1.000 | 1.000 |
+| single-session-preference | 30 | **97%** | **97%** | 0.737 | 0.794 |
+| single-session-user | 70 | 100% | 100% | 0.898 | 0.923 |
+| temporal-reasoning | 133 | 96% | 89% | 0.876 | 0.871 |
+| **OVERALL (no rerank)** | 500 | **98.4%** | **93.7%** | **0.917** | **0.913** |
+
+### Sweep results this session
+
+| Lever | Result | Decision |
+|---|---|---|
+| RRF weights 1.0/0.0 → 0.4/0.6 | 0.9/0.1 best | **Shipped** |
+| Rerank blend 0.0/1.0 → 0.6/0.4 (old additive) | 0.1/0.9 MRR 0.937 | Superseded |
+| Rerank blend on normalized RRF 0.1/0.9 → 0.7/0.3 | 0.7/0.3 best (98.0%/0.911) | **Shipped** optional |
+| Keyword expansion | 93→97% preference, +0.6pp recall | **Shipped default** |
+| Temporal 3rd RRF list (weights 0.1, 0.3) | Byte-identical (LME ingest timestamp shared) | Shipped w=0.1 for prod |
+| RAW=off boosts | -13pp preference MRR | Kept RAW=on eval default |
+| extractAndStore + KG (heuristic) | -16pp multi-session R@5 | Disproven |
+| L1 user-only ingest | +0.7pp MRR but -7pp preference | Parked |
+
+### Remaining gaps
+
+| Bucket | Current | What's left |
+|---|---|---|
+| preference MRR | 0.737 | Hard for everyone (agentmemory 0.663). +1pp from rerank. |
+| temporal-reasoning | 0.876 MRR | LME timestamp artifact prevents temporal signal |
+| External comparability | — | LLM-judge QA mode (Phase 7, deferred) |
+
+---
 
 ---
 
