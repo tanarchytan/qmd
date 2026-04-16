@@ -57,8 +57,8 @@ export const MEMORY_RRF_W_VEC = 0.1;
 // On old additive: 0.1/0.9 was optimal (MRR 0.937).
 // On RRF: rerank regresses at every blend tested. Ship without rerank
 // until score normalization is implemented.
-export const MEMORY_RERANK_BLEND_ORIGINAL = 0.1;
-export const MEMORY_RERANK_BLEND_RERANK = 0.9;
+export const MEMORY_RERANK_BLEND_ORIGINAL = 0.7;
+export const MEMORY_RERANK_BLEND_RERANK = 0.3;
 
 /** Weight for intent terms relative to query terms (1.0) in snippet scoring */
 export const INTENT_WEIGHT_SNIPPET = 0.3;

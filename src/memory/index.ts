@@ -1475,6 +1475,15 @@ export async function memoryRecall(
   }
   if (rerankEnabled && sorted.length > 1 && !strongSignalSkip) {
     const rerankCandidates = sorted.slice(0, Math.min(sorted.length, limit * 3));
+    // Normalize RRF scores to [0,1] across candidates so the blend with
+    // min-max normalized rerank scores is meaningful. Without this, RRF
+    // scores (~0.01-0.03) are noise next to rerank scores (0-1).
+    const rrfScores = rerankCandidates.map(r => r.score);
+    const rrfMin = Math.min(...rrfScores);
+    const rrfMax = Math.max(...rrfScores);
+    const rrfRange = rrfMax - rrfMin;
+    const normRrf = (s: number): number =>
+      rrfRange > 0 ? (s - rrfMin) / rrfRange : 0.5;
     try {
       if (rerankBackend === "transformers") {
         const mod = await import("../llm/transformers-rerank.js");
@@ -1493,7 +1502,7 @@ export async function memoryRecall(
         for (const r of rerankCandidates) {
           const rerankScore = normMap.get(r.id);
           if (rerankScore !== undefined) {
-            r.score = MEMORY_RERANK_BLEND_ORIGINAL * r.score + MEMORY_RERANK_BLEND_RERANK * rerankScore;
+            r.score = MEMORY_RERANK_BLEND_ORIGINAL * normRrf(r.score) + MEMORY_RERANK_BLEND_RERANK * rerankScore;
           }
         }
         sorted = rerankCandidates.sort((a, b) => b.score - a.score);
@@ -1508,7 +1517,7 @@ export async function memoryRecall(
           for (const r of rerankCandidates) {
             const rerankScore = rerankMap.get(r.id);
             if (rerankScore !== undefined) {
-              r.score = MEMORY_RERANK_BLEND_ORIGINAL * r.score + MEMORY_RERANK_BLEND_RERANK * rerankScore;
+              r.score = MEMORY_RERANK_BLEND_ORIGINAL * normRrf(r.score) + MEMORY_RERANK_BLEND_RERANK * rerankScore;
             }
           }
           sorted = rerankCandidates.sort((a, b) => b.score - a.score);
