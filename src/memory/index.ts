@@ -14,6 +14,11 @@ import { getDecayScore } from "./decay.js";
 import { classifyMemory } from "./patterns.js";
 import { knowledgeQuery, type KnowledgeEntry } from "./knowledge.js";
 import { chunkDocument } from "../store/chunking.js";
+import {
+  STRONG_SIGNAL_MIN_SCORE, STRONG_SIGNAL_MIN_GAP,
+  MEMORY_FTS_OVERFETCH, MEMORY_VEC_K_MULTIPLIER,
+  MEMORY_RERANK_BLEND_ORIGINAL, MEMORY_RERANK_BLEND_RERANK,
+} from "../store/constants.js";
 
 // =============================================================================
 // Embedding LRU cache — avoids redundant API calls for repeated text
@@ -1143,11 +1148,15 @@ export async function memoryRecall(
       .filter(t => t.length >= 2 && !STOP_WORDS.has(t));
     if (terms.length === 0) throw new Error("no terms");
 
-    // Use OR for broad recall, FTS5 ranks by relevance (more term matches = higher rank)
+    // Use OR for broad recall, FTS5 ranks by relevance (more term matches = higher rank).
+    // Over-fetch factor 10× compensates for post-hoc scope filtering on
+    // global FTS5 tables. Swept at n=500 LME: 10× beats 20× (+0.4pp
+    // recall_any@5, +0.7pp R@5) by reducing noisy out-of-scope candidates.
+    // 5× loses recall. 10× is the validated sweet spot.
     const safeFtsQuery = terms.map(t => `"${t}"*`).join(' OR ');
     const ftsResults = db.prepare(
       `SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?`
-    ).all(safeFtsQuery, limit * 3) as { rowid: number; rank: number }[];
+    ).all(safeFtsQuery, limit * MEMORY_FTS_OVERFETCH) as { rowid: number; rank: number }[];
 
     for (const r of ftsResults) {
       const mem = getByRowid.get(r.rowid) as Memory | null;
@@ -1231,7 +1240,7 @@ export async function memoryRecall(
       //   - global: WHERE embedding MATCH ?               (fallback)
       // The K-multiplier override remains for the global path and for
       // edge cases where partition isolation filters too aggressively.
-      const kMultiplier = Number(process.env.QMD_VEC_K_MULTIPLIER ?? "3");
+      const kMultiplier = MEMORY_VEC_K_MULTIPLIER;
       const vecK = Math.max(limit, limit * kMultiplier);
 
       const runVecKnn = (emb: number[]): Array<{ id: string; distance: number }> => {
@@ -1391,24 +1400,20 @@ export async function memoryRecall(
   // 5. Sort by combined score (single pool — dual-pass tested + lost in v15)
   let sorted = [...results.values()].sort((a, b) => b.score - a.score);
 
-  // 5b. Optional: rerank top candidates. Two paths:
-  //   - legacy (`!RAW && remoteConfig.rerank`): remote LLM/reranker API
-  //     blended 40% original + 60% rerank. Subject to the RAW gate.
-  //   - cross-encoder (`QMD_MEMORY_RERANK=cross-encoder`): local ONNX
-  //     cross-encoder via TransformersRerankBackend. Fires regardless of
-  //     RAW so eval harnesses can A/B rerank as a first-class lever.
-  //     Default model: cross-encoder/ms-marco-MiniLM-L-6-v2, file
-  //     model_quint8_avx2 (~23 MB, ~5-10 ms per pair CPU).
+  // 5b. Optional rerank. Enable with QMD_MEMORY_RERANK=on.
+  //   Backend selection mirrors embed: QMD_RERANK_BACKEND=transformers (local
+  //   ONNX cross-encoder, default) or QMD_RERANK_BACKEND=remote (API via
+  //   QMD_RERANK_PROVIDER/URL/API_KEY/MODEL). Fires regardless of RAW so
+  //   eval harnesses can A/B rerank as a first-class lever.
   profileMark("vec", vecStart);
   const rerankStart = PROFILE ? performance.now() : 0;
-  const crossEncoderRerank = process.env.QMD_MEMORY_RERANK === "cross-encoder";
-  // Strong-signal skip: when the top RRF result is high-confidence with a
-  // clear gap to second place, skip rerank entirely. The rerank can only
-  // hurt easy questions (cross-encoder lexical re-sorting may push a
-  // topically-adjacent wrong session above the right one — see
-  // 2026-04-15 cerank n=100 result, R@5 -0.9pp vs no-rerank). Mirrors
-  // the same gate used for query expansion above. Opt out via
-  // QMD_RERANK_STRONG_SIGNAL_SKIP=off if you want unconditional rerank.
+  const rerankEnabled = process.env.QMD_MEMORY_RERANK === "on"
+    // back-compat: old cross-encoder value still works
+    || process.env.QMD_MEMORY_RERANK === "cross-encoder";
+  const rerankBackend = process.env.QMD_RERANK_BACKEND || "transformers";
+  // Strong-signal skip: when the top result is high-confidence with a
+  // clear gap to second place, skip rerank entirely — it can only hurt
+  // easy questions. Opt out via QMD_RERANK_STRONG_SIGNAL_SKIP=off.
   let strongSignalSkip = false;
   if (sorted.length > 1 && process.env.QMD_RERANK_STRONG_SIGNAL_SKIP !== "off") {
     const sortedScores = sorted.map(r => r.score);
@@ -1417,20 +1422,16 @@ export async function memoryRecall(
     const maxScore = Math.max(...sortedScores);
     const normTop = maxScore > 0 ? topScore / maxScore : 0;
     const normGap = maxScore > 0 ? (topScore - secondScore) / maxScore : 0;
-    strongSignalSkip = normTop >= 0.85 && normGap >= 0.15;
+    strongSignalSkip = normTop >= STRONG_SIGNAL_MIN_SCORE && normGap >= STRONG_SIGNAL_MIN_GAP;
   }
-  if ((crossEncoderRerank || (!RAW && options.rerank !== false)) && sorted.length > 1 && !strongSignalSkip) {
+  if (rerankEnabled && sorted.length > 1 && !strongSignalSkip) {
     const rerankCandidates = sorted.slice(0, Math.min(sorted.length, limit * 3));
     try {
-      if (crossEncoderRerank) {
-        // Lazy-load the cross-encoder backend on first use.
+      if (rerankBackend === "transformers") {
         const mod = await import("../llm/transformers-rerank.js");
         const backend = await mod.createTransformersRerankBackend();
         const docs = rerankCandidates.map(r => ({ file: r.id, text: r.text }));
         const result = await backend.rerank(query, docs);
-        // Cross-encoder scores are raw logits — higher is better but the
-        // scale differs from cosine. Normalize to [0,1] via min-max across
-        // the batch before blending so the 40/60 blend is meaningful.
         const rawScores = result.results.map(r => r.score);
         const minS = Math.min(...rawScores);
         const maxS = Math.max(...rawScores);
@@ -1443,58 +1444,43 @@ export async function memoryRecall(
         for (const r of rerankCandidates) {
           const rerankScore = normMap.get(r.id);
           if (rerankScore !== undefined) {
-            r.score = 0.4 * r.score + 0.6 * rerankScore;
+            r.score = MEMORY_RERANK_BLEND_ORIGINAL * r.score + MEMORY_RERANK_BLEND_RERANK * rerankScore;
           }
         }
         sorted = rerankCandidates.sort((a, b) => b.score - a.score);
       } else {
+        // remote backend — uses QMD_RERANK_PROVIDER/URL/API_KEY/MODEL
         const remoteConfig = getRemoteConfig();
         if (remoteConfig?.rerank) {
           const remote = getRemoteLLM()!;
           const docs = rerankCandidates.map(r => ({ file: r.id, text: r.text }));
           const result = await remote.rerank(query, docs, {});
-          // Merge rerank scores: blend original score with rerank score
           const rerankMap = new Map(result.results.map(r => [r.file, r.score]));
           for (const r of rerankCandidates) {
             const rerankScore = rerankMap.get(r.id);
             if (rerankScore !== undefined) {
-              // Blend: 40% original + 60% rerank (reranker is more precise)
-              r.score = 0.4 * r.score + 0.6 * rerankScore;
+              r.score = MEMORY_RERANK_BLEND_ORIGINAL * r.score + MEMORY_RERANK_BLEND_RERANK * rerankScore;
             }
           }
           sorted = rerankCandidates.sort((a, b) => b.score - a.score);
         }
       }
     } catch (err) {
-      // Rerank failed — fall back to original ranking
       process.stderr.write(`Memory rerank failed: ${err instanceof Error ? err.message : err}\n`);
     }
   }
 
-  // 5b2. Smart KG-in-recall (v16, roadmap cat 10 + cat 2). The knowledge
-  // graph is populated by extractAndStore but wasn't being queried during
-  // recall — v8 tried a blunt injection and had to roll back because
-  // generic entries flooded the top results and hurt single-hop F1.
-  //
-  // This pass is gated by three conditions to avoid the v8 failure mode:
-  //   1. Opt-in: QMD_RECALL_KG=on (default off, baseline unchanged)
-  //   2. Query must contain at least one proper-noun entity (Caroline,
-  //      Samsung Galaxy S22, …). Lowercase/wh-questions are skipped.
-  //   3. Fires only when the current top score is weak (< 0.3) — strong
-  //      FTS/vec hits are never displaced.
-  // KG facts are capped at 5 total and inserted with moderate score (0.25)
-  // so they rank below any real strong hits and only surface when the
-  // main pipeline came up short.
-  //
-  // Two env gates (mirroring the diversity flag pair):
-  //   QMD_RECALL_KG=on       — legacy, only fires outside RAW mode
-  //                            (treated as a post-RRF boost).
-  //   QMD_RECALL_KG_RAW=on   — RAW-compatible, fires regardless of RAW so
-  //                            we can A/B KG injection on baseline eval
-  //                            harnesses (LongMemEval) that require RAW.
-  const kgLegacy = !RAW && process.env.QMD_RECALL_KG === "on";
-  const kgRaw = process.env.QMD_RECALL_KG_RAW === "on";
-  if (kgLegacy || kgRaw) {
+  // 5b2. Smart KG-in-recall (v16). KG facts injected when the main
+  // pipeline came up short. Gated by:
+  //   1. QMD_MEMORY_KG=on (default off)
+  //   2. Query has proper-noun entities (lowercase/wh-questions skipped)
+  //   3. Top score is weak (< 0.3)
+  // KG facts capped at 5, inserted at score 0.25.
+  const kgEnabled = process.env.QMD_MEMORY_KG === "on"
+    // back-compat: old env vars still work
+    || process.env.QMD_RECALL_KG_RAW === "on"
+    || (!RAW && process.env.QMD_RECALL_KG === "on");
+  if (kgEnabled) {
     const entities = extractQueryEntities(query);
     const topScore = sorted[0]?.score ?? 0;
     if (entities.length > 0 && entities.length <= 3 && topScore < 0.3) {
@@ -1524,23 +1510,13 @@ export async function memoryRecall(
     }
   }
 
-  // 5c. Dialog-aware diversity (v16). Addresses the DR@K vs SR@K gap:
-  // on multi-evidence queries, a plain score sort often piles up several
-  // memories from the same source dialog, leaving other evidence dialogs
-  // uncovered in the top-K. Greedy MMR-lite reshuffles the top-limit to
-  // prefer unseen source_dialog_id / source_session_id first, falling
-  // back to score order when all remaining candidates come from already-
-  // covered dialogs.
-  //
-  // Two env gates:
-  //   QMD_RECALL_DIVERSIFY=on — legacy flag, only fires outside RAW mode
-  //     (treated as a post-RRF boost, same tier as keyword/temporal).
-  //   QMD_MEMORY_MMR=session  — new flag, fires regardless of RAW so we
-  //     can A/B diversity as a first-class retrieval lever on baseline
-  //     eval harnesses (LongMemEval etc.) that require RAW=on.
-  const diversifyLegacy = !RAW && process.env.QMD_RECALL_DIVERSIFY === "on";
-  const diversifyMmr = process.env.QMD_MEMORY_MMR === "session";
-  if ((diversifyLegacy || diversifyMmr) && sorted.length > 2) {
+  // 5c. Dialog-aware diversity (v16). Greedy MMR-lite reshuffles top-limit
+  // to prefer unseen source_dialog_id / source_session_id, covering more
+  // evidence dialogs in multi-evidence queries.
+  const diversifyEnabled = process.env.QMD_MEMORY_MMR === "session"
+    // back-compat
+    || (!RAW && process.env.QMD_RECALL_DIVERSIFY === "on");
+  if (diversifyEnabled && sorted.length > 2) {
     sorted = applyDialogDiversity(sorted, limit);
   } else {
     sorted = sorted.slice(0, limit);

@@ -18,17 +18,29 @@ export const CHUNK_OVERLAP_CHARS = CHUNK_OVERLAP_TOKENS * 4;
 export const CHUNK_WINDOW_TOKENS = parseInt(process.env.QMD_CHUNK_WINDOW_TOKENS ?? "200", 10);
 export const CHUNK_WINDOW_CHARS = CHUNK_WINDOW_TOKENS * 4;
 
-// Hybrid query: strong BM25 signal detection thresholds (env-configurable)
-export const STRONG_SIGNAL_MIN_SCORE = parseFloat(process.env.QMD_STRONG_SIGNAL_MIN_SCORE ?? "0.85");
-export const STRONG_SIGNAL_MIN_GAP = parseFloat(process.env.QMD_STRONG_SIGNAL_MIN_GAP ?? "0.15");
-export const RERANK_CANDIDATE_LIMIT = parseInt(process.env.QMD_RERANK_CANDIDATE_LIMIT ?? "40", 10);
-// RRF and scoring tunables (env-configurable)
-export const RRF_K = parseInt(process.env.QMD_RRF_K ?? "60", 10);
-export const WEIGHT_FTS = parseFloat(process.env.QMD_WEIGHT_FTS ?? "2.0");
-export const WEIGHT_VEC = parseFloat(process.env.QMD_WEIGHT_VEC ?? "1.0");
-export const BLEND_RRF_TOP3 = parseFloat(process.env.QMD_BLEND_RRF_TOP3 ?? "0.75");
-export const BLEND_RRF_TOP10 = parseFloat(process.env.QMD_BLEND_RRF_TOP10 ?? "0.60");
-export const BLEND_RRF_REST = parseFloat(process.env.QMD_BLEND_RRF_REST ?? "0.40");
+// Hybrid query: strong BM25 signal detection thresholds
+export const STRONG_SIGNAL_MIN_SCORE = 0.85;
+export const STRONG_SIGNAL_MIN_GAP = 0.15;
+export const RERANK_CANDIDATE_LIMIT = 40;
+// RRF and scoring tunables
+export const RRF_K = 60;
+export const WEIGHT_FTS = 2.0;
+export const WEIGHT_VEC = 1.0;
+export const BLEND_RRF_TOP3 = 0.75;
+export const BLEND_RRF_TOP10 = 0.60;
+export const BLEND_RRF_REST = 0.40;
+
+// Memory recall tunables (validated at n=500 LME, 2026-04-16)
+// FTS over-fetch: 10× beats 20× (+0.4pp recall_any@5, +0.7pp R@5).
+// 5× loses recall. 10× is the validated sweet spot.
+export const MEMORY_FTS_OVERFETCH = 10;
+// Vec KNN pool multiplier: 3/5/10 are byte-identical on LME n=500 —
+// vec signal is noise in additive fusion, so pool size doesn't matter.
+export const MEMORY_VEC_K_MULTIPLIER = 3;
+// Rerank blend: 40% original + 60% rerank score. Cross-encoder logits
+// are min-max normalized before blending.
+export const MEMORY_RERANK_BLEND_ORIGINAL = 0.4;
+export const MEMORY_RERANK_BLEND_RERANK = 0.6;
 
 /** Weight for intent terms relative to query terms (1.0) in snippet scoring */
 export const INTENT_WEIGHT_SNIPPET = 0.3;
