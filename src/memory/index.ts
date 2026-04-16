@@ -18,7 +18,7 @@ import {
   STRONG_SIGNAL_MIN_SCORE, STRONG_SIGNAL_MIN_GAP,
   MEMORY_FTS_OVERFETCH, MEMORY_VEC_K_MULTIPLIER,
   MEMORY_RERANK_BLEND_ORIGINAL, MEMORY_RERANK_BLEND_RERANK,
-  MEMORY_RRF_K, MEMORY_RRF_W_BM25, MEMORY_RRF_W_VEC,
+  MEMORY_RRF_K, MEMORY_RRF_W_BM25, MEMORY_RRF_W_VEC, MEMORY_RRF_W_TIME,
 } from "../store/constants.js";
 
 // =============================================================================
@@ -1080,6 +1080,7 @@ export async function memoryRecall(
   // memCache stores the Memory row for each id (one fetch per id).
   const ftsRanks = new Map<string, number>();
   const vecRanks = new Map<string, number>();
+  const timeRanks = new Map<string, number>();
   const memCache = new Map<string, Memory>();
 
   const passesFilters = (mem: Memory): boolean => {
@@ -1103,7 +1104,10 @@ export async function memoryRecall(
   //
   // Q0 (original) always included — worst case degrades to baseline +
   // some noise instead of replacing signal.
-  const EXPAND_MODE = process.env.QMD_MEMORY_EXPAND;
+  // Default: keywords expansion. Swept at n=500 LME (2026-04-16):
+  // +0.6pp rAny@5, +4pp preference rAny5 (93→97%). Opt out via
+  // QMD_MEMORY_EXPAND=off.
+  const EXPAND_MODE = process.env.QMD_MEMORY_EXPAND ?? "keywords";
   const subQueries: string[] = [query];
   if (EXPAND_MODE === "entities") {
     const expandEntities = extractQueryEntities(query);
@@ -1353,19 +1357,43 @@ export async function memoryRecall(
     }
   }
 
+  // ── STAGE A3: Temporal window retrieval (3rd RRF list) ──
+  // Fires only when query contains a time reference ("last Tuesday",
+  // "5 days ago"). Produces a ranked list by recency proximity to the
+  // time reference. Always runs (not gated by RAW) — it's a proper
+  // retrieval signal, not a boost.
+  const timeRef = parseTimeReference(query);
+  if (timeRef) {
+    const MS_PER_DAY = 86400000;
+    const windowMs = timeRef.windowDays * MS_PER_DAY;
+    const recentRows = db.prepare(
+      `SELECT * FROM memories WHERE created_at > ? AND created_at < ? ORDER BY ABS(created_at - ?) ASC LIMIT ?`
+    ).all(timeRef.targetMs - windowMs, timeRef.targetMs + windowMs, timeRef.targetMs, limit * MEMORY_FTS_OVERFETCH) as Memory[];
+    let timePos = 1;
+    for (const mem of recentRows) {
+      if (!passesFilters(mem)) continue;
+      if (!timeRanks.has(mem.id)) {
+        timeRanks.set(mem.id, timePos++);
+        memCache.set(mem.id, mem);
+      }
+    }
+  }
+
   // ── STAGE B: RRF fusion ──
-  // Combine FTS and vec rank lists into a single scored result set.
-  // All scores are on the same ~0.003-0.033 scale.
+  // Combine FTS, vec, and temporal rank lists into a single scored result set.
+  // All scores on the same ~0.003-0.033 scale.
   const results = new Map<string, MemoryRecallResult & { _access_count: number; _tier: string }>();
-  const allIds = new Set([...ftsRanks.keys(), ...vecRanks.keys()]);
+  const allIds = new Set([...ftsRanks.keys(), ...vecRanks.keys(), ...timeRanks.keys()]);
   for (const id of allIds) {
     const mem = memCache.get(id);
     if (!mem) continue;
     const fR = ftsRanks.get(id);
     const vR = vecRanks.get(id);
+    const tR = timeRanks.get(id);
     const score =
       (fR ? MEMORY_RRF_W_BM25 * (1 / (MEMORY_RRF_K + fR)) : 0) +
-      (vR ? MEMORY_RRF_W_VEC  * (1 / (MEMORY_RRF_K + vR)) : 0);
+      (vR ? MEMORY_RRF_W_VEC  * (1 / (MEMORY_RRF_K + vR)) : 0) +
+      (tR ? MEMORY_RRF_W_TIME * (1 / (MEMORY_RRF_K + tR)) : 0);
     results.set(id, {
       id: mem.id, text: mem.text, category: mem.category, scope: mem.scope,
       importance: mem.importance, score, created_at: mem.created_at,
@@ -1406,36 +1434,12 @@ export async function memoryRecall(
       result.score *= decay;
     }
 
-    // C4. Temporal boost — memories near a time reference score higher.
-    // Time-window memories are injected at median score (not hardcoded 0.5)
-    // so they don't dominate on the RRF scale.
-    const timeRef = parseTimeReference(query);
+    // C4. Temporal proximity boost (multiplicative). Time-window memory
+    // retrieval now happens in Stage A3 as a proper RRF list — this stage
+    // only boosts existing results based on their proximity to the query's
+    // time reference. Scale-invariant multiplier, safe with RRF scores.
     if (timeRef) {
       const MS_PER_DAY = 86400000;
-      const windowMs = timeRef.windowDays * MS_PER_DAY;
-      const recentRows = db.prepare(
-        `SELECT * FROM memories WHERE created_at > ? AND created_at < ? ORDER BY created_at DESC LIMIT ?`
-      ).all(timeRef.targetMs - windowMs, timeRef.targetMs + windowMs, limit) as Memory[];
-
-      // Compute median score for injection (scale-adaptive)
-      const currentScores = [...results.values()].map(r => r.score).sort((a, b) => a - b);
-      const medianScore = currentScores.length > 0
-        ? currentScores[Math.floor(currentScores.length / 2)]!
-        : 0.01; // fallback for empty results
-
-      for (const mem of recentRows) {
-        if (!passesFilters(mem)) continue;
-        if (!results.has(mem.id)) {
-          results.set(mem.id, {
-            id: mem.id, text: mem.text, category: mem.category, scope: mem.scope,
-            importance: mem.importance, score: medianScore, created_at: mem.created_at,
-            _access_count: mem.access_count, _tier: mem.tier,
-            metadata: mem.metadata,
-          });
-        }
-      }
-
-      // Proximity boost for all results (multiplicative)
       for (const result of results.values()) {
         const daysDiff = Math.abs(result.created_at - timeRef.targetMs) / MS_PER_DAY;
         const boost = Math.max(0, 0.40 * (1 - daysDiff / timeRef.windowDays));

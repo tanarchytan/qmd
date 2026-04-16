@@ -45,6 +45,12 @@ export const MEMORY_RRF_K = 60;
 // Path to better vec: fact-augmented embedding keys (see ROADMAP).
 export const MEMORY_RRF_W_BM25 = 0.9;
 export const MEMORY_RRF_W_VEC = 0.1;
+// Temporal window retrieval (3rd RRF list, fires only when query has
+// a parseable time reference). Weight 0.1 — on LME this is a no-op
+// because all memories have the same created_at (ingestion time), but
+// in production with real message timestamps it shifts recency-relevant
+// results up. Swept 0.1/0.3 at n=500 LME: byte-identical to no-temporal.
+export const MEMORY_RRF_W_TIME = 0.1;
 // Rerank blend: swept 0.0/1.0 through 0.6/0.4 at n=500 LME (2026-04-16).
 // 0.1/0.9 is optimal: 98.6% rAny@5, 94.7% R@5, 0.937 MRR, 0.761 pref MRR.
 // 0.0/1.0 crashes (s-user 100→77%) — 10% original weight is critical tiebreaker.
