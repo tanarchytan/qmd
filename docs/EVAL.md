@@ -30,12 +30,8 @@ Both share the same QMD memory pipeline. They test different things and compleme
 
 ## Quick Start — local zero-cost iteration
 
-The recommended default for any retrieval tuning. Everything runs locally, no API keys needed.
-
-```sh
-# One-time fastembed install (Node package, native ONNX runtime, ~80MB)
-npm install fastembed
-```
+The recommended default for any retrieval tuning. Everything runs locally
+via `@huggingface/transformers` (ONNX, no API keys).
 
 ### LongMemEval _s (the headline benchmark)
 
@@ -44,24 +40,34 @@ npm install fastembed
 curl -L -o evaluate/longmemeval/longmemeval_s_cleaned.json \
   https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json
 
-# 100% local, zero API cost, ~25 min for full 500Q on a laptop
-QMD_EMBED_BACKEND=fastembed \
-QMD_RECALL_RAW=on \
+# Full n=500 run (~15 min, zero API cost)
+QMD_EMBED_BACKEND=transformers \
+QMD_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
+QMD_TRANSFORMERS_DTYPE=q8 \
+QMD_VEC_MIN_SIM=0.1 \
+QMD_TRANSFORMERS_QUIET=on \
 QMD_INGEST_EXTRACTION=off \
+QMD_INGEST_REFLECTIONS=off \
 QMD_INGEST_SYNTHESIS=off \
 QMD_INGEST_PER_TURN=off \
+QMD_RECALL_RAW=on \
+QMD_EMBED_MICROBATCH=64 \
   npx tsx evaluate/longmemeval/eval.mts --ds s --limit 500 --no-llm \
-  --workers 4 --tag lme-s-local
+  --workers 2 --tag baseline
 
-# Quick smoke test (n=100, ~5 min)
-LIMIT=100 ./evaluate/run-lme-s-local.sh
+# Quick smoke test (n=100, ~3 min)
+# Same env vars, add --limit 100
+
+# With cross-encoder rerank (~20 min, +1.7pp MRR):
+# Add QMD_MEMORY_RERANK=on to the env vars above
 ```
 
 ### LoCoMo
 
 ```sh
-# Single conversation, fastembed local
-QMD_EMBED_BACKEND=fastembed QMD_RECALL_RAW=on \
+QMD_EMBED_BACKEND=transformers \
+QMD_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
+QMD_TRANSFORMERS_DTYPE=q8 QMD_RECALL_RAW=on \
 QMD_INGEST_EXTRACTION=off QMD_INGEST_SYNTHESIS=off \
   npx tsx evaluate/locomo/eval.mts --conv conv-30 --no-llm
 
@@ -74,19 +80,23 @@ QMD_INGEST_EXTRACTION=off QMD_INGEST_SYNTHESIS=off \
 curl -L -o evaluate/longmemeval/longmemeval_oracle.json \
   https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_oracle.json
 
-QMD_EMBED_BACKEND=fastembed QMD_RECALL_RAW=on \
+QMD_EMBED_BACKEND=transformers \
+QMD_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
+QMD_TRANSFORMERS_DTYPE=q8 QMD_RECALL_RAW=on \
   npx tsx evaluate/longmemeval/eval.mts --ds oracle --limit 200 --no-llm
 ```
 
 ### Final answer-quality validation (paid)
 
-Once retrieval is at parity, run **one** Gemini pass to score F1/EM/SH on real LLM answers:
+Once retrieval is at parity, run **one** Gemini pass to score F1/EM/SH:
 
 ```sh
 GOOGLE_API_KEY=... \
-QMD_EMBED_BACKEND=fastembed QMD_RECALL_RAW=on \
+QMD_EMBED_BACKEND=transformers \
+QMD_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
+QMD_TRANSFORMERS_DTYPE=q8 QMD_RECALL_RAW=on \
   npx tsx evaluate/longmemeval/eval.mts --ds s --limit 500 \
-  --llm gemini --answer-model gemini-2.5-flash --workers 4
+  --llm gemini --answer-model gemini-2.5-flash --workers 2
 ```
 
 ---
@@ -225,37 +235,43 @@ done
 
 ---
 
-## The fastembed local backend
+## The transformers.js local backend
 
-QMD ships a local-only embedding backend at `src/llm/fastembed.ts` that wraps the [`fastembed`](https://www.npmjs.com/package/fastembed) npm package — a Node port of the same Qdrant fastembed library MemPalace uses in their published 96.6% LME run. Same model (`all-MiniLM-L6-v2`, 384-dim ONNX), same determinism guarantees, no API keys.
+QMD uses `@huggingface/transformers` for local ONNX embedding and
+cross-encoder reranking. No API keys, deterministic, no rate limits.
 
 ### Activation
 
 ```sh
-QMD_EMBED_BACKEND=fastembed
+QMD_EMBED_BACKEND=transformers
+QMD_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1  # production default
+QMD_TRANSFORMERS_DTYPE=q8                                    # int8 quantized
 ```
 
-That's it. `embedText`, `embedTextBatch`, and `embedQuery` in `src/memory/index.ts` short-circuit to fastembed before falling through to the existing remote / `node-llama-cpp` chain. Default behavior unchanged when the env var is unset.
+### Production embed model
 
-### Supported models
+| Model | Dim | Quantization | LME rAny@5 | Notes |
+|---|---|---|---|---|
+| **mxbai-embed-xsmall-v1** | 384 | q8 | **98.0%** | Production default. Best overall on LME. |
+| all-MiniLM-L6-v2 | 384 | uint8 | ~95% | agentmemory's default. Weaker on preference. |
 
-Stock models from `fastembed-js` (override via `QMD_FASTEMBED_MODEL=<name>`):
+See `~/.claude/.../memory/project_hf_embed_models_tried.md` for full
+list of tested + failed models (F2LLM, harrier, gemma, nomic, jina, me5).
 
-| Name | Dim | Size | Notes |
-|---|---|---|---|
-| `AllMiniLML6V2` | 384 | ~80 MB | Default. Same model MemPalace uses. |
-| `BGESmallENV15` | 384 | ~130 MB | Often +1-2pp vs MiniLM on MTEB |
-| `BGEBaseENV15` | 768 | ~440 MB | +2-3pp typically, slower |
-| `MLE5Large` | 1024 | ~2.2 GB | Best quality but expensive |
+### Cross-encoder reranker
 
-First use downloads the model to `~/.cache/qmd/fastembed-models/` (override via `QMD_FASTEMBED_CACHE_DIR`). Subsequent runs are zero-cold-start.
+Enabled via `QMD_MEMORY_RERANK=on`. Default model:
+`cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params, q8, ~5-10ms/pair).
+
+Adds +1.7pp MRR at 0.1/0.9 blend (10% original + 90% cross-encoder).
+Wall time: +33% (~20 min vs ~15 min for n=500).
 
 ### Properties
 
-- **Deterministic**: same input → bit-identical output across runs. No more F1 ±3pp noise from gemini server-side replica routing.
-- **No rate limits**: the LME _s n=500 ingest hits 25,000+ embed calls. Remote APIs (ZeroEntropy, OpenAI, etc.) rate-limit hard at this scale; fastembed has no concept of a rate.
-- **Fast**: ~10ms/embedding on CPU. The full LME _s n=500 ingest + retrieval completes in ~25 min on a laptop, vs hours when rate-limited remotely.
-- **No setup**: `npm install fastembed`, set the env var, run. No API key dance.
+- **Deterministic**: same input → bit-identical output across runs
+- **No rate limits**: LME n=500 ingest hits 25,000+ embed calls, no throttling
+- **Fast**: ~10ms/embedding on CPU, full n=500 in ~15 min
+- **No setup**: models auto-download on first use to `~/.cache/huggingface/`
 
 ---
 
@@ -408,21 +424,37 @@ Hindsight/SuperMemory/Zep/Mem0 publish LLM-judge QA accuracy, NOT retrieval
 recall. Direct comparison requires implementing `evaluate_qa.py` (deferred).
 See `docs/notes/metrics.md` for why these numbers are not comparable.
 
-### QMD vs MemPalace verified on same data (2026-04-13)
+### Head-to-head comparisons (live-reproduced, same dataset)
 
-We don't trust published numbers. For every comparison row below, we cloned MemPalace at `~/external/mempalace` and ran their own `benchmarks/locomo_bench.py` / `benchmarks/longmemeval_bench.py` on the exact same data file QMD uses.
+We don't trust published numbers. Every comparison row was live-reproduced
+on the same `longmemeval_s_cleaned.json` dataset (verified SHA-256 match
+with HuggingFace `xiaowu0162/longmemeval-cleaned`).
 
-| Benchmark | Pipeline | Metric | Score | Notes |
+**QMD vs agentmemory (2026-04-16, per-bucket):**
+
+| Bucket | qmd rAny@5 | AM rAny@5 | qmd MRR | AM MRR |
 |---|---|---|---|---|
-| **LME _s n=500** | MemPalace own run | Recall@5 | **96.6%** | their published headline reproduced on our box |
-| LME _s n=500 | MemPalace own run | Recall@1 / @3 / @10 | 80.6 / 92.6 / 98.2% | |
-| LME _s n=100 | QMD raw + fastembed | R@5 / R@10 | 97.0% / 97.0% | first 100 only |
-| LME _s n=100 | QMD raw + fastembed | F1 / EM / SH | 64.9% / 48.0% / 60.0% | answer-quality on top of MP's retrieval-only metric |
-| LME oracle n=200 | QMD v15.1 | R@5 / R@10 | 87.0% / 93.0% | |
-| LME oracle n=200 | MemPalace own run | Recall@1..50 | **100% at every K** | ceilinged — the oracle dataset's haystack is pre-filtered |
-| LoCoMo conv-26+30 | QMD v15.1 | DR@50 | 74.9% | |
-| LoCoMo conv-26+30 | MemPalace own run | DR@50 | 74.8% | parity on the discriminating LoCoMo metric |
-| LoCoMo conv-26+30 | MemPalace own run | session recall | 100% | ceilinged — 19 docs × top-50 = every session always in top-K |
+| knowledge-update | **99%** | 98.7% | **0.961** | 0.911 |
+| multi-session | **99%** | 97.7% | 0.942 | 0.942 |
+| single-session-asst | **100%** | 96.4% | **1.000** | 0.907 |
+| single-session-pref | **93%** | 83.3% | **0.721** | 0.663 |
+| single-session-user | **100%** | 90.0% | **0.941** | 0.807 |
+| temporal-reasoning | 95% | **95.5%** | 0.875 | **0.884** |
+| **OVERALL** | **98.0%** | 95.2% | **0.920** | 0.882 |
+
+**QMD vs MemPalace (2026-04-14, live-reproduced):**
+
+| System | LME _s n=500 recall_any@5 |
+|---|---|
+| **QMD (no rerank)** | **98.0%** |
+| MemPalace raw | 96.6% |
+
+**LoCoMo (2026-04-13):**
+
+| System | DR@50 | Session recall |
+|---|---|---|
+| QMD v15.1 | 74.9% | — |
+| MemPalace own run | 74.8% | 100% (ceilinged) |
 
 **Running MemPalace on our data** (reproduces both rows above):
 
