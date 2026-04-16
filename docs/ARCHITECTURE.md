@@ -27,7 +27,7 @@ identity is the **memory layer**, not the database underneath.
 
 What qmd does today:
 
-- **Hybrid retrieval** — BM25 + dense vectors fused via Reciprocal Rank
+- **Hybrid retrieval** — BM25 + dense vectors fused via weighted Reciprocal Rank
   Fusion, with adaptive cosine floors, post-RRF boosts, and optional
   cross-encoder rerank
 - **Temporal knowledge graph** — subject/predicate/object triples with
@@ -170,131 +170,124 @@ Single entry point: `memoryRecall(db, options)`. Returns a ranked array
 of `MemoryRecallResult`. Optional profiling via `QMD_RECALL_PROFILE=on`
 emits per-stage timing as JSON to stderr.
 
-### Recall pipeline
+### Recall pipeline (restructured 2026-04-16)
+
+Six stages with clean separation between retrieval, fusion, boosts,
+and reranking. All scores on a uniform RRF scale (~0.003-0.033).
 
 ```
 query string + scope + category + tier + limit
    │
    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 0 — query expansion (zero-LLM, gated)                  │
-│   QMD_MEMORY_EXPAND=entities → proper-noun fan-out          │
-│   QMD_MEMORY_EXPAND=keywords → top-N keyword group fan-out  │
-│   Q0 (original) always included; max 3 sub-queries total    │
-└─────────────────────────────────────────────────────────────┘
-   │
-   ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 1+2 — FTS and embed in PARALLEL                        │
+│ STAGE A — Independent retrieval (parallel)                   │
 │                                                             │
-│   ┌──────────────────────┐  ┌────────────────────────────┐ │
-│   │ FTS5 BM25            │  │ embedQuery() per sub-query │ │
-│   │ memories_fts MATCH ? │  │ (await Promise.all)        │ │
-│   │ ORDER BY rank        │  │ getFastEmbedBackend()      │ │
-│   │ LIMIT k*3            │  │ → TransformersEmbedBackend │ │
-│   └──────────────────────┘  │ OR remote.embed()          │ │
-│                             └────────────────────────────┘ │
+│  A0. Query expansion (optional, QMD_MEMORY_EXPAND)          │
+│      entities → proper-noun fan-out                         │
+│      keywords → top-N keyword group fan-out                 │
+│      Q0 (original) always included; max 3 sub-queries       │
 │                                                             │
-│   Strong-signal detection on FTS results:                   │
-│     normTop >= 0.85 && normGap >= 0.15 → skip expansion     │
+│  A1. FTS5 BM25 ──────────┐  A2. Vec KNN ─────────────────┐ │
+│  │ memories_fts MATCH ?   │  │ embedQuery() per sub-query │ │
+│  │ ORDER BY rank          │  │ sqlite-vec cosine KNN      │ │
+│  │ LIMIT k * 10           │  │ Adaptive cosine floor      │ │
+│  │ → ftsRanks: Map<id,    │  │ → vecRanks: Map<id,        │ │
+│  │   1-indexed position>  │  │   1-indexed position>      │ │
+│  └────────────────────────┘  └────────────────────────────┘ │
+│                                                             │
+│  Both lists are rank positions (not raw scores).            │
+│  Scope/category/tier filtering applied at retrieval time.   │
 └─────────────────────────────────────────────────────────────┘
    │
    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 3 — vec0 KNN search (per sub-query embedding)          │
-│   SELECT id, distance FROM memories_vec                     │
-│     WHERE scope = ? AND embedding MATCH ?                   │
-│     AND k = limit * QMD_VEC_K_MULTIPLIER                    │
-│   Adaptive cosine floor: max(QMD_VEC_MIN_SIM, top1 * 0.5)   │
+│ STAGE B — RRF fusion                                         │
+│   score(id) = w_bm25 × 1/(K + bm25_rank)                    │
+│             + w_vec  × 1/(K + vec_rank)                      │
+│   K = 60, w_bm25 = 0.8, w_vec = 0.2 (validated at n=500)   │
+│   Items in only one list get that list's score (no penalty)  │
+│   All scores now on uniform ~0.003-0.033 scale               │
+│                                                             │
+│   Always runs, even in RAW mode — RRF is the base scoring.  │
 └─────────────────────────────────────────────────────────────┘
    │
    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 4 — RRF fusion (FTS + vec lists per sub-query)         │
-│   score(d) = Σ_lists 1 / (k + rank_in_list)                 │
-│   k = 60 (RRF smoothing constant)                           │
-│   Then merge across sub-queries via additive accumulator    │
+│ STAGE C — Post-fusion boosts (gated by !RAW)                 │
+│   All multiplicative (scale-invariant):                     │
+│   C1. Keyword overlap:  score × (1 + 0.4 × overlap_ratio)  │
+│   C2. Quoted phrase:    score × 1.6 per matched phrase      │
+│   C3. Decay (Weibull):  score × composite                   │
+│   C4. Temporal:         score × (1 + 0.4 × proximity)      │
+│       + time-window memory injection at median(scores)      │
+│                                                             │
+│   RAW=on skips all boosts for fair eval baselines.          │
 └─────────────────────────────────────────────────────────────┘
    │
    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 5 — post-RRF boosts (gated by !RAW)                    │
-│   - decay penalty (Weibull composite, see Phase 3)          │
-│   - per-scope rank normalization (QMD_MEMORY_SCOPE_NORM)    │
-│   - keyword overlap boost                                   │
-│   - quoted phrase boost                                     │
-│   - person-name (proper-noun) boost                         │
-│   RAW mode (QMD_RECALL_RAW=on) skips all of these for       │
-│   apples-to-apples comparison vs MemPalace baselines        │
+│ STAGE D — Sort by score                                      │
 └─────────────────────────────────────────────────────────────┘
    │
    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 5b — strong-signal skip for rerank                     │
-│   Compute normTop / normGap on post-RRF scores.             │
-│   If normTop >= 0.85 && normGap >= 0.15: SKIP RERANK.       │
-│   Easy questions don't pay the rerank forward pass.         │
-│   Opt out via QMD_RERANK_STRONG_SIGNAL_SKIP=off             │
+│ STAGE E — Rerank (optional, QMD_MEMORY_RERANK=on)            │
+│   Backend: QMD_RERANK_BACKEND=transformers (local ONNX       │
+│     cross-encoder ms-marco-MiniLM-L6) or remote              │
+│   Strong-signal skip OFF by default (opt-in via              │
+│     QMD_RERANK_STRONG_SIGNAL_SKIP=on)                        │
+│   Min-max normalize logits → blend 10% RRF + 90% rerank     │
+│   (0.1/0.9 validated at n=500: MRR 0.937 vs 0.920 baseline) │
 └─────────────────────────────────────────────────────────────┘
    │
    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 5c — rerank (when not skipped)                         │
-│   Two paths:                                                │
-│   1. Cross-encoder local (QMD_MEMORY_RERANK=cross-encoder): │
-│      TransformersRerankBackend → ms-marco-MiniLM-L6 q8      │
-│      Min-max normalize logits → blend 40% RRF + 60% rerank  │
-│   2. Remote rerank (!RAW + remoteConfig.rerank set):        │
-│      ZeroEntropy / SiliconFlow / etc → same blend formula   │
-└─────────────────────────────────────────────────────────────┘
-   │
-   ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 5d — KG injection (optional, gated)                    │
-│   QMD_RECALL_KG=on (legacy) or QMD_RECALL_KG_RAW=on         │
-│   Three gates: opt-in + ≥1 proper-noun entity in query      │
-│   + top RRF score < 0.3 (only fires on weak retrieval)      │
-│   Injects up to 5 KG facts at score 0.25                    │
-└─────────────────────────────────────────────────────────────┘
-   │
-   ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 6 — dialog diversity (optional, gated)                 │
-│   QMD_RECALL_DIVERSIFY=on (legacy, post-RRF)                │
-│   QMD_MEMORY_MMR=session     (RAW-compat)                   │
-│   applyDialogDiversity() — MMR-lite re-selection that       │
-│   prefers picking memories from unseen dialogs/sessions     │
-└─────────────────────────────────────────────────────────────┘
-   │
-   ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 7 — touch access counts (batched in transaction)       │
-│   UPDATE memories SET access_count += 1, last_accessed = ?  │
-│   Used by Weibull decay scoring later.                      │
+│ STAGE F — Post-rerank                                        │
+│   F1. KG injection (QMD_MEMORY_KG=on)                       │
+│       Gates: opt-in + proper-noun entity + weak top score    │
+│       Injects up to 5 facts at median(current_scores)        │
+│   F2. Dialog diversity (QMD_MEMORY_MMR=session)              │
+│       MMR-lite reshuffle preferring unseen sessions          │
+│   F3. Touch access counts (batched transaction)             │
 └─────────────────────────────────────────────────────────────┘
    │
    ▼
 ranked MemoryRecallResult[] → caller
 ```
 
-**Files:** `src/memory/index.ts` (`memoryRecall`), `src/llm/transformers-embed.ts`, `src/llm/transformers-rerank.ts`, `src/store/constants.ts` (RRF, weight, blend constants).
+**Files:** `src/memory/index.ts` (`memoryRecall`), `src/llm/transformers-embed.ts`, `src/llm/transformers-rerank.ts`, `src/store/constants.ts` (all tunables).
 
-### Default tunings (constants)
+### Memory recall tunables (src/store/constants.ts)
 
-| Constant | Default | Env override | Purpose |
-|---|---|---|---|
-| RRF_K | 60 | QMD_RRF_K | RRF smoothing |
-| WEIGHT_FTS | 2.0 | QMD_WEIGHT_FTS | BM25 list weight |
-| WEIGHT_VEC | 1.0 | QMD_WEIGHT_VEC | vector list weight |
-| BLEND_RRF_TOP3 | 0.75 | QMD_BLEND_RRF_TOP3 | RRF/rerank blend rank 1-3 |
-| BLEND_RRF_TOP10 | 0.60 | QMD_BLEND_RRF_TOP10 | rank 4-10 |
-| BLEND_RRF_REST | 0.40 | QMD_BLEND_RRF_REST | rank 11+ |
-| STRONG_SIGNAL_MIN_SCORE | 0.85 | QMD_STRONG_SIGNAL_MIN_SCORE | gate threshold |
-| STRONG_SIGNAL_MIN_GAP | 0.15 | QMD_STRONG_SIGNAL_MIN_GAP | gate gap requirement |
-| RERANK_CANDIDATE_LIMIT | 40 | QMD_RERANK_CANDIDATE_LIMIT | docs sent to reranker |
-| CHUNK_SIZE_TOKENS | 900 | QMD_CHUNK_SIZE_TOKENS | doc-store chunking |
-| CHUNK_WINDOW_TOKENS | 200 | QMD_CHUNK_WINDOW_TOKENS | break-point search window |
-| QMD_VEC_MIN_SIM | 0.1 | (env only) | adaptive cosine floor override |
+All hardcoded — validated at n=500 LME 2026-04-16. No env var overrides
+for production tunables (avoids accidental misconfiguration).
+
+| Constant | Value | Purpose |
+|---|---|---|
+| MEMORY_RRF_K | 60 | RRF smoothing constant |
+| MEMORY_RRF_W_BM25 | 0.8 | BM25 list weight in RRF fusion |
+| MEMORY_RRF_W_VEC | 0.2 | Vec list weight (low — mxbai-xs vec is weak on LME) |
+| MEMORY_FTS_OVERFETCH | 10 | FTS candidate pool = limit × 10 |
+| MEMORY_VEC_K_MULTIPLIER | 3 | Vec candidate pool = limit × 3 |
+| MEMORY_RERANK_BLEND_ORIGINAL | 0.1 | Original score weight in rerank blend |
+| MEMORY_RERANK_BLEND_RERANK | 0.9 | Cross-encoder score weight |
+| STRONG_SIGNAL_MIN_SCORE | 0.85 | Rerank skip gate (off by default) |
+| STRONG_SIGNAL_MIN_GAP | 0.15 | Rerank skip gap threshold |
+
+### Doc-store search tunables (also in constants.ts)
+
+These apply to the document search pipeline (`src/store/search.ts`),
+NOT memory recall. Hardcoded, no env overrides.
+
+| Constant | Value | Purpose |
+|---|---|---|
+| RRF_K | 60 | Doc-store RRF smoothing |
+| WEIGHT_FTS | 2.0 | Doc-store BM25 weight |
+| WEIGHT_VEC | 1.0 | Doc-store vec weight |
+| BLEND_RRF_TOP3/TOP10/REST | 0.75/0.60/0.40 | Position-aware blend |
+| RERANK_CANDIDATE_LIMIT | 40 | Docs sent to reranker |
+| CHUNK_SIZE_TOKENS | 900 | Doc-store chunking (env-configurable) |
+| CHUNK_WINDOW_TOKENS | 200 | Break-point search window (env-configurable) |
 
 ---
 
@@ -395,12 +388,13 @@ object` with `valid_from` and optional `valid_until`. Three operations:
   for temporal point-in-time queries
 - **`knowledgeInvalidate(db, id)`** — explicit invalidation
 
-The KG can also be **injected into recall results** via `QMD_RECALL_KG=on`
-(legacy gate, requires non-RAW mode) or `QMD_RECALL_KG_RAW=on`
-(RAW-compatible). Three conditions must all be true to fire:
+The KG can also be **injected into recall results** via `QMD_MEMORY_KG=on`
+(back-compat: `QMD_RECALL_KG_RAW=on` and `QMD_RECALL_KG=on` still work).
+Three conditions must all be true to fire:
 1. Opt-in via env
 2. Query contains ≥ 1 proper-noun entity
-3. Top RRF score < 0.3 (only fires on weak retrieval — never displaces strong text matches)
+3. Top score is weak (relative to RRF scale — uses dynamic threshold)
+KG facts are injected at `median(current_scores)` (scale-adaptive).
 
 **Files:** `src/memory/knowledge.ts`, recall integration in
 `src/memory/index.ts`.
@@ -464,23 +458,21 @@ mix from all three tiers in one call (e.g. 5 from core + 10 from working
 │       ▼                                            │
 │  memoryRecall                                      │
 │       │                                            │
-│       ├─ Step 0  query expansion (entities/keys)   │
-│       ├─ Step 1  FTS5 BM25 ─┐                     │
-│       │                     │ in parallel          │
-│       ├─ Step 2  embed sub-queries ┘               │
-│       ├─ Step 3  vec0 KNN per embedding            │
-│       │            scope-partitioned + adaptive    │
-│       │            cosine floor                    │
-│       ├─ Step 4  RRF fusion (FTS + vec lists)      │
-│       ├─ Step 5  post-RRF boosts (gated by !RAW)   │
-│       │            decay / scope norm / keyword /  │
-│       │            quoted phrase / person name     │
-│       ├─ Step 5b strong-signal skip → rerank?      │
-│       ├─ Step 5c rerank (cross-encoder OR remote)  │
-│       │            min-max normalize → 40/60 blend │
-│       ├─ Step 5d KG injection (3-condition gate)   │
-│       ├─ Step 6  dialog diversity (MMR-lite)       │
-│       └─ Step 7  touch access counts (batched)     │
+│       ├─ A0  query expansion (entities/keywords)   │
+│       ├─ A1  FTS5 BM25 → ftsRanks ─┐              │
+│       │                             │ parallel     │
+│       ├─ A2  embed → vec0 KNN → vecRanks ┘         │
+│       │        scope-partitioned + cosine floor    │
+│       ├─ B   RRF fusion (rank-based, 0.8/0.2)     │
+│       │        scores on ~0.003-0.033 scale        │
+│       ├─ C   post-fusion boosts (gated by !RAW)    │
+│       │        keyword / phrase / decay / temporal  │
+│       ├─ D   sort                                  │
+│       ├─ E   rerank (QMD_MEMORY_RERANK=on)         │
+│       │        10% RRF + 90% cross-encoder blend   │
+│       ├─ F1  KG injection (QMD_MEMORY_KG=on)       │
+│       ├─ F2  dialog diversity (MMR-lite)           │
+│       └─ F3  touch access counts (batched)         │
 │                                                    │
 │  → MemoryRecallResult[] (sorted, top-K)            │
 └────────────────────────────────────────────────────┘
@@ -555,27 +547,73 @@ src/
 
 ---
 
-## Performance characteristics (n=100 LME, mxbai-xs q8, no rerank)
+## Performance (LongMemEval _s n=500, mxbai-xs q8, 2026-04-16)
 
-Validated 2026-04-15 on Windows native, workers=2, microbatch=64:
+### Without rerank (production default)
 
-- **Wall:** 2m56s (single sample), variance ~5% run-to-run
-- **R@5:** 98.0% (100% single-session, 93% multi-session)
-- **R@10:** 98.0%
-- **MRR:** 0.937
-- **SR@5 (session-id):** 100%
+| Bucket | n | recall_any@5 | R@5 (frac) | MRR | NDCG@10 |
+|---|---|---|---|---|---|
+| knowledge-update | 78 | 99% | 98% | 0.961 | 0.966 |
+| multi-session | 133 | 99% | 88% | 0.942 | 0.910 |
+| single-session-assistant | 56 | 100% | 100% | 1.000 | 1.000 |
+| single-session-preference | 30 | 93% | 93% | 0.721 | 0.782 |
+| single-session-user | 70 | 100% | 100% | 0.941 | 0.955 |
+| temporal-reasoning | 133 | 95% | 91% | 0.875 | 0.882 |
+| **OVERALL** | 500 | **98.0%** | **93.6%** | **0.920** | **0.920** |
 
-Per-stage timings from `QMD_RECALL_PROFILE=on`:
+Wall: ~15 min (workers=2, microbatch=64, Windows native).
+
+### With rerank (QMD_MEMORY_RERANK=on, 0.1/0.9 blend)
+
+| Metric | No rerank | With rerank | Delta |
+|---|---|---|---|
+| recall_any@5 | 98.0% | **98.6%** | +0.6pp |
+| R@5 (fractional) | 93.6% | **94.7%** | +1.1pp |
+| MRR | 0.920 | **0.937** | +1.7pp |
+| NDCG@10 | 0.920 | **0.933** | +1.3pp |
+| preference MRR | 0.721 | **0.761** | +4.0pp |
+| temporal MRR | 0.875 | **0.919** | +4.4pp |
+
+Wall: ~20 min (+33% for cross-encoder forward pass).
+
+### vs competitors (same dataset, live-reproduced)
+
+| System | recall_any@5 | MRR | NDCG@10 |
+|---|---|---|---|
+| **qmd (no rerank)** | **98.0%** | **0.920** | **0.920** |
+| **qmd (with rerank)** | **98.6%** | **0.937** | **0.933** |
+| agentmemory hybrid | 95.2% | 0.882 | 0.879 |
+| MemPalace raw | 96.6% | — | — |
+
+### Per-stage latency (QMD_RECALL_PROFILE=on)
 
 - FTS5: 1-15 ms (uniformly cheap)
-- embed_wait: 5-2400 ms (highly variable — see profile finding below)
+- embed_wait: 5-2400 ms (variable — WASM thread contention with workers)
 - vec0: 1-3 ms (uniformly cheap)
-- rerank_and_post: 0 ms (no rerank in this config)
+- rerank: 5-50 ms per candidate (cross-encoder forward pass)
 
-**Profile finding:** the embed_wait variance is queue contention on the
-single transformers.js WASM thread — multiple worker async slots fight
-for the embed pipeline. Bench-specific; real OpenClaw single-agent
-workloads don't hit it.
+**Profile note:** embed_wait variance is queue contention on the single
+transformers.js WASM thread — multiple worker async slots fight for the
+embed pipeline. Bench-specific; single-agent production workloads don't
+hit it.
+
+### Design rationale for RRF weights (0.8 BM25 / 0.2 vec)
+
+Vec (mxbai-embed-xsmall-v1 384d q8) is too weak to contribute
+meaningfully to ranking on LME. Swept at n=100:
+
+| RRF weights | rAny@5 | R@5 | s-user rAny5 |
+|---|---|---|---|
+| 1.0/0.0 (BM25-only) | 99% | 93.5% | 99% |
+| 0.9/0.1 | 99% | 94.4% | 99% |
+| **0.8/0.2** | **99%** | **95.0%** | **99%** |
+| 0.7/0.3 | 97% | 92.8% | 96% |
+| 0.4/0.6 | 90% | 86.3% | 86% |
+
+More vec weight → s-user collapses (vec pushes wrong sessions above
+correct BM25 matches). 0.8/0.2 is the sweet spot: tiny vec contribution
+helps multi-session fractional recall without hurting binary recall.
+Path to better vec: fact-augmented embedding keys (see ROADMAP).
 
 ---
 

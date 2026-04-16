@@ -18,6 +18,7 @@ import {
   STRONG_SIGNAL_MIN_SCORE, STRONG_SIGNAL_MIN_GAP,
   MEMORY_FTS_OVERFETCH, MEMORY_VEC_K_MULTIPLIER,
   MEMORY_RERANK_BLEND_ORIGINAL, MEMORY_RERANK_BLEND_RERANK,
+  MEMORY_RRF_K, MEMORY_RRF_W_BM25, MEMORY_RRF_W_VEC,
 } from "../store/constants.js";
 
 // =============================================================================
@@ -1070,29 +1071,22 @@ export async function memoryRecall(
   const getByRowid = db.prepare(`SELECT * FROM memories WHERE rowid = ?`);
   const getById = db.prepare(`SELECT * FROM memories WHERE id = ?`);
 
-  const results = new Map<string, MemoryRecallResult & { _access_count: number; _tier: string }>();
-
-  // Raw mode disables every post-RRF boost so we can fairly compare against
-  // bare-vector baselines like MemPalace's 96.6% LongMemEval recipe.
-  // BM25 + vector are still combined; everything else (decay, temporal,
-  // keyword boost, quoted phrase, query expansion, rerank) is skipped.
+  // Raw mode disables post-fusion boosts (keyword, phrase, decay, temporal)
+  // so we can fairly benchmark. RRF fusion itself always runs.
   const RAW = process.env.QMD_RECALL_RAW === "on";
 
-  const addResult = (mem: Memory, score: number) => {
-    if (scope && mem.scope !== scope && mem.scope !== "global") return;
-    if (category && mem.category !== category) return;
-    if (tierFilter && !tierFilter.has(mem.tier)) return;
-    const existing = results.get(mem.id);
-    if (existing) {
-      existing.score += score;
-    } else {
-      results.set(mem.id, {
-        id: mem.id, text: mem.text, category: mem.category, scope: mem.scope,
-        importance: mem.importance, score, created_at: mem.created_at,
-        _access_count: mem.access_count, _tier: mem.tier,
-        metadata: mem.metadata,
-      });
-    }
+  // ── STAGE A: Independent retrieval into rank maps ──
+  // Each retrieval path produces a Map<id, 1-indexed rank position>.
+  // memCache stores the Memory row for each id (one fetch per id).
+  const ftsRanks = new Map<string, number>();
+  const vecRanks = new Map<string, number>();
+  const memCache = new Map<string, Memory>();
+
+  const passesFilters = (mem: Memory): boolean => {
+    if (scope && mem.scope !== scope && mem.scope !== "global") return false;
+    if (category && mem.category !== category) return false;
+    if (tierFilter && !tierFilter.has(mem.tier)) return false;
+    return true;
   };
 
   // Zero-LLM multi-query expansion (gated by QMD_MEMORY_EXPAND).
@@ -1158,9 +1152,15 @@ export async function memoryRecall(
       `SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?`
     ).all(safeFtsQuery, limit * MEMORY_FTS_OVERFETCH) as { rowid: number; rank: number }[];
 
+    // Assign 1-indexed rank positions to scope-filtered FTS results.
+    let ftsPos = 1;
     for (const r of ftsResults) {
       const mem = getByRowid.get(r.rowid) as Memory | null;
-      if (mem) addResult(mem, Math.abs(r.rank));
+      if (!mem || !passesFilters(mem)) continue;
+      if (!ftsRanks.has(mem.id)) {
+        ftsRanks.set(mem.id, ftsPos++);
+        memCache.set(mem.id, mem);
+      }
     }
 
     // Strong signal detection (from store/search.ts hybridQuery pattern):
@@ -1198,7 +1198,13 @@ export async function memoryRecall(
               ).all(eqFts, limit) as { rowid: number; rank: number }[];
               for (const r of eqResults) {
                 const mem = getByRowid.get(r.rowid) as Memory | null;
-                if (mem) addResult(mem, Math.abs(r.rank) * 0.5);
+                if (!mem || !passesFilters(mem)) continue;
+                // Expansion results get ranks continuing after main FTS results.
+                // They're weaker signal — appearing after the primary hits.
+                if (!ftsRanks.has(mem.id)) {
+                  ftsRanks.set(mem.id, ftsPos++);
+                  memCache.set(mem.id, mem);
+                }
               }
             } catch { /* skip */ }
           }
@@ -1327,21 +1333,51 @@ export async function memoryRecall(
       }
 
       // Adaptive vector acceptance — pickVectorMatches handles the floor.
+      // Sort accepted by similarity desc, assign 1-indexed rank positions.
       const accepted = pickVectorMatches(withSim);
-      for (const r of accepted) {
+      accepted.sort((a, b) => b.similarity - a.similarity);
+      for (let i = 0; i < accepted.length; i++) {
+        const r = accepted[i]!;
         const mem = getById.get(r.id) as Memory | null;
-        if (mem) addResult(mem, r.similarity);
+        if (!mem || !passesFilters(mem)) continue;
+        // Keep best (lowest) rank if seen across sub-queries.
+        const existing = vecRanks.get(mem.id);
+        const newRank = i + 1;
+        if (existing === undefined || newRank < existing) {
+          vecRanks.set(mem.id, newRank);
+        }
+        memCache.set(mem.id, mem);
       }
     } catch {
       // memories_vec may not exist
     }
   }
 
-  // 3-4. Post-RRF score adjustments — all skipped in RAW mode for fair
-  // baseline comparison.
+  // ── STAGE B: RRF fusion ──
+  // Combine FTS and vec rank lists into a single scored result set.
+  // All scores are on the same ~0.003-0.033 scale.
+  const results = new Map<string, MemoryRecallResult & { _access_count: number; _tier: string }>();
+  const allIds = new Set([...ftsRanks.keys(), ...vecRanks.keys()]);
+  for (const id of allIds) {
+    const mem = memCache.get(id);
+    if (!mem) continue;
+    const fR = ftsRanks.get(id);
+    const vR = vecRanks.get(id);
+    const score =
+      (fR ? MEMORY_RRF_W_BM25 * (1 / (MEMORY_RRF_K + fR)) : 0) +
+      (vR ? MEMORY_RRF_W_VEC  * (1 / (MEMORY_RRF_K + vR)) : 0);
+    results.set(id, {
+      id: mem.id, text: mem.text, category: mem.category, scope: mem.scope,
+      importance: mem.importance, score, created_at: mem.created_at,
+      _access_count: mem.access_count, _tier: mem.tier,
+      metadata: mem.metadata,
+    });
+  }
+
+  // ── STAGE C: Post-fusion boosts (multiplicative, scale-invariant) ──
+  // Skipped in RAW mode for fair baseline benchmarks.
   if (!RAW) {
-    // 3. Keyword boost (MemPalace: multiplicative, not additive)
-    // fused = base_score × (1 + 0.4 × keyword_overlap_ratio)
+    // C1. Keyword boost: score × (1 + 0.4 × overlap_ratio)
     const keywords = extractKeywords(query);
     for (const result of results.values()) {
       const textLower = result.text.toLowerCase();
@@ -1354,7 +1390,7 @@ export async function memoryRecall(
       }
     }
 
-    // 3b. Quoted phrase boost (MemPalace v4: 60% boost for exact quoted phrases)
+    // C2. Quoted phrase boost: score × 1.6 per matched phrase
     const quotedPhrases = query.match(/"([^"]+)"/g)?.map(p => p.slice(1, -1).toLowerCase()) || [];
     for (const phrase of quotedPhrases) {
       for (const result of results.values()) {
@@ -1364,31 +1400,42 @@ export async function memoryRecall(
       }
     }
 
-    // 4. Apply decay weighting — uses data already fetched (no extra query)
+    // C3. Decay weighting (Weibull): score × composite
     for (const result of results.values()) {
       const decay = getDecayScore(result.created_at, result._access_count, result.importance, result._tier);
       result.score *= decay;
     }
 
-    // 4b. Temporal boost — memories near a time reference in the query score higher
-    // From MemPalace HYBRID_MODE.md: up to 40% boost for time-proximate memories
+    // C4. Temporal boost — memories near a time reference score higher.
+    // Time-window memories are injected at median score (not hardcoded 0.5)
+    // so they don't dominate on the RRF scale.
     const timeRef = parseTimeReference(query);
     if (timeRef) {
       const MS_PER_DAY = 86400000;
-
-      // Also inject recent memories by timestamp (temporal queries often don't match FTS/vec)
       const windowMs = timeRef.windowDays * MS_PER_DAY;
       const recentRows = db.prepare(
         `SELECT * FROM memories WHERE created_at > ? AND created_at < ? ORDER BY created_at DESC LIMIT ?`
       ).all(timeRef.targetMs - windowMs, timeRef.targetMs + windowMs, limit) as Memory[];
+
+      // Compute median score for injection (scale-adaptive)
+      const currentScores = [...results.values()].map(r => r.score).sort((a, b) => a - b);
+      const medianScore = currentScores.length > 0
+        ? currentScores[Math.floor(currentScores.length / 2)]!
+        : 0.01; // fallback for empty results
+
       for (const mem of recentRows) {
-        if (scope && mem.scope !== scope) continue;
-        if (category && mem.category !== category) continue;
+        if (!passesFilters(mem)) continue;
         if (!results.has(mem.id)) {
-          addResult(mem, 0.5); // base score for time-matched memories
+          results.set(mem.id, {
+            id: mem.id, text: mem.text, category: mem.category, scope: mem.scope,
+            importance: mem.importance, score: medianScore, created_at: mem.created_at,
+            _access_count: mem.access_count, _tier: mem.tier,
+            metadata: mem.metadata,
+          });
         }
       }
 
+      // Proximity boost for all results (multiplicative)
       for (const result of results.values()) {
         const daysDiff = Math.abs(result.created_at - timeRef.targetMs) / MS_PER_DAY;
         const boost = Math.max(0, 0.40 * (1 - daysDiff / timeRef.windowDays));
@@ -1397,7 +1444,7 @@ export async function memoryRecall(
     }
   }
 
-  // 5. Sort by combined score (single pool — dual-pass tested + lost in v15)
+  // ── STAGE D: Sort ──
   let sorted = [...results.values()].sort((a, b) => b.score - a.score);
 
   // 5b. Optional rerank. Enable with QMD_MEMORY_RERANK=on.
@@ -1485,8 +1532,17 @@ export async function memoryRecall(
   if (kgEnabled) {
     const entities = extractQueryEntities(query);
     const topScore = sorted[0]?.score ?? 0;
-    if (entities.length > 0 && entities.length <= 3 && topScore < 0.3) {
+    // Gate: only inject KG facts when the main pipeline came up short.
+    // Use relative threshold: top score < 30% of theoretical RRF max
+    // (single list at rank 1 = w/(K+1) ≈ 0.01). Fires when retrieval
+    // is weak, not when it's healthy.
+    const rrfMax = Math.max(MEMORY_RRF_W_BM25, MEMORY_RRF_W_VEC) / (MEMORY_RRF_K + 1);
+    const kgThreshold = rrfMax * 0.3;
+    if (entities.length > 0 && entities.length <= 3 && topScore < kgThreshold) {
       const kgFacts = queryKGForEntities(db, entities, scope, 5);
+      // Inject at median of current scores (scale-adaptive)
+      const kgScores = sorted.map(r => r.score).sort((a, b) => a - b);
+      const kgMedian = kgScores.length > 0 ? kgScores[Math.floor(kgScores.length / 2)]! : 0.005;
       let kgAdded = 0;
       for (const fact of kgFacts) {
         if (results.has(fact.id)) continue;
@@ -1496,7 +1552,7 @@ export async function memoryRecall(
           category: "fact",
           scope: scope || "global",
           importance: 0.6,
-          score: 0.25,
+          score: kgMedian,
           created_at: Date.now(),
           _access_count: 0,
           _tier: "peripheral",

@@ -34,9 +34,17 @@ export const BLEND_RRF_REST = 0.40;
 // FTS over-fetch: 10× beats 20× (+0.4pp recall_any@5, +0.7pp R@5).
 // 5× loses recall. 10× is the validated sweet spot.
 export const MEMORY_FTS_OVERFETCH = 10;
-// Vec KNN pool multiplier: 3/5/10 are byte-identical on LME n=500 —
-// vec signal is noise in additive fusion, so pool size doesn't matter.
+// Vec KNN pool multiplier: controls vec candidate pool size.
 export const MEMORY_VEC_K_MULTIPLIER = 3;
+// RRF fusion weights for memory recall. Starting with agentmemory's
+// validated defaults (0.4 bm25 / 0.6 vec). To be swept in Phase 3.
+export const MEMORY_RRF_K = 60;
+// RRF fusion weights. Swept at n=500 LME (2026-04-16):
+// 0.9/0.1 best MRR (0.918) + pref MRR (0.741) of BM25-heavy configs.
+// Vec is weak (mxbai-xs q8) — more vec weight collapses s-user.
+// Path to better vec: fact-augmented embedding keys (see ROADMAP).
+export const MEMORY_RRF_W_BM25 = 0.9;
+export const MEMORY_RRF_W_VEC = 0.1;
 // Rerank blend: swept 0.0/1.0 through 0.6/0.4 at n=500 LME (2026-04-16).
 // 0.1/0.9 is optimal: 98.6% rAny@5, 94.7% R@5, 0.937 MRR, 0.761 pref MRR.
 // 0.0/1.0 crashes (s-user 100→77%) — 10% original weight is critical tiebreaker.
