@@ -136,8 +136,15 @@ Config lives in `~/.config/qmd/.env` (see `.env.example` for all options).
 Index stored at `~/.cache/qmd/index.sqlite`.
 
 Key env vars:
-- `QMD_EMBED_BACKEND=transformers` — opt in to local ONNX embed via `@huggingface/transformers` (default: remote only)
+- `QMD_EMBED_BACKEND=transformers` — local ONNX embed via `@huggingface/transformers` (default: remote only)
 - `QMD_EMBED_PROVIDER`, `QMD_RERANK_PROVIDER`, `QMD_QUERY_EXPANSION_PROVIDER` — per-operation remote LLM config
+- `QMD_MEMORY_RERANK=on` — enable memory rerank. Backend: `QMD_RERANK_BACKEND=transformers` (local cross-encoder, default) or `remote`
+- `QMD_MEMORY_KG=on` — KG fact injection on weak recall (default off)
+- `QMD_MEMORY_MMR=session` — dialog-aware diversity reranking (default off)
+- `QMD_RECALL_RAW=on` — skip all post-fusion boosts (for eval baselines)
+- `QMD_MEMORY_EXPAND=keywords|entities` — zero-LLM query expansion (default off)
+
+Memory recall tunables are hardcoded in `src/store/constants.ts` (validated at n=500 LME 2026-04-16).
 
 When running as OpenClaw plugin: provider config lives in `openclaw.json` under `plugins.entries.tanarchy-qmd.config` (embed/rerank/queryExpansion objects). Plugin maps these to QMD_* env vars on register().
 

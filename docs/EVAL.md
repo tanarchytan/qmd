@@ -8,8 +8,8 @@ How QMD benchmarks itself, the metrics that matter, and the cost discipline we f
 
 QMD runs against two long-term memory benchmarks (LongMemEval and LoCoMo) using a **local-first iteration loop** that costs nothing per run. We use remote LLMs (Gemini) for **one final answer-quality validation** at the end of a tuning cycle, never during retrieval iteration. The methodology has three rules:
 
-1. **Iterate locally with `fastembed` + `--no-llm`.** Zero API keys, zero network calls, deterministic. R@K / MRR / SR@K / DR@K are all accurate without an LLM in the loop. F1 / EM / SH become noisy but stay comparable across runs.
-2. **Lead reports with R@K + F1/EM/SH/MRR.** SR@K and DR@K (the MemPalace-compat metrics) are demoted to a single reference row because they ceiling on pre-filtered haystacks and cannot discriminate pipeline quality on most datasets we care about.
+1. **Iterate locally with `transformers` + `--no-llm`.** Zero API keys, zero network calls, deterministic. `recall_any@K` / `R@K` (fractional) / MRR / NDCG@10 are all accurate without an LLM in the loop. F1 / EM / SH become noisy but stay comparable across runs.
+2. **Lead reports with `recall_any@K` + `R@K` (fractional) + MRR + NDCG@10.** Content-coverage (`Cov@K`) is a qmd-internal secondary metric — NOT comparable to external benchmarks. See `docs/notes/metrics.md` for the full metric space walkthrough.
 3. **Match MemPalace's ground truth, not their numbers.** For every comparison we run their actual `benchmarks/locomo_bench.py` and `benchmarks/longmemeval_bench.py` on the same data — published headline numbers are not a substitute. Where MemPalace makes choices that hurt production quality (e.g. no cosine threshold), we don't copy them; we ship features that adapt across both regimes.
 
 Cost ceiling for a typical iteration cycle: **$0**. Cost ceiling for a final answer-quality validation: ~$0.30 / 500-question Gemini run.
@@ -68,7 +68,7 @@ QMD_INGEST_EXTRACTION=off QMD_INGEST_SYNTHESIS=off \
 # Ingest is cached — subsequent runs against the same DB are seconds
 ```
 
-### LongMemEval oracle (faster but ceiling'd at SR@K=100%)
+### LongMemEval oracle (faster but ceiling'd at recall_any@K=100%)
 
 ```sh
 curl -L -o evaluate/longmemeval/longmemeval_oracle.json \
@@ -95,15 +95,17 @@ QMD_EMBED_BACKEND=fastembed QMD_RECALL_RAW=on \
 
 The single biggest lesson of the v15-v16 cycle: **never spend on Gemini during retrieval iteration**. A naive eval run on LME _s n=500 with our default v15.1 stack burns ~$0.20 per pass, and we typically need 5-10 passes to validate any change. That's $1-2 per A/B. Multiplied across categories (embed model, granularity, threshold, diversity, KG) it's easily $30+ per session.
 
-By staying on `--no-llm` + `QMD_EMBED_BACKEND=fastembed`, the same matrix runs at $0. The trade-off:
+By staying on `--no-llm` + `QMD_EMBED_BACKEND=transformers`, the same matrix runs at $0. The trade-off:
 
 | Metric | Available with `--no-llm`? |
 |---|---|
-| R@5 / R@10 / MRR | ✅ Accurate — depends only on retrieved memories |
-| SR@K / DR@K | ✅ Accurate |
-| F1 / EM / SH | ⚠️ Noisy — `prediction` falls back to "top memories joined and truncated" instead of an LLM answer. Becomes a rough retrieval-quality proxy |
+| recall_any@K (binary) | ✅ Accurate — matches agentmemory/mem0/MemPalace "R@K" |
+| R@K (fractional) | ✅ Accurate — LongMemEval paper definition |
+| MRR / NDCG@10 | ✅ Accurate |
+| Cov@K (content-overlap) | ✅ Accurate — qmd-internal, NOT comparable externally |
+| F1 / EM / SH | ⚠️ Noisy — `prediction` falls back to "top memories joined and truncated" instead of an LLM answer |
 
-For retrieval iteration, R@K and MRR are the discriminating signals. F1/EM/SH are validated in the final paid pass.
+For retrieval iteration, `recall_any@K`, `R@K` (fractional), MRR, and NDCG@10 are the discriminating signals. See `docs/notes/metrics.md` for full metric definitions and which competitor publishes what.
 
 ---
 
@@ -373,36 +375,38 @@ QMD's evals now report six primary metrics and four MemPalace-compat reference m
 | **EM** | Answer quality (strict) | Exact tokenized match |
 | **SH** | Answer quality (substring) | Normalized truth ⊂ normalized prediction. Catches "27" vs "27 years old" false negatives that F1 scores 0 |
 
-### MemPalace-compat (reference only — take with a grain of salt)
+### Metric families (updated 2026-04-16 — see `docs/notes/metrics.md`)
 
-| Metric | Definition | Discriminates? |
-|---|---|---|
-| `SR@K` | Any top-K memory's `source_session_id` ∈ evidence sessions (MemPalace `recall_any`) | Ceilinged on LME oracle (both QMD and MemPalace score 100% at every K) |
-| `DR@K` | `found_dialog_ids / len(evidence)` (MemPalace `compute_retrieval_recall`) | Honest on LoCoMo; not computable on LME |
+| Family | What it computes | Who uses it | eval.mts field |
+|---|---|---|---|
+| **recall_any@K** (binary) | 1 if any gold session in top-K | agentmemory, mem0, MemPalace ("R@K") | `r_any5/10/20` |
+| **R@K** (fractional) | `\|gold ∩ top_k\| / \|gold\|` | LongMemEval paper | `r5/10/15/20/50` |
+| **MRR** | `1 / rank_of_first_gold` | all sources (consistent) | `mrr` |
+| **NDCG@10** | DCG / IDCG with per-question `min(k, \|gold\|)` | LME paper | `ndcg10` |
+| **Cov@K** (content-overlap) | token overlap with answer text | qmd-internal only | `cov_r5/10/20` |
+| **QA accuracy** (LLM-judge) | generate answer + judge 0/1 | Supermemory, Hindsight | not implemented |
 
-K ∈ {5, 10, 15, 50}. **Why grain of salt:**
-
-- **On LME oracle**, MemPalace's own benchmark scored `Recall@1 = Recall@5 = Recall@50 = 100%`. The oracle dataset is pre-filtered to relevant sessions, so any retriever that returns any memory at all trivially passes. The metric doesn't discriminate pipelines on this dataset — it's a ceiling.
-- **On LoCoMo session granularity**, same thing: 19 docs per conversation with top-50 retrieval means every session is always in top-K. MemPalace's own run scored 100% on all 304 questions.
-- **LoCoMo dialog granularity is the one honest comparison**: QMD v15.1 DR@50 = 74.9% vs MemPalace own run DR@50 = 74.8% — parity on their metric with their own pipeline on the same data.
-
-The take-home: **SR@K and DR@K have strong caveats and should never be reported as headline numbers**. Lead with R@K (discriminates real retriever changes) plus F1/EM/SH (measure synthesis quality).
+**Never compare across families.** The 2026-04-15 "82% multi-session
+ceiling" was caused by comparing qmd's Cov@5 to agentmemory's recall_any@5.
+Six hours wasted. See `docs/notes/metrics.md` for the full walkthrough.
 
 ## SOTA Reference (LongMemEval published scores)
 
 All published LongMemEval scores below are on `longmemeval_s_cleaned` (the large unfiltered haystack), **not** the `oracle` dataset QMD's day-to-day benchmarks use. Comparing QMD numbers to these figures requires running on `_s`.
 
-| System | LME _s R@5 | Architecture | Headline metric |
-|--------|-----------|--------------|---|
-| **Hindsight** | **91.4%** | semantic + BM25 + entity graph + temporal + cross-encoder rerank + reflect | session recall |
-| MemPalace (raw, fastembed) | **96.6%** | ChromaDB + all-MiniLM-L6-v2 + session granularity + raw verbatim | session recall |
-| SuperMemory | 81.6% | Memory graph + RAG + auto contradiction resolution | session recall |
-| Zep / Graphiti | 63.8% | Temporal KG with bitemporal validity | session recall |
-| Mem0 | 49.0% | Vector + KG dual-store, atomic extraction | session recall |
-| **QMD v16 (raw + fastembed)** | **97.0% (n=100)** ¹ | BM25 + vec RRF + adaptive cosine + raw mode + fastembed | token-overlap recall + F1/EM/SH/MRR |
-| QMD v15.1 (default stack on oracle) | R@5 87.0% · F1 50.6% | BM25 + vec + RRF + LLM rerank + merged extraction + synthesis + v11.1 prompt | full pipeline |
+| System | recall_any@5 | R@5 (frac) | MRR | NDCG@10 | Metric type |
+|--------|---|---|---|---|---|
+| **QMD (2026-04-16 best, n=500)** | **98.0%** | **93.6%** | **0.920** | **0.920** | retrieval |
+| agentmemory hybrid (live, n=500) | 95.2% | — | 0.882 | 0.879 | retrieval |
+| MemPalace raw (live-reproduced) | 96.6% | — | — | — | retrieval (recall_any) |
+| Hindsight (Gemini-3) | — | — | — | — | **QA accuracy 91.4%** |
+| SuperMemory (GPT-4o) | — | — | — | — | **QA accuracy 81.6%** |
+| Zep / Graphiti | — | — | — | — | **QA accuracy 63.8%** (est.) |
+| Mem0 | — | — | — | — | **QA accuracy 49.0%** (est.) |
 
-¹ n=100 first 100 questions of `_s_cleaned`. Full n=500 confirmation run in flight at session close.
+Hindsight/SuperMemory/Zep/Mem0 publish LLM-judge QA accuracy, NOT retrieval
+recall. Direct comparison requires implementing `evaluate_qa.py` (deferred).
+See `docs/notes/metrics.md` for why these numbers are not comparable.
 
 ### QMD vs MemPalace verified on same data (2026-04-13)
 
