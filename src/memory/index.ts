@@ -1412,10 +1412,12 @@ export async function memoryRecall(
     || process.env.QMD_MEMORY_RERANK === "cross-encoder";
   const rerankBackend = process.env.QMD_RERANK_BACKEND || "transformers";
   // Strong-signal skip: when the top result is high-confidence with a
-  // clear gap to second place, skip rerank entirely — it can only hurt
-  // easy questions. Opt out via QMD_RERANK_STRONG_SIGNAL_SKIP=off.
+  // Strong-signal skip: off by default. Swept at n=500 LME (2026-04-16):
+  // skip-off wins on all metrics (+0.4pp recall, +1.1pp R@5, +1.1pp pref MRR).
+  // The gate was blocking rerank on borderline questions where it helps most.
+  // Opt in via QMD_RERANK_STRONG_SIGNAL_SKIP=on if wall time is critical.
   let strongSignalSkip = false;
-  if (sorted.length > 1 && process.env.QMD_RERANK_STRONG_SIGNAL_SKIP !== "off") {
+  if (sorted.length > 1 && process.env.QMD_RERANK_STRONG_SIGNAL_SKIP === "on") {
     const sortedScores = sorted.map(r => r.score);
     const topScore = sortedScores[0] ?? 0;
     const secondScore = sortedScores[1] ?? 0;

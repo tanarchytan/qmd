@@ -39,6 +39,9 @@ export const MEMORY_FTS_OVERFETCH = 10;
 export const MEMORY_VEC_K_MULTIPLIER = 3;
 // Rerank blend: 40% original + 60% rerank score. Cross-encoder logits
 // are min-max normalized before blending.
+// Rerank blend: 40% original + 60% rerank score. Swept at n=500 LME
+// (2026-04-16): 0.4/0.6 + skip-off is best on all metrics including
+// preference MRR (0.732 vs 0.721 no-rerank). 0.5/0.5 loses preference.
 export const MEMORY_RERANK_BLEND_ORIGINAL = 0.4;
 export const MEMORY_RERANK_BLEND_RERANK = 0.6;
 
