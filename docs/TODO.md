@@ -123,14 +123,32 @@ Current: ms-marco-MiniLM-L-6-v2 (22M params, ~5-10ms/pair).
 - [ ] Three-tier scope hierarchy (Mem0: session/user/agent)
 - [ ] Cross-session signal routing (Tinkerclaw Round Table)
 
+### Code-only optimizations (next candidates, no API needed)
+
+Priority-ordered from `docs/notes/random-findings-online.md`:
+
+- [ ] **L1 user-turns-only ingest** — `QMD_INGEST_USER_ONLY=on` already
+  coded. Untested at n=500 on current RRF pipeline. Schift reports
+  +3pp R@1 by stripping assistant verbosity from embedded text.
+- [ ] **L# blend (L0+L1+L2)** — store same conversation at three detail
+  levels: L0=full, L1=user-only, L2=first-3-user-turns. Merge with
+  `0.5×L1 + 0.3×L2 + 0.2×L0` at query time. Schift reports 88% R@1
+  vs 85% baseline. Needs L2 implementation + blend logic.
+- [ ] **Synonym expansion in BM25** — agentmemory has this. Would help
+  preference queries where gold session uses synonyms of query words.
+  Needs synonym dict or stemmer integration with FTS5.
+
 ### Parked (proven no signal on current bench)
 
-- [x] ~~QMD_MEMORY_EXPAND=keywords~~ — flat on preference sr5
 - [x] ~~QMD_MEMORY_MMR=session~~ — flat on LME (byte-identical)
 - [x] ~~kMultiplier 3→10~~ — byte-identical (vec is noise)
-- [x] ~~RRF refactor (old attempt, pre-restructure)~~ — net loss, superseded
+- [x] ~~RRF refactor old attempt~~ — superseded by 2026-04-16 restructure
 - [x] ~~HyDE / generative query expansion~~ — coverage already 100%
 - [x] ~~Wider candidate pool~~ — top-40 already contains correct sessions
+- [x] ~~Temporal 3rd RRF list~~ — byte-identical on LME (shared ingest timestamp)
+- [x] ~~Post-fusion boosts (RAW=off)~~ — crushes preference MRR (-13pp)
+- [x] ~~QMD_MEMORY_EXPAND=keywords was parked~~ → **REVERSED 2026-04-16**:
+  +0.6pp rAny@5, +4pp preference rAny5 (93→97%). Now default.
 
 ---
 

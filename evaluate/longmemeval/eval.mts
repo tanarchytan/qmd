@@ -610,7 +610,7 @@ async function main() {
         }
         sessionTexts.push(date ? `[${date}]\n${sessionText}` : sessionText);
         if (!batchExtract && process.env.QMD_INGEST_EXTRACTION !== "off") {
-          try { await extractAndStore(db, sessionText, scope); } catch { /* skip */ }
+          try { await extractAndStore(db, sessionText, scope, { source_session_id: sessionId }); } catch { /* skip */ }
         }
       }
 

@@ -264,6 +264,7 @@ export async function extractAndStore(
   scope?: string,
   storeFn?: StoreFn,
   knowledgeStoreFn?: KnowledgeStoreFn,
+  metadata?: Record<string, unknown>,
 ): Promise<ExtractionResult> {
   const store = storeFn!;
 
@@ -287,6 +288,7 @@ export async function extractAndStore(
       category: mem.category,
       scope,
       importance: mem.importance,
+      metadata,
     });
     if (result.status === "created") {
       stored++;
@@ -316,6 +318,7 @@ export async function extractAndStore(
       category: "preference",
       scope,
       importance: 0.4,
+      metadata,
     });
     if (result.status === "created") stored++;
     else duplicates++;

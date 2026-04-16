@@ -48,8 +48,8 @@ import { extractAndStore as _extractAndStore, extractReflections as _extractRefl
 export type { ExtractionResult } from "./extractor.js";
 
 /** Wrapper that injects memoryStore + knowledgeStore to break circular import */
-export async function extractAndStore(db: Database, text: string, scope?: string): Promise<ExtractionResult> {
-  return _extractAndStore(db, text, scope, memoryStore, knowledgeStore);
+export async function extractAndStore(db: Database, text: string, scope?: string, metadata?: Record<string, unknown>): Promise<ExtractionResult> {
+  return _extractAndStore(db, text, scope, memoryStore, knowledgeStore, metadata);
 }
 
 /** Reflection extraction wrapper — see extractor.extractReflections */
