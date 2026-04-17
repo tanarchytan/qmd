@@ -19,8 +19,8 @@ Benchmarks against LongMemEval _s. Scores are the period's best; the 2026-04-13 
 
 | Model | Dim | Failure mode | Retry on Windows? |
 |---|---|---|---|
-| google/embeddinggemma-300m | 768 | 14.6 GB RSS at load | Worth trying — Windows has 16 GB |
-| nomic-ai/nomic-embed-text-v1.5 | 768 | 48 GB alloc OOM (8K context) | Try with smaller context window cap |
+| google/embeddinggemma-300m | 768 | 14.6 GB RSS at load (was fp32) | **Yes — use `onnx-community/embeddinggemma-300m-ONNX` int8 (309 MB).** Now in candidates table. |
+| nomic-ai/nomic-embed-text-v1.5 | 768 | 48 GB alloc OOM (8K context expansion) | Try with smaller context cap |
 | jinaai/jina-v5-text-nano | 384 | OOM at ingest | Maybe — different runtime |
 | F2LLM-v2 GGUF | — | Tokenizer missing | No (GGUF path removed from qmd) |
 | harrier-oss-v1-270m | 384 | Decoder, not encoder | No (architecturally wrong) |
@@ -57,8 +57,9 @@ Checked each model card for ONNX + int8 availability.
 
 | Model | Dim | MTEB retrieval | ONNX int8 | Notes |
 |---|---|---|---|---|
+| **onnx-community/embeddinggemma-300m-ONNX** | 768 (→512/256/128) | **#1 <500M on MTEB** | ✅ `model_quantized.onnx` (309 MB) | Google Gemma-3-based. Matryoshka-truncatable. Previous WSL OOM was fp32 (1.23 GB tensor); int8 variant should fit Windows 16 GB. |
 | jinaai/jina-embeddings-v3 | 1024 | 66.65 | ✅ native | Best MTEB English retrieval score 2025. LoRA adapters add complexity (task prefix required). |
-| nomic-ai/nomic-embed-text-v1.5 | 768 | 62.39 | ✅ native | Matryoshka — truncatable to 384/512. Previously OOM'd on WSL. |
+| nomic-ai/nomic-embed-text-v1.5 | 768 | 62.39 | ✅ native | Matryoshka — truncatable to 384/512. Previously OOM'd on WSL (8K context). |
 | intfloat/e5-small-v2 | 384 | 57.52 | ✅ Xenova port | Needs query/passage prefix at embed time. |
 | intfloat/e5-base-v2 | 768 | 59.63 | ✅ Xenova port | Same prefix requirement. |
 | intfloat/e5-large-v2 | 1024 | 62.25 | ✅ Xenova port | At dim cap. |
@@ -77,13 +78,14 @@ Checked each model card for ONNX + int8 availability.
 
 ## Recommended test order (Phase 11)
 
-Cheapest → most expensive. Stop on first clear win.
+Cheapest → highest-upside. Stop on first clear win.
 
 1. **BAAI/bge-small-en-v1.5** (384d, same dim as current) — lowest risk, direct comparison
 2. **mixedbread-ai/mxbai-embed-large-v1** (1024d, same family) — native upgrade path
-3. **BAAI/bge-base-en-v1.5** (768d) — reasonable middle ground, strong MTEB
-4. **nomic-ai/nomic-embed-text-v1.5** (768d) — Matryoshka lets us truncate if 768d is too heavy
-5. **jinaai/jina-embeddings-v3** (1024d) — best MTEB but LoRA prefix complexity
+3. **onnx-community/embeddinggemma-300m-ONNX** (768d, Matryoshka) — #1 MTEB <500M, int8 is 309 MB. High upside; retry after WSL OOM.
+4. **BAAI/bge-base-en-v1.5** (768d) — strong MTEB baseline at middle dim
+5. **nomic-ai/nomic-embed-text-v1.5** (768d) — Matryoshka dim reduction option
+6. **jinaai/jina-embeddings-v3** (1024d) — best MTEB retrieval but LoRA prefix complexity
 
 ## Test procedure (no code change)
 
