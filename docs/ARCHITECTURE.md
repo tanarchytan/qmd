@@ -538,11 +538,22 @@ src/
 ├── llm/
 │   ├── transformers-embed.ts   ← mxbai-xs q8 backend (default local)
 │   ├── transformers-rerank.ts  ← ms-marco-MiniLM-L6 cross-encoder
-│   ├── remote.ts               ← OpenAI/ZE/SF/Gemini providers
-│   └── cache.ts                ← LLM response cache
+│   ├── remote.ts               ← OpenAI/ZE/SF/Gemini/Poe providers
+│   ├── cache.ts                ← LLM response cache
+│   ├── gpu-probe.ts            ← OS-level VRAM/driver/NPU detector
+│   └── embed-sizer.ts          ← device + microbatch + worker budgeter (QMD_TRANSFORMERS_DEVICE=auto)
 ├── mcp/server.ts          ← canonical CRUD MCP tool surface (26 tools)
 ├── openclaw/plugin.ts     ← OpenClaw integration + dream gate
-└── cli/qmd.ts             ← all 40+ CLI commands
+└── cli/                   ← CLI split across focused modules (2026-04-18 refactor)
+    ├── qmd.ts                  ← dispatcher + remaining command handlers
+    ├── db-state.ts             ← Store/DB singleton and lifecycle
+    ├── terminal.ts             ← ANSI colors, cursor, taskbar progress, warn/success/info
+    ├── format.ts               ← ETA/time-ago/bytes/progress bar formatters
+    ├── command-helpers.ts      ← resolveFsPath / requireValidVirtualPath / requireCollectionOrExit
+    ├── collection-commands.ts  ← qmd collection list/remove/rename
+    ├── context-commands.ts     ← qmd context add/list/remove + detectCollectionFromPath
+    ├── skill-commands.ts       ← qmd skill show/install
+    └── help-version.ts         ← qmd --help / --version
 ```
 
 ---

@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+### 2026-04-18 — CLI refactor + shared helpers + message formatters
+
+Started the long-standing `src/cli/qmd.ts` split that was on the backlog
+(3,379-LOC monolith, 0.08 cohesion per graphify). Landed 7 slices across
+one session:
+
+| Slice | Extracted | New module LOC | qmd.ts after |
+|---|---|---|---|
+| 1 | formatters (ETA, time-ago, bytes, progress bar, ls time) | 67 | 3,328 |
+| 2 | Store/DB lifecycle | 93 | 3,261 |
+| 3a | terminal styling (colors, cursor, taskbar progress) | 52 | 3,224 |
+| 3b | `qmd collection list/remove/rename` | 101 | 3,146 |
+| 4 | `qmd context add/list/remove` + `detectCollectionFromPath` | 205 | 2,959 |
+| 5 | `qmd skill show/install` + symlink wiring | 139 | 2,836 |
+| 6 | `qmd --help` / `qmd --version` | 131 | 2,724 |
+| 7 | path/virtual/collection-lookup helpers + `warn/success/info` formatters + partial rollout | 87 | ~2,720 |
+
+**Totals:** `cli/qmd.ts` **3,379 → 2,720 LOC (−659, −19.5%)**. 8 new CLI
+modules, ~875 LOC relocated, ~40 LOC of duplicate logic collapsed.
+Typecheck clean at every slice; 197/197 store + memory tests pass.
+
+**Three duplications collapsed** (all into `src/cli/command-helpers.ts`):
+- `resolveFsPath(pathArg)` — normalize `~/`, `./`, relative, `qmd://`,
+  absolute paths. Was duplicated in contextAdd + contextRemove.
+- `requireValidVirtualPath(pathArg)` — parse `qmd://c/p`, exit on malformed
+  or unknown collection.
+- `requireCollectionOrExit(name)` — YAML collection lookup with the
+  "run qmd collection list" hint.
+
+**Message formatters** in `src/cli/terminal.ts`:
+- `warn(msg)` — yellow-wrapped
+- `success(msg)` — green ✓ prefix
+- `info(msg)` — dim
+
+Applied across the new modules (context-commands, collection-commands)
+and partially through qmd.ts (6/6 `success`, 9/14 whole-message
+`warn`). Remaining 53 dim-sites in qmd.ts are inline label coloring
+inside larger strings — deferred as a future mechanical pass if ever
+wanted.
+
 ### 2026-04-17 — Phase 7 LLM-judge eval shipped + three bugs caught in one session
 
 Wired full QA generation + LLM-as-judge into the eval harness. Ran baseline

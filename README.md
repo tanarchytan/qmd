@@ -122,6 +122,15 @@ QMD_VEC_MIN_SIM=0.1
 **Preference rAny5 lifted 93 → 97%** via zero-LLM keyword expansion (shipped 2026-04-17).
 See [`docs/notes/metrics.md`](docs/notes/metrics.md) for `recall_any@K` (binary, what agentmemory/mem0/MemPalace publish) vs `R@K` (fractional, LongMemEval paper) distinction.
 
+**LLM-judge QA accuracy (2026-04-17, `_s` n=100, mxbai-xs retrieval + gpt-4o answerer + gpt-4o judge):**
+
+| Metric | qmd | LongMemEval paper (GPT-4 baseline) |
+|---|---|---|
+| Judge correctness | **64.0%** | 60–65% published |
+| rAny@5 | 100.0% | — |
+
+Eval harness supports `--llm poe --judge poe --judge-model gpt-4o` for paper-comparable numbers. See [`docs/EVAL.md`](docs/EVAL.md) for the full flag surface and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the bug hunt that led here (top-5 × 6000-char memory cap was the critical fix — `QMD_ANSWER_MAX_CHARS` default raised from 800 to 6000).
+
 **What these four lines do:**
 - **Local ONNX embed** via `@huggingface/transformers` — no cmake, no GPU, ~50 MB download on first use.
 - **mxbai-xs q8** — 384-dim quantized encoder; 2-3s per query on CPU.
