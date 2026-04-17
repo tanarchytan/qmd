@@ -51,6 +51,14 @@ export const MEMORY_RRF_W_VEC = 0.1;
 // in production with real message timestamps it shifts recency-relevant
 // results up. Swept 0.1/0.3 at n=500 LME: byte-identical to no-temporal.
 export const MEMORY_RRF_W_TIME = 0.1;
+// L# cache hierarchy (Schift pattern): store same session at three detail
+// levels (L0 full, L1 user-only, L2 first 3 user turns), blend scores at
+// query time. Weights sum to 1.0. L1 strongest (user turn carries centroid
+// weight). Opt-in via QMD_MEMORY_LHASH=on. Schift reports +3pp R@1.
+export const MEMORY_L0_WEIGHT = 0.2;
+export const MEMORY_L1_WEIGHT = 0.5;
+export const MEMORY_L2_WEIGHT = 0.3;
+export const MEMORY_L2_FIRST_N_USER_TURNS = 3;
 // Rerank blend: swept 0.0/1.0 through 0.6/0.4 at n=500 LME (2026-04-16).
 // 0.1/0.9 is optimal: 98.6% rAny@5, 94.7% R@5, 0.937 MRR, 0.761 pref MRR.
 // 0.0/1.0 crashes (s-user 100→77%) — 10% original weight is critical tiebreaker.

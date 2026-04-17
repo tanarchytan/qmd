@@ -20,6 +20,7 @@ import {
   MEMORY_RERANK_BLEND_ORIGINAL, MEMORY_RERANK_BLEND_RERANK,
   MEMORY_RRF_K, MEMORY_RRF_W_BM25, MEMORY_RRF_W_VEC, MEMORY_RRF_W_TIME,
   MEMORY_SYNONYMS,
+  MEMORY_L0_WEIGHT, MEMORY_L1_WEIGHT, MEMORY_L2_WEIGHT,
 } from "../store/constants.js";
 
 // =============================================================================
@@ -146,9 +147,14 @@ export type MemoryStoreOptions = {
  */
 export function turnsToText(
   turns: Array<{ role: string; content: string }>,
-  userOnly = false
+  userOnly = false,
+  firstNUserTurns?: number
 ): string {
-  const kept = userOnly ? turns.filter(t => t.role?.toLowerCase().startsWith("user")) : turns;
+  let kept = userOnly ? turns.filter(t => t.role?.toLowerCase().startsWith("user")) : turns;
+  if (firstNUserTurns !== undefined && firstNUserTurns > 0) {
+    // L2: first N user turns only (zero-cost summary proxy)
+    kept = turns.filter(t => t.role?.toLowerCase().startsWith("user")).slice(0, firstNUserTurns);
+  }
   return kept.map(t => `${t.role}: ${t.content}`).join("\n");
 }
 
@@ -1459,6 +1465,61 @@ export async function memoryRecall(
         if (boost > 0) result.score *= 1 + boost;
       }
     }
+  }
+
+  // ── STAGE C2: L# blend (Schift cache hierarchy) ──
+  // When ingest produced 3 variants per session (L0 full / L1 user-only /
+  // L2 first-N user turns), collapse them to unique sessions with a
+  // weighted score. Default OFF — only fires when QMD_MEMORY_LHASH=on
+  // AND memories carry ingest_level metadata.
+  const lHashEnabled = process.env.QMD_MEMORY_LHASH === "on";
+  if (lHashEnabled && results.size > 0) {
+    const levelWeight = (lvl: string | undefined): number => {
+      if (lvl === "L1") return MEMORY_L1_WEIGHT;
+      if (lvl === "L2") return MEMORY_L2_WEIGHT;
+      return MEMORY_L0_WEIGHT; // L0 or unknown
+    };
+    const parseMetaLevel = (meta: string | null | undefined): string | undefined => {
+      if (!meta) return undefined;
+      try {
+        const m = typeof meta === "string" ? JSON.parse(meta) : meta;
+        return typeof m?.ingest_level === "string" ? m.ingest_level : undefined;
+      } catch { return undefined; }
+    };
+    // Group by source_session_id; collapse same-session variants.
+    const bySession = new Map<string, { bestEntry: typeof results extends Map<string, infer V> ? V : never; weightedScore: number; totalWeight: number }>();
+    const nonTagged: Array<typeof results extends Map<string, infer V> ? V : never> = [];
+    for (const entry of results.values()) {
+      let sid: string | null = null;
+      let lvl: string | undefined;
+      if (entry.metadata) {
+        try {
+          const m = typeof entry.metadata === "string" ? JSON.parse(entry.metadata) : entry.metadata;
+          sid = typeof m?.source_session_id === "string" ? m.source_session_id : null;
+          lvl = typeof m?.ingest_level === "string" ? m.ingest_level : undefined;
+        } catch { /* not JSON */ }
+      }
+      if (!sid) { nonTagged.push(entry); continue; }
+      const w = levelWeight(lvl);
+      const prev = bySession.get(sid);
+      if (!prev) {
+        bySession.set(sid, { bestEntry: entry, weightedScore: entry.score * w, totalWeight: w });
+      } else {
+        prev.weightedScore += entry.score * w;
+        prev.totalWeight += w;
+        // Prefer L1 entry as the representative text (highest-weight level).
+        if (w > levelWeight(parseMetaLevel(prev.bestEntry.metadata))) {
+          prev.bestEntry = entry;
+        }
+      }
+    }
+    // Rebuild results map with one entry per session_id.
+    results.clear();
+    for (const { bestEntry, weightedScore, totalWeight } of bySession.values()) {
+      bestEntry.score = totalWeight > 0 ? weightedScore / totalWeight : bestEntry.score;
+      results.set(bestEntry.id, bestEntry);
+    }
+    for (const entry of nonTagged) results.set(entry.id, entry);
   }
 
   // ── STAGE D: Sort ──

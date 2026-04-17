@@ -585,10 +585,12 @@ async function main() {
       // L1 (user-turns-only) ingest from Schift's L# cache pattern. When on,
       // the session-level memory text is built from user turns only,
       // stripping the assistant's verbose responses so the embedding
-      // centroid focuses on the user's preference statements. Targets the
-      // single-session-preference rank 6/8/12 cases identified in the
-      // 2026-04-14 preference-rank-diagnostic.mts run. Default off.
+      // centroid focuses on the user's preference statements.
       const userOnlySession = process.env.QMD_INGEST_USER_ONLY === "on";
+      // L# cache hierarchy: store same session at L0 (full), L1 (user turns
+      // only), L2 (first 3 user turns). Score-blended at recall time via
+      // MEMORY_L0/L1/L2_WEIGHT. Opt-in via QMD_MEMORY_LHASH=on.
+      const lHashIngest = process.env.QMD_MEMORY_LHASH === "on";
 
       const sessionTexts: string[] = [];
       const turnBatch: Array<{ text: string; scope: string; importance?: number; metadata?: Record<string, unknown> }> = [];
@@ -606,7 +608,17 @@ async function main() {
         }
         const sessionText = turnsToText(turns, userOnlySession);
         if (storeSessions && date) {
-          turnBatch.push({ text: `[${date}]\n${sessionText}`, scope, importance: 0.7, metadata: { source_session_id: sessionId } });
+          if (lHashIngest) {
+            // Ingest all three levels for score blending at recall.
+            const l0Text = turnsToText(turns, false);
+            const l1Text = turnsToText(turns, true);
+            const l2Text = turnsToText(turns, false, 3);
+            turnBatch.push({ text: `[${date}]\n${l0Text}`, scope, importance: 0.7, metadata: { source_session_id: sessionId, ingest_level: "L0" } });
+            if (l1Text.length > 0) turnBatch.push({ text: `[${date}]\n${l1Text}`, scope, importance: 0.7, metadata: { source_session_id: sessionId, ingest_level: "L1" } });
+            if (l2Text.length > 0) turnBatch.push({ text: `[${date}]\n${l2Text}`, scope, importance: 0.7, metadata: { source_session_id: sessionId, ingest_level: "L2" } });
+          } else {
+            turnBatch.push({ text: `[${date}]\n${sessionText}`, scope, importance: 0.7, metadata: { source_session_id: sessionId } });
+          }
         }
         sessionTexts.push(date ? `[${date}]\n${sessionText}` : sessionText);
         if (!batchExtract && process.env.QMD_INGEST_EXTRACTION !== "off") {

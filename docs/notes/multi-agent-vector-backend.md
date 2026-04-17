@@ -764,3 +764,73 @@ Where we should copy:
 - [LanceDB blog: OpenClaw Memory from Zero to LanceDB Pro](https://www.lancedb.com/blog/openclaw-memory-from-zero-to-lancedb-pro)
 - [LanceDB openclaw-lancedb-demo](https://github.com/lancedb/openclaw-lancedb-demo)
 - [openclaw/skills memory-lancedb-pro SKILL.md](https://github.com/openclaw/skills/blob/main/skills/aaronx-hu/memory-lancedb-pro/SKILL.md)
+
+---
+
+## Benchmark: node-vector-bench on our Windows hardware (2026-04-17)
+
+Cloned [photostructure/node-vector-bench](https://github.com/photostructure/node-vector-bench) into `/tmp/node-vector-bench/`, patched harness to lazy-load the optional `@photostructure/sqlite-diskann` (private package), ran xs / s / m profiles. Seed=42, workers default, Windows native, 16 GB RAM.
+
+### Profile xs — 1k vectors, 128d (dlib faces distribution)
+
+| Library | QPS | p50 | p95 | Recall@10 | Build |
+|---|---|---|---|---|---|
+| **sqlite-vec** | **2272** | **0.37ms** | 1.03ms | 100% | 0.1s |
+| usearch | 835 | 0.58ms | 2.28ms | 99.8% | 0.1s |
+| lancedb | 79 | 2.32ms | 72.52ms | 100% | 0.3s |
+| duckdb-vss | 38 | 15.04ms | 78.00ms | 100% | 0.6s |
+
+**At 1k/128d, sqlite-vec is 28x faster than LanceDB.** LanceDB's Rust↔Node FFI overhead + Arrow row batching dominates at this scale.
+
+### Profile s — 10k vectors, 512d (CLIP-like)
+
+| Library | QPS | p50 | p95 | Recall@10 | Build |
+|---|---|---|---|---|---|
+| **sqlite-vec** | ~55 | ~15ms | — | 100% | ~1s |
+| usearch | 53 | 14.06ms | 43.08ms | 99.6% | 5.9s |
+| lancedb | 16 | 39.76ms | 174ms | 100% | 1.2s |
+| duckdb-vss | 12 | 68.68ms | 169.75ms | 99.8% | 63.6s |
+
+**At 10k/512d, sqlite-vec and usearch tie.** LanceDB 3x slower. DuckDB-VSS already unusable at this scale.
+
+### Profile m — 100k vectors, 512d (the scale crossover)
+
+| Library | QPS | p50 | p95 | Recall@10 | Build |
+|---|---|---|---|---|---|
+| **lancedb** | **79** | **10.54ms** | 23.76ms | 96.5% | 12s |
+| usearch | 29 | 27.86ms | 69.88ms | 99.8% | 150s |
+| sqlite-vec | 5 | 185.85ms | 354.07ms | 100% | 3.6s |
+| duckdb-vss | 4 | 215.41ms | 357.51ms | 99.1% | **2802s (47 min!)** |
+
+**At 100k/512d, LanceDB is 15.7x faster than sqlite-vec** with 96.5% recall (IVF trades recall for speed). sqlite-vec falls to 5 QPS — unusable for interactive workloads. DuckDB-VSS index build took 47 minutes.
+
+### Key takeaways
+
+1. **Crossover confirmed at ~10k-100k vectors.** sqlite-vec is best below 10k, LanceDB best above 100k. Our current LME bench (~50 memories/scope, ~500 per question scope) sits well below the crossover — sqlite-vec is genuinely optimal for our workload today.
+
+2. **LanceDB recall drops slightly at scale.** 96.5% vs sqlite-vec's 100% at 100k. This is IVF clustering quality degrading without tuning — the benchmark uses out-of-box defaults. With tuned `numPartitions`/`nprobes`, recall should recover.
+
+3. **DuckDB-VSS is not production-ready.** 47-min index build at 100k, OOM risk at 500k per the README caveats. Skip.
+
+4. **USearch is fast with high recall** — but 150s index build at 100k is a real cost. Best for read-heavy workloads with build-time budget.
+
+5. **sqlite-vec is the right default for qmd today.** We don't have a scale problem yet. If we ever hit 10k+ memories per scope in production, LanceDB backend is the migration path.
+
+### Scaling law (from qualitative summary chart)
+
+- sqlite-vec: linear degradation (brute force)
+- LanceDB: flat-ish above 10k (IVF)
+- USearch: flat-ish above 10k (HNSW)
+- DuckDB-VSS: explodes at build time
+
+### Implication for qmd
+
+Don't migrate yet. The LanceDB benefit materializes at scale we don't have. Keep sqlite-vec as default. The planned `MemoryBackend` interface still makes sense — ship LanceDB adapter when a user reports 10k+ memories in a single scope.
+
+**Actionable:** change Phase 9 priority to "pending until scale justifies it" unless multi-agent concurrent writes become a real pain point (different reason to switch, not scale).
+
+### Sources for this benchmark
+
+- [photostructure/node-vector-bench](https://github.com/photostructure/node-vector-bench) — cloned, patched harness for optional diskann, ran locally
+- Raw results JSON: `/tmp/node-vector-bench/results/*.json`
+- Charts: `/tmp/node-vector-bench/charts/*.svg`
