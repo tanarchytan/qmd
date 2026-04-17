@@ -102,6 +102,13 @@ Replace mxbai-embed-xsmall-v1 q8 with a stronger retrieval-trained embedder.
 - Node.js CPU inference <100ms/query, quantized (q4/q8/int8/FP16)
 - Tri-platform prebuilt binaries
 - <500MB download, 384-768 dim preferred
+- **ONNX optimization level O3/O4 preferred** — up to 2.5-3x additional
+  CPU speedup on top of quantization (per sbert efficiency docs)
+- **Matryoshka-trainable bonus** — post-hoc dim truncation for cheaper
+  storage + inference without retraining (Nomic-v1.5, Jina-v3)
+- **Arch-specific ONNX variant awareness** — prefer `model_quint8_avx512_vnni`
+  on modern Intel, `model_quint8_avx2` on older x64. `QMD_TRANSFORMERS_FILE`
+  can pin the exact variant.
 
 **Quality gates at n=500 LongMemEval:**
 - recall_any@5 ≥ 98.4% (current baseline floor)
