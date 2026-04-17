@@ -58,7 +58,9 @@ Checked each model card for ONNX + int8 availability.
 | Model | Dim | MTEB retrieval | ONNX int8 | Notes |
 |---|---|---|---|---|
 | **onnx-community/embeddinggemma-300m-ONNX** | 768 (→512/256/128) | **#1 <500M on MTEB** | ✅ `model_quantized.onnx` (309 MB) | Google Gemma-3-based. Matryoshka-truncatable. Previous WSL OOM was fp32 (1.23 GB tensor); int8 variant should fit Windows 16 GB. |
-| jinaai/jina-embeddings-v3 | 1024 | 66.65 | ✅ native | Best MTEB English retrieval score 2025. LoRA adapters add complexity (task prefix required). |
+| **jinaai/jina-embeddings-v5-text-nano-retrieval** | 768 (→32-768) | MTEB English 71.0 (overall) | ✅ `model_quantized.onnx` (247 MB) | **Released Feb 2026.** Retrieval LoRA pre-merged — no prefix injection needed in qmd pipeline. 239M params. Multilingual (15+ langs) overhead for English-only corpus. Outperforms v3 at similar size per Jina. |
+| jinaai/jina-embeddings-v5-text-small-retrieval | 1024 (→32-1024) | 63.28 (5-benchmark avg) | ❌ fp32 only (2.38 GB) | Need int8 port before usable. 677M params. |
+| jinaai/jina-embeddings-v3 | 1024 | 66.65 | ✅ native | Superseded by v5. LoRA adapters require task prefix. |
 | nomic-ai/nomic-embed-text-v1.5 | 768 | 62.39 | ✅ native | Matryoshka — truncatable to 384/512. Previously OOM'd on WSL (8K context). |
 | intfloat/e5-small-v2 | 384 | 57.52 | ✅ Xenova port | Needs query/passage prefix at embed time. |
 | intfloat/e5-base-v2 | 768 | 59.63 | ✅ Xenova port | Same prefix requirement. |
@@ -82,10 +84,10 @@ Cheapest → highest-upside. Stop on first clear win.
 
 1. **BAAI/bge-small-en-v1.5** (384d, same dim as current) — lowest risk, direct comparison
 2. **mixedbread-ai/mxbai-embed-large-v1** (1024d, same family) — native upgrade path
-3. **onnx-community/embeddinggemma-300m-ONNX** (768d, Matryoshka) — #1 MTEB <500M, int8 is 309 MB. High upside; retry after WSL OOM.
-4. **BAAI/bge-base-en-v1.5** (768d) — strong MTEB baseline at middle dim
-5. **nomic-ai/nomic-embed-text-v1.5** (768d) — Matryoshka dim reduction option
-6. **jinaai/jina-embeddings-v3** (1024d) — best MTEB retrieval but LoRA prefix complexity
+3. **onnx-community/embeddinggemma-300m-ONNX** (768d, Matryoshka) — #1 MTEB <500M, int8 is 309 MB
+4. **jinaai/jina-embeddings-v5-text-nano-retrieval** (768d, Matryoshka) — freshest 2026 release, MTEB 71.0, int8 247 MB, retrieval LoRA pre-merged
+5. **BAAI/bge-base-en-v1.5** (768d) — strong MTEB baseline at middle dim
+6. **nomic-ai/nomic-embed-text-v1.5** (768d) — Matryoshka dim reduction option
 
 ## Test procedure (no code change)
 
