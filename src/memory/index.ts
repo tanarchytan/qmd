@@ -19,6 +19,7 @@ import {
   MEMORY_FTS_OVERFETCH, MEMORY_VEC_K_MULTIPLIER,
   MEMORY_RERANK_BLEND_ORIGINAL, MEMORY_RERANK_BLEND_RERANK,
   MEMORY_RRF_K, MEMORY_RRF_W_BM25, MEMORY_RRF_W_VEC, MEMORY_RRF_W_TIME,
+  MEMORY_SYNONYMS,
 } from "../store/constants.js";
 
 // =============================================================================
@@ -1151,7 +1152,19 @@ export async function memoryRecall(
     // global FTS5 tables. Swept at n=500 LME: 10× beats 20× (+0.4pp
     // recall_any@5, +0.7pp R@5) by reducing noisy out-of-scope candidates.
     // 5× loses recall. 10× is the validated sweet spot.
-    const safeFtsQuery = terms.map(t => `"${t}"*`).join(' OR ');
+    //
+    // Synonym expansion: each term expands to OR-joined synonyms from
+    // MEMORY_SYNONYMS. Opt out via QMD_MEMORY_SYNONYMS=off.
+    const synonymsEnabled = process.env.QMD_MEMORY_SYNONYMS !== "off";
+    const expandTerm = (t: string): string => {
+      if (!synonymsEnabled) return `"${t}"*`;
+      const syns = MEMORY_SYNONYMS[t];
+      if (!syns || syns.length === 0) return `"${t}"*`;
+      // Inline OR group: ("term"* OR "syn1"* OR "syn2"*)
+      const parts = [t, ...syns].map(s => `"${s}"*`);
+      return `(${parts.join(' OR ')})`;
+    };
+    const safeFtsQuery = terms.map(expandTerm).join(' OR ');
     const ftsResults = db.prepare(
       `SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?`
     ).all(safeFtsQuery, limit * MEMORY_FTS_OVERFETCH) as { rowid: number; rank: number }[];

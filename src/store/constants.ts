@@ -103,3 +103,34 @@ export function extractIntentTerms(intent: string): string[] {
     .map(t => t.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
     .filter(t => t.length > 1 && !INTENT_STOP_WORDS.has(t));
 }
+
+// Synonym map for BM25 query expansion. Curated for preference/temporal
+// patterns common in agent memory queries. Each listed term expands into
+// OR-joined synonyms at FTS query build time.
+//
+// Keep small — each added term is noise for queries where it doesn't
+// match. Only include cases where the query and gold session reliably
+// use different words for the same concept (preference verbs, common
+// nouns with paraphrases, temporal modifiers).
+export const MEMORY_SYNONYMS: Record<string, string[]> = {
+  // Preference verbs (query often uses "suggest", gold says "like/prefer")
+  suggest: ["recommend", "propose", "advice"],
+  recommend: ["suggest", "propose", "advice"],
+  tips: ["advice", "suggestion", "recommendation"],
+  // Meals
+  dinner: ["meal", "food", "supper"],
+  breakfast: ["meal", "morning"],
+  lunch: ["meal", "noon"],
+  // Accommodation / travel
+  hotel: ["accommodation", "lodging", "stay"],
+  trip: ["travel", "visit", "vacation"],
+  // Common items
+  phone: ["mobile", "smartphone", "cellphone"],
+  car: ["vehicle", "auto"],
+  // Activities
+  activities: ["hobbies", "pastime", "recreation"],
+  exercise: ["workout", "training", "fitness"],
+  // Temporal shortcuts
+  recently: ["lately", "latest"],
+  "yesterday": ["recent"],
+};
