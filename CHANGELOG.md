@@ -2,6 +2,60 @@
 
 ## [Unreleased]
 
+### 2026-04-17 — RRF pipeline + keyword/synonym expansion + MCP tools
+
+Pipeline fully restructured to A→F staged architecture with rank-based
+Reciprocal Rank Fusion. Zero-LLM keyword and synonym expansion shipped as
+defaults. Preference rAny5 lifted 93% → 97%. Cross-encoder rerank stays
+opt-in but now with score normalization so RRF + rerank actually work
+together.
+
+**Benchmark (LongMemEval _s n=500, session-id retrieval):**
+- **recall_any@5: 98.4%** (vs agentmemory 95.2%, MemPalace 96.6%)
+- **R@5 (fractional): 93.7%**
+- **MRR: 0.917**, **NDCG@10: 0.913**
+
+**Added:**
+- Rank-based RRF fusion (`MEMORY_RRF_W_BM25=0.9`, `W_VEC=0.1`, K=60). Replaces
+  additive score accumulation. Vec rank list properly normalized against BM25.
+- Temporal as 3rd RRF list (`MEMORY_RRF_W_TIME=0.1`) — fires on time refs.
+- Keyword expansion default on (`QMD_MEMORY_EXPAND=keywords`).
+- Synonym expansion default on with curated preference/temporal dict
+  (`MEMORY_SYNONYMS` in constants.ts). Opt-out: `QMD_MEMORY_SYNONYMS=off`.
+- Cross-encoder rerank score normalization (min-max to [0,1] on both sides
+  of the blend). Default blend 0.7 original / 0.3 rerank when enabled.
+- MCP tools: `memory_recall_tiered`, `memory_push_pack`.
+- Unit tests for `memoryRecallTiered` + `memoryPushPack` (8 tests).
+- `extractAndStore` metadata passthrough — extracted facts now carry
+  `source_session_id` for proper session attribution (LME metric + prod).
+
+**Changed:**
+- Default `MEMORY_FTS_OVERFETCH` 20→10 (validated at n=500, +0.4pp recall).
+- Default rerank blend flipped to balanced normalized 0.7/0.3 (was 0.1/0.9
+  on additive; RRF needs different ratio).
+- Strong-signal skip on rerank: OFF by default (was ON). Skip gate was
+  blocking rerank on borderline questions where it helps.
+
+**Deprecated / removed:**
+- Additive score fusion in memory recall (replaced by rank-based RRF).
+- Hardcoded temporal injection score (0.5) — now median of current scores.
+- Hardcoded KG injection score (0.25) — now median of current scores.
+
+**Tested + parked (no production change):**
+- L1 user-only ingest: +0.7pp MRR but -7pp preference, not net win.
+- Temporal 3rd RRF at weight 0.3: byte-identical (LME shared ingest timestamp).
+- extractAndStore + KG injection at query time: -16pp multi-session.
+- Per-turn ingest: 2-3s per query at 10x memories, no quality gain.
+- L# cache hierarchy (Schift pattern): implementation shipped behind
+  `QMD_MEMORY_LHASH=on`, n=500 validation pending.
+
+**Docs:**
+- `docs/ROADMAP.md` 2026-04-17 entry with full sweep history.
+- `docs/ARCHITECTURE.md` updated to A→F staged pipeline.
+- `docs/EVAL.md` updated to transformers backend commands.
+- `docs/TODO.md` phase-ordered with pass/fail gates.
+- `docs/notes/metrics.md` metric family walkthrough.
+
 ### v16 release summary (2026-04-13)
 
 The v16 cycle ships QMD as a **local-first, zero-cost retrieval system at

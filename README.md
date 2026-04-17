@@ -49,20 +49,24 @@ QMD exposes all functionality via MCP (Model Context Protocol). Works with Claud
 ### Memory tools
 | Tool | Description |
 |------|-------------|
-| `memory_store` | Store a memory with auto-dedup (hash + cosine) and auto-classification |
-| `memory_recall` | Hybrid search across memories (FTS + vector + keyword boost + decay weighting) |
-| `memory_forget` | Delete a memory (with changelog) |
-| `memory_update` | Update text/importance/category (re-embeds on text change) |
-| `memory_extract` | Extract memories from conversation text (heuristic pattern matching) |
-| `memory_stats` | Memory count by tier, category, scope |
+| `memory_add` / `memory_add_batch` | Store memory/memories with auto-dedup (hash + cosine) and auto-classification |
+| `memory_search` | Hybrid search (FTS + vector RRF fusion + keyword expansion + synonym expansion) |
+| `memory_recall_tiered` | Search grouped by tier (core/working/peripheral), per-tier limit |
+| `memory_push_pack` | Pre-query bundle for session start — core + important-recent + hot-tail |
+| `memory_get` / `memory_list` | Fetch by id / list by filters |
+| `memory_delete` / `memory_update` | Delete / update text, importance, category (re-embeds on text change) |
+| `memory_extract` | Extract memories from conversation text (LLM + heuristic fallback) |
+| `memory_reflect` / `memory_dream` | Post-retrieval synthesis / overnight consolidation |
+| `memory_stats` | Count by tier, category, scope |
+| `memory_register_scopes` | Register scopes for partition-key vec0 queries |
 
 ### Knowledge tools
 | Tool | Description |
 |------|-------------|
-| `knowledge_store` | Store a fact with time validity (auto-invalidates conflicting prior facts) |
-| `knowledge_query` | Query facts by subject/predicate/object, optionally at a point in time |
+| `knowledge_add` | Store a fact with time validity (auto-invalidates conflicting prior facts) |
+| `knowledge_search` | Query facts by subject/predicate/object, optionally at a point in time |
 | `knowledge_invalidate` | Mark a fact as no longer valid (preserved in history) |
-| `knowledge_entities` | List all known entities |
+| `knowledge_entities` / `knowledge_timeline` / `knowledge_stats` | Enumerate entities / temporal scans / counts |
 
 ### Management tools
 | Tool | Description |
@@ -95,7 +99,7 @@ qmd mcp --http --daemon           # start on localhost:8181
 qmd mcp stop                      # stop
 ```
 
-## ⭐ Recommended local config — beats MemPalace on LongMemEval
+## ⭐ Recommended local config — beats MemPalace + agentmemory on LongMemEval
 
 Four lines in `~/.config/qmd/.env`:
 
@@ -106,22 +110,30 @@ QMD_TRANSFORMERS_DTYPE=q8
 QMD_VEC_MIN_SIM=0.1
 ```
 
-**Benchmark (2026-04-14, LongMemEval `_s` n=500, session granularity, RAW recall):**
+**Benchmark (2026-04-17, LongMemEval `_s` n=500, session-id retrieval, RAW recall):**
 
-| System | Overall R@5 (session-ID) | Multi-session R@5 | Wall |
-|---|---|---|---|
-| **qmd (this config)** | **98.4%** ✅ | **100%** | ~15 min |
-| MemPalace raw (live reproduction against the same data file) | 96.6% | 100%* | 12m59s |
-| MemPalace published | 96.6% | 100%* | 12m30s |
+| System | recall_any@5 | R@5 (fractional) | MRR | NDCG@10 | Wall |
+|---|---|---|---|---|---|
+| **qmd (this config, no rerank)** | **98.4%** ✅ | **93.7%** | **0.917** | **0.913** | ~15 min |
+| qmd + cross-encoder rerank (opt-in) | 98.0% | 93.8% | 0.911 | 0.912 | ~17 min |
+| agentmemory hybrid (live reproduction) | 95.2% | — | 0.882 | 0.879 | ~10 min |
+| MemPalace raw (live reproduction) | 96.6% | — | — | — | 12m59s |
 
-`*` MemPalace only publishes per-category R@10; R@5 per-category not available for direct comparison.
+**Preference rAny5 lifted 93 → 97%** via zero-LLM keyword expansion (shipped 2026-04-17).
+See [`docs/notes/metrics.md`](docs/notes/metrics.md) for `recall_any@K` (binary, what agentmemory/mem0/MemPalace publish) vs `R@K` (fractional, LongMemEval paper) distinction.
 
 **What these four lines do:**
-- **Local ONNX embed** via `@huggingface/transformers` — no cmake, no GPU, ~50 MB model download on first use.
-- **mxbai-xs q8** — 384-dim quantized encoder; 2-3 seconds per query on CPU.
-- **`QMD_VEC_MIN_SIM=0.1`** — overrides the adaptive cosine acceptance floor. The default `max(0.05, top1 × 0.5)` rejects candidates too aggressively on tight-cluster q8 models (top1 ≈ 0.82 → floor ≈ 0.41 → pool shrinks to ~10 memories). Fixed 0.1 keeps the pool at ~40-50 and adds +0.2pp sr5 on the already-winning baseline.
+- **Local ONNX embed** via `@huggingface/transformers` — no cmake, no GPU, ~50 MB download on first use.
+- **mxbai-xs q8** — 384-dim quantized encoder; 2-3s per query on CPU.
+- **`QMD_VEC_MIN_SIM=0.1`** — overrides the adaptive cosine acceptance floor (tight-cluster q8 models need this; default floor prunes too aggressively).
 
-See `docs/ROADMAP.md` "Night 2026-04-13 → 2026-04-14 — metric audit" for the full per-model comparison table (mxbai variants, arctic family, MiniLM, BGE, Gemini, MemPalace reference).
+**Under the hood (all shipped, no config needed):**
+- Rank-based **weighted RRF fusion** (0.9 BM25 / 0.1 vec); proper rank normalization, not additive scores.
+- **Keyword expansion** — zero-LLM sub-query fanout (default on).
+- **Synonym expansion** — curated preference/temporal dict (default on).
+- **Cross-encoder rerank** available via `QMD_MEMORY_RERANK=on` (optional, +1-2pp MRR).
+
+All tunables hardcoded in `src/store/constants.ts` (validated at n=500 LME). See `docs/ROADMAP.md` "2026-04-17" for full sweep history.
 
 ## Cloud Configuration
 
