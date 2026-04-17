@@ -1,7 +1,83 @@
 # QMD Roadmap
 
 > For agents: this file tracks all pending work and benchmark history. Read this first when resuming a session.
-> Last updated: 2026-04-17 (RRF restructure, rerank normalization, keyword expansion default, L1 parked)
+> Last updated: 2026-04-17 late (L# parked, vector-bench findings, embedder requirements)
+
+---
+
+## 🟡 2026-04-17 late — L# blend parked, vector-bench crossover confirmed
+
+### Phase 5.9: L# cache hierarchy blend — **PARKED**
+
+Schift's L0/L1/L2 pattern (full / user-only / first-3-user-turns),
+weighted score blend at query time (0.2/0.5/0.3). Gated opt-in via
+`QMD_MEMORY_LHASH=on`. Ships for future experimentation but not default.
+
+n=500 result vs baseline:
+- rAny@5 98.4% → **97.8%** (-0.6pp)
+- R@5 93.7% → **94.1%** (+0.4pp)
+- MRR 0.917 → **0.920** (+0.3pp)
+- NDCG@10 0.913 → **0.922** (+0.9pp)
+- preference MRR 0.745 → **0.693** (-5.2pp, opposite of Schift claim)
+- Cov@5 multi-session: catastrophic collapse (49%)
+- Wall 15m → **83m** (5.5x slower)
+
+Keyword expansion already captures the paraphrase lift Schift attributed
+to L#. LME sessions are too short (avg 6-10 turns) for L2 to differ
+meaningfully from L0.
+
+### Phase 10: node-vector-bench local run — **COMPLETED**
+
+Ran photostructure/node-vector-bench (xs/s/m profiles) on Windows. Scale
+crossover confirmed:
+
+| Profile | Size | Dim | Winner | Why |
+|---|---|---|---|---|
+| xs | 1k | 128d | **sqlite-vec** (2272 QPS) | LanceDB 28x slower (FFI overhead) |
+| s | 10k | 512d | **sqlite-vec ~ usearch** (~55 QPS) | brute force still tractable |
+| m | 100k | 512d | **lancedb** (79 QPS) | sqlite-vec falls to 5 QPS |
+
+**Decision:** keep sqlite-vec as default. Current LME scale is ~50
+memories/scope — sqlite-vec is genuinely optimal here. LanceDB backend
+remains a valid Phase 9 migration path when a user hits 10k+ per scope
+or needs concurrent writes for multi-agent workloads.
+
+### Embedder upgrade requirements (research done)
+
+Requirements documented for picking a better embedder than
+mxbai-embed-xsmall-v1 q8:
+
+**Technical must-haves:**
+- ONNX format (transformers.js compatible)
+- Node.js CPU inference <100ms/query
+- Quantization (q4/q8/int8/FP16)
+- Tri-platform prebuilt
+- <500MB download
+- 384-768 dim preferred
+
+**Quality gates:**
+- MTEB retrieval >60 (current ~52-55)
+- Preference MRR >0.80 (current 0.745)
+- recall_any@5 ≥98.4% floor
+
+**Candidates ranked:**
+1. BGE-base-en-v1.5 (768d, MTEB 63.5)
+2. mxbai-embed-large-v1 (1024d, MTEB 60.4, same family)
+3. Jina-embeddings-v3 (1024d, MTEB 66.7, best open retrieval)
+4. Nomic-embed-text-v1.5 (768d, Matryoshka-trainable)
+5. Qwen3-Embedding-0.6B (1024d, recent)
+
+**Embedder category to target:** semantic search / retrieval-trained.
+Skip general-purpose, multilingual (for English-only), multimodal
+(text-only corpus), instructor (prefix burden), scientific (wrong domain).
+
+### Related research commits
+
+- [`29f7704`](../...) — deep dive: memory-lancedb-pro architecture
+- [`66a03c1`](../...) — deep dive: Mem0 VectorStoreBase + split pattern
+- [`75814ac`](../...) — L# impl shipped opt-in + vector-bench findings
+- Redis LangCache evaluated — adjacent (LLM response cache) not memory
+  framework, skip
 
 ---
 

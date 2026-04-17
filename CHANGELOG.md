@@ -46,8 +46,29 @@ together.
 - Temporal 3rd RRF at weight 0.3: byte-identical (LME shared ingest timestamp).
 - extractAndStore + KG injection at query time: -16pp multi-session.
 - Per-turn ingest: 2-3s per query at 10x memories, no quality gain.
-- L# cache hierarchy (Schift pattern): implementation shipped behind
-  `QMD_MEMORY_LHASH=on`, n=500 validation pending.
+- L# cache hierarchy (Schift pattern): n=500 validated. -0.6pp recall,
+  -5.2pp preference MRR, 5.5x wall time. Ships opt-in via
+  `QMD_MEMORY_LHASH=on` for future experimentation; LME sessions are
+  too short for L2 to differ meaningfully from L0, and keyword expansion
+  already captures the paraphrase lift Schift attributed to L#.
+
+**Research / planning (no code change):**
+- Vector backend benchmarking via `photostructure/node-vector-bench` on
+  our Windows hardware. Crossover at ~10k-100k vectors: sqlite-vec wins
+  below, LanceDB wins above. Current qmd LME scale (~50 memories/scope)
+  sits well below the crossover — sqlite-vec remains optimal default.
+  LanceDB migration path documented for Phase 9 (when users hit scale).
+- Mem0 architecture deep dive: validates our planned `MemoryBackend`
+  interface (modeled on their `VectorStoreBase`). Their 24+ vector
+  provider factory pattern is the industry-standard split architecture.
+- memory-lancedb-pro architecture deep dive: confirms LanceDB as the
+  right second backend (zero-setup via bundled npm native binding).
+  Their fusion is vec-heavy (0.7/0.3) opposite of qmd BM25-heavy (0.9/0.1)
+  — driven by their stronger Jina/OpenAI embedder vs our quantized mxbai-xs.
+- Embedder upgrade requirements documented (Phase 11): target BGE-base,
+  mxbai-large, Jina-v3, Nomic-v1.5, or Qwen3-Embedding-0.6B.
+- Redis LangCache evaluated: semantic LLM response cache, not agent
+  memory framework. Not a fit for qmd's role.
 
 **Docs:**
 - `docs/ROADMAP.md` 2026-04-17 entry with full sweep history.
