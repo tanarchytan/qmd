@@ -547,43 +547,61 @@ src/
 
 ---
 
-## Performance (LongMemEval _s n=500, mxbai-xs q8, 2026-04-16)
+## Performance (LongMemEval _s n=500, mxbai-xs q8, 2026-04-17)
 
 ### Without rerank (production default)
 
+With rank-based RRF + keyword expansion + synonym expansion (all default):
+
 | Bucket | n | recall_any@5 | R@5 (frac) | MRR | NDCG@10 |
 |---|---|---|---|---|---|
-| knowledge-update | 78 | 99% | 98% | 0.961 | 0.966 |
-| multi-session | 133 | 99% | 88% | 0.942 | 0.910 |
+| knowledge-update | 78 | 99% | 97% | 0.955 | 0.958 |
+| multi-session | 133 | 99% | 90% | 0.950 | 0.911 |
 | single-session-assistant | 56 | 100% | 100% | 1.000 | 1.000 |
-| single-session-preference | 30 | 93% | 93% | 0.721 | 0.782 |
-| single-session-user | 70 | 100% | 100% | 0.941 | 0.955 |
-| temporal-reasoning | 133 | 95% | 91% | 0.875 | 0.882 |
-| **OVERALL** | 500 | **98.0%** | **93.6%** | **0.920** | **0.920** |
+| single-session-preference | 30 | **97%** | **97%** | 0.745 | 0.800 |
+| single-session-user | 70 | 100% | 100% | 0.898 | 0.923 |
+| temporal-reasoning | 133 | 96% | 89% | 0.876 | 0.873 |
+| **OVERALL** | 500 | **98.4%** | **93.7%** | **0.917** | **0.913** |
 
 Wall: ~15 min (workers=2, microbatch=64, Windows native).
 
-### With rerank (QMD_MEMORY_RERANK=on, 0.1/0.9 blend)
+### With rerank (QMD_MEMORY_RERANK=on, normalized 0.7/0.3 blend)
 
 | Metric | No rerank | With rerank | Delta |
 |---|---|---|---|
-| recall_any@5 | 98.0% | **98.6%** | +0.6pp |
-| R@5 (fractional) | 93.6% | **94.7%** | +1.1pp |
-| MRR | 0.920 | **0.937** | +1.7pp |
-| NDCG@10 | 0.920 | **0.933** | +1.3pp |
-| preference MRR | 0.721 | **0.761** | +4.0pp |
-| temporal MRR | 0.875 | **0.919** | +4.4pp |
+| recall_any@5 | 98.4% | 98.0% | -0.4pp |
+| R@5 (fractional) | 93.7% | **93.8%** | +0.1pp |
+| MRR | **0.917** | 0.911 | -0.6pp |
+| NDCG@10 | **0.913** | 0.912 | tied |
+| preference MRR | **0.745** | 0.740 | -0.5pp |
+| temporal MRR | 0.876 | **0.896** | +2.0pp |
 
-Wall: ~20 min (+33% for cross-encoder forward pass).
+Wall: ~17 min (+15% for cross-encoder forward pass).
+
+**Verdict:** rerank on the proper RRF pipeline is near-neutral — helps
+temporal (+2pp MRR), slight regression elsewhere. The old additive
+pipeline's 0.1/0.9 rerank blend (MRR 0.937) was an artifact of the
+broken first stage. Ship rerank as opt-in; default off.
 
 ### vs competitors (same dataset, live-reproduced)
 
 | System | recall_any@5 | MRR | NDCG@10 |
 |---|---|---|---|
-| **qmd (no rerank)** | **98.0%** | **0.920** | **0.920** |
-| **qmd (with rerank)** | **98.6%** | **0.937** | **0.933** |
-| agentmemory hybrid | 95.2% | 0.882 | 0.879 |
+| **qmd (no rerank, default)** | **98.4%** | **0.917** | **0.913** |
+| qmd (with rerank) | 98.0% | 0.911 | 0.912 |
 | MemPalace raw | 96.6% | — | — |
+| agentmemory hybrid | 95.2% | 0.882 | 0.879 |
+
+### Progress over time (LongMemEval _s n=500, mxbai-xs q8)
+
+| Date | recall_any@5 | R@5 | MRR | NDCG@10 | Key change |
+|---|---|---|---|---|---|
+| 2026-04-12 | 88.0% | — | — | — | initial run (fastembed MiniLM) |
+| 2026-04-13 | 94.2% | — | 0.833 | 0.828 | mxbai-xs q8 + cosine gate |
+| 2026-04-14 | 98.2% | — | — | — | sr5 metric audit (partition key) |
+| 2026-04-15 | 97.6% | 92.9% | 0.919 | 0.917 | metric rigor (fractional R@K, NDCG fix) |
+| 2026-04-16 | 98.0% | 93.6% | 0.920 | 0.920 | ftsOverfetch 20→10 sweep |
+| **2026-04-17** | **98.4%** | **93.7%** | **0.917** | **0.913** | RRF + keyword + synonym expansion |
 
 ### Per-stage latency (QMD_RECALL_PROFILE=on)
 

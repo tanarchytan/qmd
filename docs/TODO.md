@@ -1,154 +1,119 @@
 # QMD TODO — Optimization Phases
 
-> Last updated: 2026-04-16 (RRF restructure + rerank sweep).
+> Last updated: 2026-04-17 (RRF + keyword + synonym + MCP wiring landed).
 >
-> **Reading order:** Current phase first, then future phases, then backlog.
-> Each phase has pass/fail gates — if a phase fails, skip to the next or
-> fall back to the current best.
+> **Reading order:** Current best → completed → pending → backlog → parked.
+> Each pending phase has pass/fail gates.
 
 ---
 
-## Current best (2026-04-16)
+## Current best (2026-04-17, n=500 LongMemEval _s)
 
 | Config | rAny@5 | R@5 | MRR | NDCG@10 | pref MRR |
 |---|---|---|---|---|---|
-| No rerank (RRF 0.9/0.1) | 97.8% | 93.3% | 0.918 | 0.916 | 0.741 |
-| + rerank 0.1/0.9 (old additive) | 98.6% | 94.7% | 0.937 | 0.933 | 0.761 |
+| **No rerank (RRF 0.9/0.1 + expand + synonyms)** | **98.4%** | **93.7%** | **0.917** | **0.913** | **0.745** |
+| + rerank on new RRF (normalized 0.7/0.3) | 98.0% | 93.8% | 0.911 | 0.912 | 0.740 |
 
-vs competitors: agentmemory 95.2% rAny@5, 0.882 MRR | MemPalace 96.6% rAny@5.
+vs competitors: agentmemory 95.2% / 0.882 MRR | MemPalace 96.6% rAny@5.
 
 ---
 
 ## Completed phases
 
-### Phase 1: Restructure scoring pipeline
-- [x] Replace additive fusion with rank-based RRF (A→B→C→D→E→F stages)
-- [x] Dynamic injection scores (median, not hardcoded 0.5/0.25)
-- [x] Clean stage separation (retrieval → fusion → boosts → sort → rerank → post)
-- [x] Committed `734e357`
-
-### Phase 2: Diagnose vec independently
-- [x] Vec is weak (mxbai-embed-xsmall-v1 384d q8)
-- [x] More vec weight collapses single-session-user (86% at 0.4/0.6 vs 99% at 0.9/0.1)
-- [x] Answered by RRF weight sweep — no separate diagnostic needed
-
-### Phase 3: Sweep RRF weights
-- [x] Bracket + bisect: 1.0/0.0, 0.9/0.1, 0.8/0.2, 0.7/0.3, 0.4/0.6
-- [x] Winner: 0.9/0.1 (BM25-heavy). n=500: 97.8% rAny@5, 0.918 MRR
-- [x] Preference MRR improved +2pp vs old additive (0.741 vs 0.721)
-
-### Rerank blend sweep (pre-restructure, on old additive)
-- [x] Swept 0.0/1.0 through 0.6/0.4 at n=500
-- [x] Winner: 0.1/0.9 (MRR 0.937, pref MRR 0.761)
-- [x] 0.0/1.0 cliff: s-user 100→77% — 10% original weight is critical tiebreaker
-- [x] Proves first-stage score is mostly noise, cross-encoder does real ranking
+| # | Phase | Result |
+|---|---|---|
+| 1 | Restructure scoring pipeline | Rank-based RRF, A→F staged. Commit `734e357` |
+| 2 | Diagnose vec independently | Vec weak (mxbai-xs), more vec collapses s-user |
+| 3 | Sweep RRF weights | Winner 0.9/0.1 BM25-heavy |
+| 4 | Test RAW=off boosts | -13pp pref MRR → RAW=on stays eval default |
+| 5 | Re-sweep rerank blend on RRF | 0.7/0.3 (normalized). Rerank near-neutral on proper RRF |
+| 5.1 | RRF normalization for rerank | Min-max to [0,1] both sides. Commit `dcb200d` |
+| 5.5 | Temporal 3rd RRF + keyword expansion | Temporal no-op on LME. Keyword expansion WINS (+4pp pref). Commit `919188e` |
+| 5.6 | L1 user-only ingest | +0.7pp MRR but -7pp pref → parked |
+| 5.7 | Synonym expansion in BM25 | +0.8pp pref MRR. Shipped default. Commit `18594cf` |
+| 5.8 | Per-turn ingest | 10x latency, no quality gain → parked |
+| 5.9 | L# blend (L0+L1+L2) | Implementation shipped, n=500 validation pending |
+| 6.5 | extractAndStore + KG injection | -16pp multi-session → parked. Metadata bug fixed (`bee34d7`) |
+| MCP tooling | Wire memoryRecallTiered + memoryPushPack | Commits `da317fa` + `4294981` |
 
 ---
 
-## Active phases
-
-### Phase 4: Test RAW=off boosts
-- [ ] n=500 RAW=off on new RRF pipeline (RUNNING)
-- [ ] Measures impact of keyword boost, quoted phrase, decay, temporal boost
-- [ ] Pass: clear delta vs RAW=on
-- [ ] Fail: no signal → boosts are no-ops on LME
-
-### Phase 5: Re-sweep rerank blend on RRF pipeline
-- [ ] Bracket: 0.5/0.5 and 0.1/0.9 extremes
-- [ ] Bisect toward optimal
-- [ ] Pass: best ≥ old additive 0.1/0.9 (MRR ≥ 0.937)
-- [ ] Fail: keep 0.1/0.9, cross-encoder dominates regardless of first-stage
-
----
-
-## Future phases
+## Pending phases
 
 ### Phase 6: Fact-augmented embedding keys
 Make vec useful. LME paper found +4% recall from fact-augmented keys.
 
 - [ ] Design extraction step: LLM or pattern-based → "category: key fact"
-- [ ] Embed augmented key instead of raw memory text
+- [ ] Embed augmented key instead of (or alongside) raw memory text
 - [ ] Re-ingest LME dataset with new keys
 - [ ] Re-sweep RRF weights (vec should now contribute meaningfully)
-- [ ] Re-sweep rerank blend
 
 **Why this matters:** current mxbai-xs embeddings can't distinguish
-between semantically similar sessions. Augmented keys like "food
-preference: prefers pasta over rice" are closer to how queries are
-phrased than raw "user: I prefer pasta over rice" text.
+semantically similar sessions. Augmented keys like "food preference:
+prefers pasta over rice" are closer to query phrasing than raw
+conversation text.
+
+**Pass criteria:** vec-heavy RRF (0.5/0.5 or better) should beat
+BM25-heavy (0.9/0.1) on preference MRR. If flat, fact-augmented
+keys not worth the ingest cost.
 
 ### Phase 7: LLM-judge QA accuracy eval mode
-Required for Supermemory/Hindsight comparison.
+Required for Supermemory/Hindsight/Zep/mem0 comparison.
 
 - [ ] Port LongMemEval `evaluate_qa.py` pattern
 - [ ] Retrieve → generate answer with LLM → judge correctness
-- [ ] ~1-2h implementation + LLM budget (~2000 calls per n=500 run)
-- [ ] Produces numbers comparable to Supermemory 81.6% / Hindsight 91.4%
+- [ ] ~1-2h implementation + ~2000 API calls per n=500 run
+- [ ] Produces numbers directly comparable to published leaderboard
 
-### Phase 8: Larger reranker model experiment
-Current: ms-marco-MiniLM-L-6-v2 (22M params, ~5-10ms/pair).
+**API cost estimate:** ~€5-10 per n=500 run on Gemini Flash Lite.
 
-- [ ] Test ms-marco-MiniLM-L-12-v2 (larger, slower, potentially better)
-- [ ] Test bge-reranker-v2-m3 (multilingual, SOTA on MTEB)
-- [ ] A/B at n=500 against current reranker
+### Phase 8: Larger reranker model
+Current: `ms-marco-MiniLM-L-6-v2` (22M params, ~5-10ms/pair).
+
+- [ ] Test `ms-marco-MiniLM-L-12-v2` (larger)
+- [ ] Test `bge-reranker-v2-m3` (MTEB SOTA)
+- [ ] Test `mixedbread-ai/mxbai-rerank-large-v2`
+
+**Why relevant:** current rerank on proper RRF is near-neutral.
+A better cross-encoder might actually help across the board.
 
 ---
 
-## Backlog (shipped but untested / low priority)
+## Backlog (low priority / deferred)
 
-### Already shipped, never evaluated at n=500
-
-| Feature | Gate | Status |
-|---|---|---|
-| Hindsight reflect synthesis | `memoryReflect()` API | Not wired into eval |
-| Periodic reflection pass | `runReflectionPass()` API | Not wired |
-| Push Pack | `pushPack()` API | Not wired |
-| Tier-grouped recall | `runTieredRecall()` | Untested as lever |
-| Per-turn ingest | `QMD_INGEST_PER_TURN=on` | Untested at any size |
-
-### Architecture backlog
-
+### Architecture
 - [ ] Split `src/cli/qmd.ts` (54 nodes, cohesion 0.08 per graphify)
 - [ ] Pluggable storage backend (`MemoryBackend` interface)
 - [ ] Two-tier recall + archival (Letta/MemGPT pattern)
 - [ ] Three-tier subgraph (Zep/Graphiti pattern)
 - [ ] GraphRAG community summaries over KG
-- [ ] Per-turn ingest A/B (changes substrate from ~50 to ~500 memories/scope)
 
-### Technique parity with reference systems
-
-- [ ] 4-parallel-path retrieval (Hindsight: semantic + BM25 + entity graph + temporal)
-- [ ] Synonym expansion in BM25 (agentmemory has this)
+### Technique parity
+- [ ] 4-parallel-path retrieval (Hindsight pattern)
 - [ ] RAPTOR pre-ingest recursive abstractive tree
-- [ ] Three-tier scope hierarchy (Mem0: session/user/agent)
+- [ ] Three-tier scope hierarchy (Mem0 pattern)
 - [ ] Cross-session signal routing (Tinkerclaw Round Table)
 
-### Code-only optimizations (next candidates, no API needed)
+### Shipped but unexercised by eval
+- `memoryReflect` — post-retrieval LLM synthesis (API required)
+- `runReflectionPass` — periodic reflection (API required)
+- `memoryRecallTiered` — tier-grouped recall (unit tested, MCP wired 2026-04-17)
+- `memoryPushPack` — pre-query bundle (unit tested, MCP wired 2026-04-17)
 
-Priority-ordered from `docs/notes/random-findings-online.md`:
+---
 
-- [ ] **L1 user-turns-only ingest** — `QMD_INGEST_USER_ONLY=on` already
-  coded. Untested at n=500 on current RRF pipeline. Schift reports
-  +3pp R@1 by stripping assistant verbosity from embedded text.
-- [ ] **L# blend (L0+L1+L2)** — store same conversation at three detail
-  levels: L0=full, L1=user-only, L2=first-3-user-turns. Merge with
-  `0.5×L1 + 0.3×L2 + 0.2×L0` at query time. Schift reports 88% R@1
-  vs 85% baseline. Needs L2 implementation + blend logic.
-- [ ] **Synonym expansion in BM25** — agentmemory has this. Would help
-  preference queries where gold session uses synonyms of query words.
-  Needs synonym dict or stemmer integration with FTS5.
+## Parked (proven no signal on LongMemEval)
 
-### Parked (proven no signal on current bench)
-
-- [x] ~~QMD_MEMORY_MMR=session~~ — flat on LME (byte-identical)
-- [x] ~~kMultiplier 3→10~~ — byte-identical (vec is noise)
-- [x] ~~RRF refactor old attempt~~ — superseded by 2026-04-16 restructure
-- [x] ~~HyDE / generative query expansion~~ — coverage already 100%
-- [x] ~~Wider candidate pool~~ — top-40 already contains correct sessions
-- [x] ~~Temporal 3rd RRF list~~ — byte-identical on LME (shared ingest timestamp)
-- [x] ~~Post-fusion boosts (RAW=off)~~ — crushes preference MRR (-13pp)
-- [x] ~~QMD_MEMORY_EXPAND=keywords was parked~~ → **REVERSED 2026-04-16**:
-  +0.6pp rAny@5, +4pp preference rAny5 (93→97%). Now default.
+- ~~`QMD_MEMORY_MMR=session`~~ — flat on LME (byte-identical)
+- ~~kMultiplier 3→10~~ — byte-identical (vec is noise)
+- ~~HyDE / generative query expansion~~ — coverage already 100%
+- ~~Wider candidate pool~~ — top-40 already contains correct sessions
+- ~~Temporal 3rd RRF weight 0.3~~ — byte-identical (LME shared ingest timestamp)
+- ~~Post-fusion boosts (RAW=off)~~ — crushes preference MRR (-13pp)
+- ~~L1 user-only ingest~~ — -7pp preference rAny5
+- ~~Per-turn ingest~~ — 10x latency, no quality gain
+- ~~extractAndStore + KG~~ — -16pp multi-session R@5
+- ~~Pure rerank (0.0/1.0)~~ — s-user collapses 100→77%
 
 ---
 
