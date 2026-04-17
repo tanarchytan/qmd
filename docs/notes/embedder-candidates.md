@@ -6,24 +6,39 @@ Rule: **int8 ONNX required**, **≤1024 dim** (or Matryoshka-truncatable to ≤1
 
 Benchmarks against LongMemEval _s. Scores are the period's best; the 2026-04-13 numbers used the old additive pipeline (before RRF restructure).
 
+### Succeeded (benchmarked)
+
 | Model | Dim | Size (q8) | ONNX int8 | LME R@5 | LME MRR | multi-R@5 | Wall | Verdict |
 |---|---|---|---|---|---|---|---|---|
 | **mixedbread-ai/mxbai-embed-xsmall-v1** | 384 | ~50 MB | ✅ native | 94.2% (old), 98.4% (new) | 0.857 → 0.917 | 82% | 14m49s | **Production default** |
 | Xenova/all-MiniLM-L6-v2 (file=`model_quint8_avx2`) | 384 | ~23 MB | ✅ Xenova | 94.4% | 0.859 | 83% | 17m09s | Viable fallback |
 | sentence-transformers/all-MiniLM-L6-v2 (fp32 via fastembed, not q8) | 384 | ~90 MB | n/a | 93.2% | 0.862 | 81% | 23m33s | Too slow (fp32) |
+| Snowflake/snowflake-arctic-embed-s q8 | 384 | ~35 MB | ✅ | 93.2% | — | 84.2% | — | **Strictly worse than mxbai-xs on every sr5 bucket.** Pref -10pp. Parked 2026-04-14 post metric-audit. |
 | intfloat/multilingual-e5-small | 384 | — | ✅ | n/a (toy probe only) | — | — | — | Weak spread on probe, not LME-tested |
 
 **Key finding (2026-04-13):** int8/uint8 quantization broke the 81% multi-session ceiling that 6 fp32 models all hit. Quantization noise is a soft ranking diversifier.
 
-## Failed on WSL (re-testable on Windows native)
+### Failed on WSL (re-testable on Windows native or via onnx-community port)
 
 | Model | Dim | Failure mode | Retry on Windows? |
 |---|---|---|---|
-| google/embeddinggemma-300m | 768 | 14.6 GB RSS at load (was fp32) | **Yes — use `onnx-community/embeddinggemma-300m-ONNX` int8 (309 MB).** Now in candidates table. |
-| nomic-ai/nomic-embed-text-v1.5 | 768 | 48 GB alloc OOM (8K context expansion) | Try with smaller context cap |
-| jinaai/jina-v5-text-nano | 384 | OOM at ingest | Maybe — different runtime |
-| F2LLM-v2 GGUF | — | Tokenizer missing | No (GGUF path removed from qmd) |
-| harrier-oss-v1-270m | 384 | Decoder, not encoder | No (architecturally wrong) |
+| google/embeddinggemma-300m | 768 | 14.6 GB RSS at load (was fp32) | **YES** — `onnx-community/embeddinggemma-300m-ONNX` int8 (309 MB). In candidates list. |
+| nomic-ai/nomic-embed-text-v1.5 | 768 | 48 GB alloc OOM (8K context expansion) | Try with smaller context cap. In candidates list. |
+| jinaai/jina-v5-text-nano (old `-nano-classification` variant) | 384 | OOM at ingest | Superseded — use `jina-embeddings-v5-text-nano-retrieval` int8. In candidates list. |
+| F2LLM-v2 GGUF (80M / 160M / 330M) | — | Tokenizer missing from node-llama-cpp prebuilt | **NO** — GGUF path removed from qmd |
+| harrier-oss-v1-270m | — | Decoder model, not encoder. transformers.js `feature-extraction` returns undefined | **NO** — architecturally wrong |
+
+### Excluded categories (won't retest)
+
+| Category | Example models | Reason |
+|---|---|---|
+| Multilingual | `distiluse-base-multilingual-*`, `paraphrase-multilingual-*`, `LaBSE` | English-only corpus; multilingual trades English strength for breadth |
+| Multimodal | `clip-ViT-B-32`, `clip-ViT-B-16`, `clip-ViT-L-14` | Text-only memory — image alignment is overhead |
+| Scientific / domain-specific | `allenai-specter`, SciBERT | Trained on paper/citation pairs; breaks on conversational text |
+| >1024 dim | `bge-m3` (8192d), large multilingual variants | Violates 1024d cap (sqlite-vec scaling + storage) |
+| GGUF-only | Original nomic, F2LLM, various | qmd removed node-llama-cpp / GGUF path in 2026-04-13 cleanup |
+| Decoder models | Gemma / Llama derivatives without encoder head | transformers.js `feature-extraction` pipeline incompatible |
+| >500 MB int8 download | Many 1B+ param models | Breaks zero-setup install story, doesn't fit CPU inference budget
 
 ## Phase 11 candidates (int8 ONNX, ≤1024d, retrieval-trained)
 
