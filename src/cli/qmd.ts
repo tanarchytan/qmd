@@ -4,6 +4,7 @@ loadQmdEnv();
 import { openDatabase } from "../db.js";
 import type { Database } from "../db.js";
 import { formatETA, formatTimeAgo, formatMs, formatBytes, formatLsTime, renderProgressBar } from "./format.js";
+import { getStore, getDb, resyncConfig, closeDb, getDbPath, setIndexName, ensureVecTable } from "./db-state.js";
 import fastGlob from "fast-glob";
 import { execSync, spawn as nodeSpawn } from "child_process";
 import { fileURLToPath } from "url";
@@ -110,76 +111,8 @@ import { memoryStore, memoryRecall, memoryForget, memoryStats, extractAndStore, 
 // Tests must set INDEX_PATH or use createStore() with explicit path
 enableProductionMode();
 
-// =============================================================================
-// Store/DB lifecycle (no legacy singletons in store.ts)
-// =============================================================================
-
-let store: ReturnType<typeof createStore> | null = null;
-let storeDbPathOverride: string | undefined;
-
-function getStore(): ReturnType<typeof createStore> {
-  if (!store) {
-    store = createStore(storeDbPathOverride);
-    // Sync YAML config into SQLite store_collections so store.ts reads from DB
-    try {
-      const config = loadConfig();
-      syncConfigToDb(store.db, config);
-      // LlamaCpp removed — config.models.embed/generate/rerank now informational
-      // only. Local embed model is selected via QMD_EMBED_MODEL env var.
-    } catch {
-      // Config may not exist yet — that's fine, DB works without it
-    }
-  }
-  return store;
-}
-
-function getDb(): Database {
-  return getStore().db;
-}
-
-/** Re-sync YAML config into SQLite after CLI mutations (add/remove/rename collection, context changes) */
-function resyncConfig(): void {
-  const s = getStore();
-  try {
-    const config = loadConfig();
-    // Clear config hash to force re-sync
-    s.db.prepare(`DELETE FROM store_config WHERE key = 'config_hash'`).run();
-    syncConfigToDb(s.db, config);
-  } catch {
-    // Config may not exist — that's fine
-  }
-}
-
-function closeDb(): void {
-  if (store) {
-    store.close();
-    store = null;
-  }
-}
-
-function getDbPath(): string {
-  return store?.dbPath ?? storeDbPathOverride ?? getDefaultDbPath();
-}
-
-function setIndexName(name: string | null): void {
-  let normalizedName = name;
-  // Normalize relative paths to prevent malformed database paths
-  if (name && name.includes('/')) {
-    const { resolve } = require('path');
-    const { cwd } = require('process');
-    const absolutePath = resolve(cwd(), name);
-    // Replace path separators with underscores to create a valid filename
-    normalizedName = absolutePath.replace(/\//g, '_').replace(/^_/, '');
-  }
-  storeDbPathOverride = normalizedName ? getDefaultDbPath(normalizedName) : undefined;
-  // Reset open handle so next use opens the new index
-  closeDb();
-}
-
-function ensureVecTable(_db: Database, dimensions: number): void {
-  // Store owns the DB; ignore `_db` and ensure vec table on the active store
-  getStore().ensureVecTable(dimensions);
-}
+// Store/DB lifecycle (getStore, getDb, resyncConfig, closeDb, getDbPath,
+// setIndexName, ensureVecTable) moved to cli/db-state.ts.
 
 // Terminal colors (respects NO_COLOR env)
 const useColor = !process.env.NO_COLOR && process.stdout.isTTY;
