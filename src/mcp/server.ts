@@ -40,7 +40,7 @@ import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections
 // already get this via src/cli/qmd.ts:110 — calling here is a noop for them
 // and a critical safety net for everyone else. Upstream tobi/qmd 9dd8a73.
 enableProductionMode();
-import { memoryStore, memoryStoreBatch, memoryRecall, memoryForget, memoryUpdate, memoryStats, runDecayPass, runCleanupPass, runReflectionPass, memoryReflect, extractAndStore, ensureScopePartitions, knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeTimeline, knowledgeStats, MEMORY_CATEGORIES } from "../memory/index.js";
+import { memoryStore, memoryStoreBatch, memoryRecall, memoryRecallTiered, memoryPushPack, memoryForget, memoryUpdate, memoryStats, runDecayPass, runCleanupPass, runReflectionPass, memoryReflect, extractAndStore, ensureScopePartitions, knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeTimeline, knowledgeStats, MEMORY_CATEGORIES } from "../memory/index.js";
 
 // =============================================================================
 // Types for structured content
@@ -794,6 +794,65 @@ Intent-aware lex (C++ performance, not sports):
       return {
         content: [{ type: "text", text: lines.join('\n') }],
         structuredContent: stats,
+      };
+    }
+  );
+
+  server.registerTool(
+    "memory_recall_tiered",
+    {
+      title: "Tiered Memory Recall",
+      description: "Recall memories grouped by tier (core, working, peripheral). Useful when agents want to prioritize always-on core memories separately from working/peripheral hits.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {
+        query: z.string().describe("Search query"),
+        scope: z.string().optional().describe("Filter by scope"),
+        category: z.enum(["preference", "fact", "decision", "entity", "reflection", "other"]).optional().describe("Filter by category"),
+        perTierLimit: z.number().optional().describe("Max results per tier (default: 5)"),
+      },
+    },
+    async ({ query, scope, category, perTierLimit }) => {
+      const db = store.internal.db;
+      const { core, working, peripheral } = await memoryRecallTiered(db, {
+        query, scope, category, perTierLimit,
+      });
+      const fmt = (rs: typeof core) => rs.length > 0
+        ? rs.map((r, i) => `  ${i + 1}. [${r.category}] (score: ${r.score.toFixed(2)}) ${r.text}`).join('\n')
+        : "  (none)";
+      const text = [
+        `Core (${core.length}):`, fmt(core),
+        `\nWorking (${working.length}):`, fmt(working),
+        `\nPeripheral (${peripheral.length}):`, fmt(peripheral),
+      ].join('\n');
+      return {
+        content: [{ type: "text", text }],
+        structuredContent: { core, working, peripheral },
+      };
+    }
+  );
+
+  server.registerTool(
+    "memory_push_pack",
+    {
+      title: "Push Pack (session-start bundle)",
+      description: "Get a pre-query memory bundle (Task State + core + hot-tail + important-recent). No query needed — returns what the agent should have on hand at session start.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {
+        scope: z.string().optional().describe("Filter by scope"),
+        windowDays: z.number().optional().describe("Window in days for hot-tail and important-recent selection (default: 14)"),
+        maxEntries: z.number().optional().describe("Max memories in the pack (default: 10)"),
+        minImportance: z.number().optional().describe("Importance floor for working-tier pulls (default: 0.7)"),
+      },
+    },
+    async ({ scope, windowDays, maxEntries, minImportance }) => {
+      const db = store.internal.db;
+      const pack = memoryPushPack(db, { scope, windowDays, maxEntries, minImportance });
+      const lines = pack.length > 0
+        ? pack.map((p, i) => `${i + 1}. [${p.tier}] (reason: ${p.reason}, imp: ${p.importance.toFixed(2)}) ${p.text}`)
+        : ["(empty pack — no memories matched)"];
+      return {
+        content: [{ type: "text", text: lines.join('\n') }],
+        structuredContent: { pack },
       };
     }
   );
