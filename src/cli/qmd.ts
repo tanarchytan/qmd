@@ -6,6 +6,7 @@ import type { Database } from "../db.js";
 import { formatETA, formatTimeAgo, formatMs, formatBytes, formatLsTime, renderProgressBar } from "./format.js";
 import { getStore, getDb, resyncConfig, closeDb, getDbPath, setIndexName, ensureVecTable } from "./db-state.js";
 import { c, cursor, progress, useColor, isTTY } from "./terminal.js";
+import { collectionList, collectionRemove, collectionRename } from "./collection-commands.js";
 import fastGlob from "fast-glob";
 import { execSync, spawn as nodeSpawn } from "child_process";
 import { fileURLToPath } from "url";
@@ -1176,39 +1177,7 @@ function listFiles(pathArg?: string): void {
 // formatLsTime moved to cli/format.ts
 
 // Collection management commands
-function collectionList(): void {
-  const db = getDb();
-  const collections = listCollections(db);
-
-  if (collections.length === 0) {
-    console.log("No collections found. Run 'qmd collection add .' to create one.");
-    closeDb();
-    return;
-  }
-
-  console.log(`${c.bold}Collections (${collections.length}):${c.reset}\n`);
-
-  for (const coll of collections) {
-    const updatedAt = coll.last_modified ? new Date(coll.last_modified) : new Date();
-    const timeAgo = formatTimeAgo(updatedAt);
-    
-    // Get YAML config to check includeByDefault
-    const yamlColl = getCollectionFromYaml(coll.name);
-    const excluded = yamlColl?.includeByDefault === false;
-    const excludeTag = excluded ? ` ${c.yellow}[excluded]${c.reset}` : '';
-
-    console.log(`${c.cyan}${coll.name}${c.reset} ${c.dim}(qmd://${coll.name}/)${c.reset}${excludeTag}`);
-    console.log(`  ${c.dim}Pattern:${c.reset}  ${coll.glob_pattern}`);
-    if (yamlColl?.ignore?.length) {
-      console.log(`  ${c.dim}Ignore:${c.reset}   ${yamlColl.ignore.join(', ')}`);
-    }
-    console.log(`  ${c.dim}Files:${c.reset}    ${coll.active_count}`);
-    console.log(`  ${c.dim}Updated:${c.reset}  ${timeAgo}`);
-    console.log();
-  }
-
-  closeDb();
-}
+// collectionList moved to cli/collection-commands.ts
 
 async function collectionAdd(pwd: string, globPattern: string, name?: string): Promise<void> {
   // If name not provided, generate from pwd basename
@@ -1257,54 +1226,7 @@ async function collectionAdd(pwd: string, globPattern: string, name?: string): P
   console.log(`${c.green}✓${c.reset} Collection '${collName}' created successfully`);
 }
 
-function collectionRemove(name: string): void {
-  // Check if collection exists in YAML
-  const coll = getCollectionFromYaml(name);
-  if (!coll) {
-    console.error(`${c.yellow}Collection not found: ${name}${c.reset}`);
-    console.error(`Run 'qmd collection list' to see available collections.`);
-    process.exit(1);
-  }
-
-  const db = getDb();
-  const result = removeCollection(db, name);
-  // Also remove from YAML config
-  yamlRemoveCollectionFn(name);
-  closeDb();
-
-  console.log(`${c.green}✓${c.reset} Removed collection '${name}'`);
-  console.log(`  Deleted ${result.deletedDocs} documents`);
-  if (result.cleanedHashes > 0) {
-    console.log(`  Cleaned up ${result.cleanedHashes} orphaned content hashes`);
-  }
-}
-
-function collectionRename(oldName: string, newName: string): void {
-  // Check if old collection exists in YAML
-  const coll = getCollectionFromYaml(oldName);
-  if (!coll) {
-    console.error(`${c.yellow}Collection not found: ${oldName}${c.reset}`);
-    console.error(`Run 'qmd collection list' to see available collections.`);
-    process.exit(1);
-  }
-
-  // Check if new name already exists in YAML
-  const existing = getCollectionFromYaml(newName);
-  if (existing) {
-    console.error(`${c.yellow}Collection name already exists: ${newName}${c.reset}`);
-    console.error(`Choose a different name or remove the existing collection first.`);
-    process.exit(1);
-  }
-
-  const db = getDb();
-  renameCollection(db, oldName, newName);
-  // Also rename in YAML config
-  yamlRenameCollectionFn(oldName, newName);
-  closeDb();
-
-  console.log(`${c.green}✓${c.reset} Renamed collection '${oldName}' to '${newName}'`);
-  console.log(`  Virtual paths updated: ${c.cyan}qmd://${oldName}/${c.reset} → ${c.cyan}qmd://${newName}/${c.reset}`);
-}
+// collectionRemove and collectionRename moved to cli/collection-commands.ts
 
 async function indexFiles(pwd?: string, globPattern: string = DEFAULT_GLOB, collectionName?: string, suppressEmbedNotice: boolean = false, ignorePatterns?: string[]): Promise<void> {
   const db = getDb();
