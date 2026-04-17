@@ -53,9 +53,9 @@
     "url": "https://github.com/tanarchytan/qmd/issues"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.0.1",
+    "@huggingface/transformers": "^4.1.0",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "better-sqlite3": "12.8.0",
+    "better-sqlite3": "^12.9.0",
     "fast-glob": "3.3.3",
     "picomatch": "4.0.4",
     "sqlite-vec": "0.1.9",

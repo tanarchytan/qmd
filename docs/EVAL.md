@@ -169,7 +169,23 @@ All toggles default to the v15-final configuration. Override to ablate.
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `QMD_PROMPT_RULES` | v11 | `v10` = minimal rules, `v11` = full rules (multi-item, yes/no, synthesis, undefined detection) |
+| `QMD_PROMPT_RULES` | v11 | `v10` minimal rules · `v11` full rules (multi-item, yes/no, synthesis, undefined) · `v11.1` adds ORDERING / DURATION / COUNTING rules · `v12` chain-of-thought + structured `Answer:`/`Cited:` output (paper-style, over-engineered in practice) · **`v13` minimal LongMemEval-paper-aligned** (memories + question only, recommended for LLM-judge runs) |
+| `QMD_ANSWER_TOP_K` | 5 | How many retrieved memories are fed into the answer prompt. Retrieval still returns 50 for metric computation (MRR@50, R@50); answer prompt uses only the top-K. |
+| `QMD_ANSWER_MAX_CHARS` | 6000 | Per-memory character cap before the memory enters the answer prompt. LongMemEval sessions average 8,283 chars — the 2026-04-17 jump from 800→6000 is what unblocked Phase 7.1 accuracy. Lower if you need to fit a small-context model. |
+
+### LLM-judge (`--judge <provider>` CLI flag)
+
+qmd implements LongMemEval's *evaluate_qa.py* pattern: retrieve → generator LLM → judge LLM returns 1/0 on factual equivalence with the gold answer. Unlocks `avgJudgeCorrect` alongside F1/EM.
+
+| Flag / Var | Effect |
+|-----|--------|
+| `--llm <provider>` | `gemini` (default), `minimax`, `poe` — generator model |
+| `--judge <provider>` | When set, runs LLM-judge after each prediction. Accepts same provider names. |
+| `--judge-model <model-id>` | Override the judge model (e.g. `--judge poe --judge-model gpt-4o` while `--llm poe QMD_POE_MODEL=gpt-4o-mini` — cheap gen + strong judge). |
+| `--reflect` | Enable `memoryReflect` pre-pass: distil top-K memories into ≤8 facts via the generator LLM before the answer call. Adds 1 extra LLM call/question. |
+| `QMD_POE_MODEL` | default `gpt-4o` — override the Poe model used for generation |
+| `POE_API_KEY` | Required when `--llm poe` or `--judge poe`. Needs an active Poe subscription for API access. |
+| `QMD_SKIP_PREFLIGHT` | `on` to skip the pre-flight quota probe (Poe `max_tokens=16` ping before ingest; catches 402-insufficient-quota before the run starts). |
 
 ### Reproducibility
 

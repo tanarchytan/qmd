@@ -37,7 +37,7 @@ type Database = ReturnType<typeof openDatabase>;
 // LLM
 // ---------------------------------------------------------------------------
 
-type LLMProvider = "gemini" | "minimax";
+type LLMProvider = "gemini" | "minimax" | "poe";
 const LLM_CONFIG: Record<LLMProvider, { url: string; model: string; keyEnv: string }> = {
   gemini: {
     url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
@@ -49,9 +49,22 @@ const LLM_CONFIG: Record<LLMProvider, { url: string; model: string; keyEnv: stri
     model: "MiniMax-M2.7",
     keyEnv: "MINIMAX_API_KEY",
   },
+  // Poe OpenAI-compatible endpoint — one key, access to gpt-4o / claude / gemini / etc.
+  // Model override via QMD_POE_MODEL (default gpt-4o). Requires active Poe subscription.
+  poe: {
+    url: "https://api.poe.com/v1/chat/completions",
+    model: process.env.QMD_POE_MODEL || "gpt-4o",
+    keyEnv: "POE_API_KEY",
+  },
 };
 const LLM_SEED = 42;
 let activeLLM: LLMProvider = "gemini";
+// Optional judge provider (--judge flag). Runs after prediction to produce a
+// correctness verdict via LLM-as-judge, independent of the generator LLM.
+let judgeProvider: LLMProvider | null = null;
+// Per-call model override for the judge. Lets `--llm poe --judge poe` use a cheap
+// model for generation and a strong model for grading in the same Poe account.
+let judgeModelOverride: string | null = null;
 
 // Build a Gemini URL for arbitrary model name (used by --extract-model split)
 function geminiUrl(model: string): string {
@@ -82,18 +95,194 @@ async function askGemini(prompt: string, apiKey: string): Promise<string> {
   return text;
 }
 
-async function askLLM(prompt: string): Promise<string> {
-  const cfg = LLM_CONFIG[activeLLM];
+/** OpenAI-compatible chat/completions. Shared by Poe + any other
+ *  OpenAI-shape provider we add later. Cache-aware via llmCache. */
+// Accumulated usage across every LLM call in this run. Persisted into the
+// results JSON so we can trace cost/quality tradeoffs per experiment.
+const usageTotals = {
+  input: 0,
+  output: 0,
+  callsGen: 0,
+  callsJudge: 0,
+};
+
+async function askOpenAICompat(
+  prompt: string,
+  apiKey: string,
+  url: string,
+  model: string,
+  maxTokens: number = 256,
+  callType: "gen" | "judge" = "gen",
+): Promise<string> {
+  const cacheKey = { model, temperature: 0, seed: LLM_SEED, prompt };
+  const cached = llmCache.get(cacheKey);
+  if (cached != null) return cached;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0,
+      // Pass seed so Poe/OpenAI can return deterministic outputs at temp=0 —
+      // identical inputs produce identical outputs → cache hits on re-run.
+      seed: LLM_SEED,
+      max_tokens: maxTokens,
+    }),
+  });
+  if (!resp.ok) throw new Error(`${model} ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+  const data = await resp.json() as any;
+  // Capture per-call token usage when provided (Poe/OpenAI return `usage`).
+  const u = data.usage;
+  if (u) {
+    usageTotals.input += Number(u.prompt_tokens ?? 0);
+    usageTotals.output += Number(u.completion_tokens ?? 0);
+  }
+  if (callType === "gen") usageTotals.callsGen++;
+  else usageTotals.callsJudge++;
+  let text = (data.choices?.[0]?.message?.content || "").replace(/^["']|["']$/g, "").trim();
+  llmCache.set(cacheKey, text);
+  return text;
+}
+
+/** Pre-flight quota probe. Hits the judge/gen provider with a 1-token ping so
+ *  a low-quota account fails fast before ingesting 100+ questions. No-op if
+ *  QMD_SKIP_PREFLIGHT=on. */
+async function preflightQuotaCheck(provider: LLMProvider, model: string): Promise<void> {
+  if (process.env.QMD_SKIP_PREFLIGHT === "on") return;
+  const cfg = LLM_CONFIG[provider];
+  const apiKey = process.env[cfg.keyEnv];
+  if (!apiKey) throw new Error(`${cfg.keyEnv} not set — cannot preflight ${provider}`);
+  try {
+    if (provider === "poe") {
+      const resp = await fetch(cfg.url, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: "ok" }],
+          // Poe enforces max_tokens >= 16. Use the minimum — preflight
+          // burns ~20-30 points per model probed, trivial cost to catch
+          // quota errors before the main run.
+          temperature: 0, seed: LLM_SEED, max_tokens: 16,
+        }),
+      });
+      const body = await resp.text();
+      if (!resp.ok) {
+        throw new Error(`preflight ${provider}/${model} HTTP ${resp.status}: ${body.slice(0, 200)}`);
+      }
+    }
+    // Gemini preflight: skip — free tier, no quota probe needed beyond key presence.
+    process.stderr.write(`[preflight] ${provider}/${model} ok\n`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Preflight failed for ${provider}/${model}. Aborting run to avoid mid-eval blowup.\n  ${msg}`);
+  }
+}
+
+async function askLLM(
+  prompt: string,
+  provider: LLMProvider = activeLLM,
+  maxTokens: number = 128,
+  modelOverride?: string,
+  callType: "gen" | "judge" = "gen",
+): Promise<string> {
+  const cfg = LLM_CONFIG[provider];
   const apiKey = process.env[cfg.keyEnv];
   if (!apiKey) throw new Error(`${cfg.keyEnv} not set`);
-  if (activeLLM !== "gemini") throw new Error("Only gemini supported in this script");
-  return askGemini(prompt, apiKey);
+  const model = modelOverride || cfg.model;
+  if (provider === "gemini") {
+    // Gemini URL path is model-specific — rebuild on override.
+    if (modelOverride) {
+      const url = geminiUrl(modelOverride) + `?key=${apiKey}`;
+      return askGeminiDirect(prompt, url, modelOverride);
+    }
+    return askGemini(prompt, apiKey);
+  }
+  if (provider === "poe") return askOpenAICompat(prompt, apiKey, cfg.url, model, maxTokens, callType);
+  throw new Error(`LLM provider not supported: ${provider}`);
+}
+
+// Minimal Gemini caller that takes pre-built url — used when --judge-model overrides.
+async function askGeminiDirect(prompt: string, url: string, model: string): Promise<string> {
+  const cacheKey = { model, temperature: 0, seed: LLM_SEED, prompt };
+  const cached = llmCache.get(cacheKey);
+  if (cached != null) return cached;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0, seed: LLM_SEED, maxOutputTokens: 256 },
+    }),
+  });
+  if (!resp.ok) throw new Error(`${model} ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+  const data = await resp.json() as any;
+  let text = data.candidates?.[0]?.content?.parts
+    ?.filter((p: any) => p.text && !p.thought)
+    ?.map((p: any) => p.text).join("") || "";
+  text = text.replace(/^["']|["']$/g, "").trim();
+  llmCache.set(cacheKey, text);
+  return text;
+}
+
+/** LLM-as-judge: returns 1 if the prediction correctly matches the gold answer, 0 otherwise.
+ *  Prompt style mirrors LongMemEval paper's evaluate_qa.py — strict factual equivalence,
+ *  not string match. Uses the provider set via --judge flag. */
+const JUDGE_SYSTEM_PROMPT =
+  "You are a strict but fair grader. Given a question, a gold-standard answer, and a candidate answer, decide whether the candidate answer is factually equivalent to the gold. " +
+  "CORRECT if the candidate expresses the same facts as the gold (different wording or extra non-contradictory detail is fine). " +
+  "INCORRECT if any required fact is missing, contradicted, or has a different value. " +
+  "Respond on one line with a single JSON object: {\"correct\": true|false, \"reason\": \"<short sentence>\"}";
+
+async function askJudge(question: string, predicted: string, gold: string): Promise<number | null> {
+  if (!judgeProvider) return null;
+  const userMsg =
+    `QUESTION: ${question.trim()}\n\n` +
+    `GOLD ANSWER: ${gold.trim()}\n\n` +
+    `CANDIDATE ANSWER: ${predicted.trim()}\n\n` +
+    `Respond with the JSON object only.`;
+  const fullPrompt = `${JUDGE_SYSTEM_PROMPT}\n\n${userMsg}`;
+  try {
+    // Judge outputs a single JSON line of ~30 tokens. 48-token cap is
+    // plenty of headroom and saves Poe-output cost vs the prior 64.
+    const raw = await askLLM(fullPrompt, judgeProvider, 48, judgeModelOverride ?? undefined, "judge");
+    const m = raw.match(/\{[\s\S]*?\}/);
+    if (!m) return 0;
+    const obj = JSON.parse(m[0]);
+    return obj.correct ? 1 : 0;
+  } catch (err) {
+    process.stderr.write(`[judge] failed: ${err instanceof Error ? err.message : err}\n`);
+    return null;
+  }
 }
 
 function buildAnswerPrompt(question: string, memories: string[], questionType: string): string {
   const context = memories.map((m, i) => `[${i + 1}] ${m}`).join("\n");
   const isAbstention = questionType.endsWith("_abs");
-  const useV111 = (process.env.QMD_PROMPT_RULES || "v11") === "v11.1";
+  const rules = process.env.QMD_PROMPT_RULES || "v11";
+  const useV111 = rules === "v11.1";
+  const useV12 = rules === "v12";
+  const useV13 = rules === "v13";
+
+  // v13: minimal prompt matching LongMemEval paper / Mem0 / RAGAS best practice.
+  // No rule list, no CoT scaffolding — just memories + question.
+  // v11/v11.1 rule lists were tuned for F1/EM string-overlap scoring and can HURT
+  // LLM-judge accuracy by constraining phrasing. Recommended for `--judge` runs.
+  if (useV13) {
+    const preamble = isAbstention
+      ? "Answer the question based on the memories below. If the memories do not contain the information needed, respond with exactly: I don't know."
+      : "Answer the question based on the memories below.";
+    return `You are a helpful assistant answering questions about a user based on their conversation history.
+
+Memories:
+${context}
+
+${preamble}
+
+Question: ${question}
+Answer:`;
+  }
 
   if (isAbstention) {
     return `${context}
@@ -102,6 +291,35 @@ Based on the above context, answer the following question.
 If the context does NOT contain information to answer this question, respond with exactly: I don't know.
 
 Question: ${question} Short answer:`;
+  }
+
+  // v12: LongMemEval paper-aligned prompt — chain-of-thought + structured output
+  // with citations. Strips CoT from the final answer via a post-process regex.
+  // Use for stronger generator models (gpt-4o, claude-sonnet); gpt-4o-mini
+  // sometimes leaks the reasoning trace.
+  if (useV12) {
+    return `You are an assistant answering a question based ONLY on the memories below. Each memory has an index [N] and a timestamp.
+
+Memories:
+${context}
+
+Question: ${question}
+
+Instructions:
+1. First, think step-by-step about which memories are relevant. Keep this section short.
+2. For timestamps, resolve relative dates ("yesterday", "last week") to absolute dates.
+3. For ORDERING questions, compare timestamps and pick the earlier/later one as asked.
+4. For DURATION questions, compute the span between two dates and output "N days/weeks/months".
+5. For COUNTING questions, enumerate every matching item then count.
+6. For LIST questions, include ALL items across all memories.
+7. For Yes/No questions, answer with bare "Yes" or "No".
+8. NEVER answer with relative terms — always convert to absolute dates.
+9. If memories don't contain enough information to answer, say so.
+
+Output EXACTLY this format:
+Reasoning: <1-2 sentences on which memories you used and why>
+Answer: <the factual answer — no preamble, no quotes, no explanation here>
+Cited: [<comma-separated memory indices you used, e.g. 1,3,7>]`;
   }
 
   const extraRules = useV111 ? `
@@ -122,6 +340,15 @@ Rules:
 6. Output the answer ONLY — no explanation, no preamble.${extraRules}
 
 Question: ${question} Short answer:`;
+}
+
+/** Parse v12 structured output into just the Answer field. Returns the raw
+ *  string if the format isn't matched (tolerant — model may skip the wrapper). */
+function extractV12Answer(raw: string): string {
+  // Match "Answer: ..." line, stopping at "Cited:" or EOL. Case-insensitive.
+  const m = raw.match(/^\s*Answer:\s*(.+?)(?:\n\s*Cited:|$)/ims);
+  if (m && m[1]) return m[1].trim();
+  return raw.trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +686,11 @@ async function main() {
     if (args[i] === "--limit" && args[i + 1]) limit = parseInt(args[i + 1]!, 10);
     if (args[i] === "--type" && args[i + 1]) questionTypeFilter = args[i + 1]!;
     if (args[i] === "--llm" && args[i + 1]) activeLLM = args[i + 1] as LLMProvider;
+    if (args[i] === "--judge" && args[i + 1]) judgeProvider = args[i + 1] as LLMProvider;
+    if (args[i] === "--judge-model" && args[i + 1]) judgeModelOverride = args[i + 1]!;
+    // Enable the `memoryReflect` pre-pass (distil top-K memories into facts before
+    // the answer call). Maps to QMD_RECALL_REFLECT=on internally.
+    if (args[i] === "--reflect") process.env.QMD_RECALL_REFLECT = "on";
     if (args[i] === "--tag" && args[i + 1]) resultsTag = args[i + 1]!;
     if (args[i] === "--db-suffix" && args[i + 1]) dbSuffix = "-" + args[i + 1];
     if (args[i] === "--no-llm") useLLM = false;
@@ -500,6 +732,17 @@ async function main() {
   if (useLLM && !process.env[LLM_CONFIG[activeLLM].keyEnv]) {
     console.error(`Set ${LLM_CONFIG[activeLLM].keyEnv} or use --no-llm`);
     process.exit(1);
+  }
+
+  // Pre-flight: probe generator + judge providers with a 1-token ping so a
+  // low-quota account fails fast, not at question 42 of 100. Fatal if it
+  // throws — caller (sweep script / user) can retry after topping up.
+  if (useLLM) {
+    await preflightQuotaCheck(activeLLM, LLM_CONFIG[activeLLM].model);
+  }
+  if (judgeProvider) {
+    const judgeModel = judgeModelOverride || LLM_CONFIG[judgeProvider].model;
+    await preflightQuotaCheck(judgeProvider, judgeModel);
   }
 
   // --ds s now prefers the huggingface-released longmemeval_s_cleaned.json
@@ -661,7 +904,22 @@ async function main() {
     // the top — don't REPLACE it. v16-full shipped replacement and lost
     // ~20pp F1 on LME because the compressed bullets dropped exact
     // wording the answer model needed for date arithmetic and ordering.
-    let answerMemories = memories.map(m => m.text);
+    // Cap memories passed to the answer LLM. Retrieval still returns 50 for
+    // metric computation (MRR@50, R@50), but the answer prompt only needs the
+    // top-k. Default 5 matches LongMemEval paper and mem0/letta norms.
+    //
+    // Per-memory char cap: LongMemEval memories are often full multi-turn
+    // sessions (avg ~8K chars, max ~40K). An 800-char cap drops 90% of the
+    // content and causes gpt-4o to answer "no information available" even
+    // when the right session is retrieved (found during Phase 7.1 probe —
+    // Judge stuck at 27% until the cap was raised). 6000 chars × top-5 ≈
+    // 30K chars ≈ 7.5K input tokens per question — fits every major model's
+    // context window, still under 10K/question token budget.
+    const ANSWER_TOP_K = Number(process.env.QMD_ANSWER_TOP_K ?? 5);
+    const ANSWER_MAX_CHARS = Number(process.env.QMD_ANSWER_MAX_CHARS ?? 6000);
+    let answerMemories = memories
+      .slice(0, ANSWER_TOP_K)
+      .map(m => m.text.length > ANSWER_MAX_CHARS ? m.text.slice(0, ANSWER_MAX_CHARS) + "…" : m.text);
     if (process.env.QMD_RECALL_REFLECT === "on" && memories.length > 0 && useLLM) {
       try {
         const reflected = await memoryReflect(inst.question, memories, { maxFacts: 8 });
@@ -678,7 +936,16 @@ async function main() {
       const t1 = Date.now();
       try {
         const prompt = buildAnswerPrompt(inst.question, answerMemories, inst.question_type);
-        prediction = await askLLM(prompt);
+        // Pre-flight estimate: 1 token ≈ 4 chars. Warn if the prompt is
+        // suspiciously large (was a 91k-token blowup on n=100 before the
+        // top-K cap landed). Cheap defensive log — doesn't affect behaviour.
+        const estTok = Math.ceil(prompt.length / 4);
+        if (estTok > 8000) {
+          process.stderr.write(`\n[warn] answer prompt ~${estTok} tokens (${answerMemories.length} memories). Consider lowering QMD_ANSWER_TOP_K or QMD_ANSWER_MAX_CHARS.\n`);
+        }
+        const raw = await askLLM(prompt);
+        // Strip v12's Reasoning: / Cited: scaffolding if used — keep only the answer.
+        prediction = (process.env.QMD_PROMPT_RULES === "v12") ? extractV12Answer(raw) : raw;
       } catch (e) {
         prediction = memories.map(m => m.text).join(" ").slice(0, 300);
         process.stderr.write(`\n[warn] LLM failed: ${e}\n`);
@@ -692,6 +959,10 @@ async function main() {
     const f1 = computeF1(prediction, gt);
     const em = computeEM(prediction, gt);
     const sh = computeSubstringHit(prediction, gt);
+    // LLM-as-judge verdict (null when --judge not set, or on abstention, or on judge error).
+    const judgeCorrect = (judgeProvider && gt && prediction)
+      ? await askJudge(inst.question, prediction, gt)
+      : null;
     const sessionIds = inst.answer_session_ids || [];
     // PRIMARY (session-id retrieval):
     //   r_any@K = binary recall_any — matches agentmemory/mem0/MemPalace "R@K"
@@ -732,6 +1003,8 @@ async function main() {
       mrr, ndcg10,
       // SECONDARY — content overlap (qmd-specific)
       cov_r5, cov_r10, cov_r20, cov_mrr, cov_ndcg10,
+      // PHASE 7 — LLM-as-judge binary correctness (null when judge not run)
+      judgeCorrect,
       searchMs, answerMs,
     });
 
@@ -780,6 +1053,12 @@ async function main() {
   const avgF1 = allResults.reduce((s, r) => s + r.f1, 0) / n;
   const avgEM = allResults.reduce((s, r) => s + r.em, 0) / n;
   const avgSH = allResults.reduce((s, r) => s + r.sh, 0) / n;
+  // LLM-judge accuracy — only averaged over questions that got a verdict.
+  const judged = allResults.filter(r => typeof (r as any).judgeCorrect === "number");
+  const avgJudgeCorrect = judged.length > 0
+    ? judged.reduce((s, r) => s + ((r as any).judgeCorrect as number), 0) / judged.length
+    : null;
+  const judgeN = judged.length;
   // PRIMARY — session-id retrieval (skip abstention)
   const avgRAny5 = avgNullable(allResults, "r_any5");
   const avgRAny10 = avgNullable(allResults, "r_any10");
@@ -822,6 +1101,17 @@ async function main() {
   console.log(`    F1:     ${(avgF1 * 100).toFixed(1)}%   (token overlap, fuzzy)`);
   console.log(`    EM:     ${(avgEM * 100).toFixed(1)}%   (exact match, strict)`);
   console.log(`    SH:     ${(avgSH * 100).toFixed(1)}%   (substring hit — catches short-answer EM false negatives)`);
+  if (avgJudgeCorrect !== null) {
+    console.log(`    Judge:  ${(avgJudgeCorrect * 100).toFixed(1)}%   (LLM-as-judge binary correctness, n=${judgeN} via ${judgeProvider})`);
+  }
+  if (usageTotals.callsGen + usageTotals.callsJudge > 0) {
+    console.log(`  LLM usage:`);
+    console.log(`    Gen calls:   ${usageTotals.callsGen}`);
+    console.log(`    Judge calls: ${usageTotals.callsJudge}`);
+    console.log(`    Tokens:      ${usageTotals.input.toLocaleString()} input / ${usageTotals.output.toLocaleString()} output`);
+    const perQ = (usageTotals.input + usageTotals.output) / Math.max(1, usageTotals.callsGen + usageTotals.callsJudge);
+    console.log(`    Avg per call: ${perQ.toFixed(0)} tokens`);
+  }
   console.log(`  Time: ${elapsed(globalStart)}`);
 
   console.log(`\n  By question type — recall_any@5 / R@5 (fractional) / R@10 / MRR / NDCG@10 / Cov@5 / F1`);
@@ -852,6 +1142,8 @@ async function main() {
       avgCovR5, avgCovR10, avgCovR20, avgCovMRR, avgCovNDCG10,
       // Answer quality
       avgF1, avgEM, avgSH,
+      avgJudgeCorrect, judgeN, judgeProvider,
+      llmUsage: { ...usageTotals },
       total: n, nonAbstention: nEval,
     },
     results: allResults,

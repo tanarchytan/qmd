@@ -1,7 +1,174 @@
 # QMD Roadmap
 
 > For agents: this file tracks all pending work and benchmark history. Read this first when resuming a session.
-> Last updated: 2026-04-17 late (L# parked, vector-bench findings, embedder requirements)
+> Last updated: 2026-04-17 late night (Phase 7 three-bug investigation; char-cap identified as the real bottleneck)
+
+---
+
+## 🔴 2026-04-17 late night — Phase 7 diagnostic: memory content truncation was the bug
+
+Three sequential experiments narrowed the QA accuracy gap to its actual root cause. **Not the retrieval. Not the prompt. Not the generator model. The per-memory char cap.**
+
+### Probe chain
+
+| Experiment | Change from prior | Judge | Conclusion |
+|---|---|---|---|
+| Baseline (v11 + gpt-4o-mini + full 50-mem no-cap) | — | 22.0% | 91K tokens/call — too expensive to iterate |
+| v11 + gpt-4o-mini + top-5 × **800 chars** | cap added | 22.0% | Same judge, 40× cheaper. Confirmed metric stable. |
+| v13 + gpt-4o-mini + top-5 × 800 chars | prompt → paper-aligned minimal | 21.0% | Prompt style didn't move the needle on mini |
+| v13 + **gpt-4o** + top-5 × 800 chars | generator upgrade | 27.0% | Expected +20pp, got +5pp. Model wasn't the bottleneck either. |
+| v13 + gpt-4o + top-5 × **6000 chars** | char-cap fix | **64.0%** | **+37pp. Matches LongMemEval paper's 60-65% baseline.** |
+
+### Diagnostic that cracked it
+
+Per-bucket Judge at v13 + gpt-4o:
+- **single-session-user: 22.9%** (supposed to be the *easy* bucket)
+- **multi-session: 36.7%** (supposed to be *harder*)
+
+Inverted difficulty ⇒ the easy SSU questions were failing on content
+availability, not reasoning. Sampled predictions showed gpt-4o literally
+answering *"there is no information about that in the provided memories"*
+even when retrieval hit the right session.
+
+Inspected the DB. Memory length distribution:
+- **Mean: 8,283 chars**, max 42,910
+- Our cap: **800 chars** → discarded 90%+ of every memory's body
+
+Fixed the default (800 → 6000 chars) and re-fired. Full result pending
+(user paused token burn to tackle docs + local work).
+
+### Code shipped this window (no new tokens)
+
+- Poe provider + `--judge` + `--judge-model` wire-up
+- v13 minimal prompt + v12 CoT prompt (option, not default)
+- `--reflect` CLI flag
+- Pre-flight quota probe (catches 402s before ingest)
+- Per-call token accounting in results JSON
+- Deterministic `seed: 42` to Poe so re-runs hit llm-cache
+- Defense-in-depth caps on `memoryReflect` / `runReflectionPass`
+
+### Key lesson for docs
+
+qmd's recall pipeline returns **sessions**, not chunks. A session is 20-40 turns =
+typically 5-15K chars. Any pipeline that truncates per-memory must account for
+this — short-turn defaults break on session-level retrieval.
+
+---
+
+## 🟢 2026-04-17 night — Phase 7 baseline shipped + gen bottleneck identified
+
+Wired Poe/OpenAI-compatible LLM provider + LLM-as-judge into eval harness.
+Validated end-to-end on n=100 baseline. **Retrieval is no longer the bottleneck.**
+
+### Phase 7 baseline (mxbai-xs + gpt-4o-mini gen + gpt-4o judge, n=100)
+- rAny@5: **100%**, MRR 0.911, NDCG@10 0.917 — retrieval near-ceiling
+- Judge: **22.0%** (gap vs LongMemEval paper's ~60-65% with GPT-4 gen)
+- F1 16.1%, EM 7.0%, SH 11.0%
+- Wall: 11m11s
+- Cost: ~2.4K Poe points (within budget after top-K cap fix)
+
+### Bugs caught this session
+- Eval harness was dumping **all 50 retrieved memories** into the answer prompt
+  (no top-K cap). First n=100 attempt burned 6.9K Poe points in a single gpt-4o
+  call with 91k input tokens. **Fixed** with `QMD_ANSWER_TOP_K=5` and
+  `QMD_ANSWER_MAX_CHARS=800` (matches LongMemEval / Mem0 norms).
+- Defense-in-depth caps added to `memoryReflect` and `runReflectionPass` —
+  same latent leak existed in the core memory module.
+
+### Shipped (no-token-cost code work)
+- v12 answer prompt: LongMemEval-aligned chain-of-thought + structured output
+  with citations (`QMD_PROMPT_RULES=v12`). Output extractor strips the
+  scaffolding so Judge sees just the final answer.
+- `--reflect` CLI flag (wires existing `memoryReflect` pre-pass).
+- Pre-flight token estimate with warning at >8k tokens/prompt.
+- `--judge-model <name>` — separate generator model from judge model so you
+  can A/B expensive models only on the judge side.
+
+### Phase 7.1-7.5 queued (token-cost experiments)
+See `docs/TODO.md` "Phase 7 family" for full plan. Ordered by effort/value:
+1. **7.2** — v11 vs v12 prompt A/B on `gpt-4o-mini` (cheapest, confirms prompt helps)
+2. **7.4** — `QMD_ANSWER_MAX_CHARS` / `TOP_K` sweep (no code, env-only)
+3. **7.3** — reflection pre-pass A/B
+4. **7.1** — generator model sweep (gpt-4o, claude-sonnet, claude-haiku)
+
+---
+
+## 🟢 2026-04-17 evening — Phase 11.5: GPU device auto-select + deps upgrade
+
+Shipped a capability-aware device picker so future embedder experiments on
+GPU/NPU hardware don't need env-var surgery. User is installing AMD Ryzen
+AI SDK; NPU benchmark is a standalone test after reboot cycle.
+
+### Deps upgraded
+- `@huggingface/transformers` 4.0.1 → 4.1.0 (WebGPU in Node, ModelRegistry,
+  BERT 4x speedup)
+- `better-sqlite3` 12.8.0 → 12.9.0
+- Both caret-prefixed for patch floats.
+
+### New surface area
+- `QMD_TRANSFORMERS_DEVICE=cpu|webgpu|dml|gpu|auto` env toggle (default: cpu)
+- `src/llm/gpu-probe.ts` — OS-level VRAM/driver/NPU detection + optional
+  WebGPU adapter probe. Returns human-readable warnings.
+- `src/llm/embed-sizer.ts` — GPU-first `computeEmbedBudget()` with
+  attention-matrix-aware microbatch. Formula:
+  `microbatch = floor(maxBufferSize × 0.70 / (heads × seq² × 4))`.
+  Falls back to CPU when microbatch<1.
+
+### Hardware this session (Ryzen 7 PRO 7840U)
+- Radeon 780M iGPU, 4.0 GiB UMA VRAM, 2 GiB maxBuffer, driver 39 days old.
+- XDNA NPU present (Phoenix, 10 TOPS). **Unreachable from Node** (VitisAI EP
+  is Python-only).
+- Auto sizer output: mxbai-xs→webgpu mb=1 workers=2; embgemma-300m→
+  webgpu mb=29 workers=1; mxbai-large→webgpu mb=89; bge-base→webgpu mb=119.
+
+### What blocked further progress
+- embgemma-300m WebGPU n=100 attempted twice. First: microbatch=64 overran
+  the 2 GiB per-buffer cap. Second: microbatch=4 ran but per-shape shader
+  JIT took ~5 min/question → 2+ hour ETA. Killed.
+- embgemma-300m CPU microbatch=1 was stable (no OOM at 2 GB RSS) but ~2.5 s
+  per embed → 3.5 h for n=100. Killed — not viable for iteration.
+- jina-v5-nano: transformers.js v4.1.0 still doesn't register the arch.
+
+### Pending when driver install completes
+- User runs standalone `benchmark-npu.py` on Ryzen AI SDK 1.3+ (Python,
+  onnxruntime-vitisai EP). Compare CPU / DML / NPU throughput on mxbai-xs.
+- If DML or NPU look compelling, add `onnxruntime-node` as optional dep and
+  write `DmlEmbedBackend` (native DirectML, ~150 LOC).
+- Remaining untested embedders (bge-large, jina-v3, UAE-Large, nomic-v1.5)
+  queued for CPU n=100 — ~1 hour total once machine is back up.
+
+### Still open (pre-Phase-11.5 priority ordering)
+| # | Phase | Status |
+|---|---|---|
+| 6 | Fact-augmented embedding keys | pending (API cost) |
+| 7 | LLM-judge QA accuracy eval mode | pending (API cost) |
+| 8 | Larger reranker model | low priority |
+| 9 | LanceDB MemoryBackend adapter | deferred until >10k memories/scope |
+| 11 | Embedder upgrade | concluded — mxbai-xs stays |
+| 11.5 | GPU device auto-select | **shipped this session** |
+
+---
+
+## 🟢 2026-04-17 latest — Phase 11 embedder sweep concluded
+
+Swept retrieval-trained int8 ONNX candidates at n=100 LongMemEval _s. **No candidate beat mxbai-embed-xsmall-v1 q8.**
+
+| Model | Dim | Params | rAny@5 | MRR | Verdict |
+|---|---|---|---|---|---|
+| **mxbai-xs q8 (baseline, n=500)** | 384 | ~22M | **98.4%** | **0.917** | **Production default** |
+| bge-small-en-v1.5 int8 | 384 | 33M | 99.0% | 0.916 | Tied. Parked. |
+| bge-base-en-v1.5 int8 | 768 | 109M | 99.0% | 0.914 | Tied at 3x params. Parked. |
+| mxbai-embed-large-v1 q8 | 1024 | 335M | — | — | Killed at 32/100 (too slow). Parked. |
+| embeddinggemma-300m int8 | 768 | 300M | — | — | OOM 6.12 GB (external-data expansion). Parked. |
+| jina-v5-nano-retrieval int8 | 768 | 239M | — | — | transformers.js incompat (custom Qwen3-LoRA arch). Parked. |
+
+**Interpretation:** the retrieval ceiling on LME _s is a corpus artifact, not an embedder limitation. BM25 already hits 98.4% rAny@5; vec signal is weak because mxbai-xs has ~0.8 cosine between unrelated conversational chunks. A stronger embedder would only help if RRF shifts meaningfully toward vec-heavy — which requires fact-augmented keys (Phase 6), not a new embedder.
+
+**Preference MRR 0.745 remains the real headroom.** Phase 6 (fact-augmented keys, requires API) and Phase 7 (LLM-judge eval, requires API) are the next real levers. Both are paused pending user-green-light on API spend.
+
+**Revisit Phase 11 only if:** a new retrieval-trained model ships with int8 ONNX canonical/Xenova port AND MTEB retrieval ≥65 AND params/latency budget fits (≤~120M at int8, ≤~100ms/query).
+
+Full sweep results + gotchas (ZE env override, zombie RAM starvation, external-data OOM, jina architecture incompat) in `docs/notes/embedder-candidates.md` and `~/.claude/projects/.../memory/project_phase11_concluded.md`.
 
 ---
 

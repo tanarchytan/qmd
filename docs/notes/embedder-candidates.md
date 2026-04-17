@@ -61,6 +61,125 @@ Pattern applies to **all retrieval models that ship canonical ONNX variants** �
 | Decoder models | Gemma / Llama derivatives without encoder head | transformers.js `feature-extraction` pipeline incompatible |
 | >500 MB int8 download | Many 1B+ param models | Breaks zero-setup install story, doesn't fit CPU inference budget
 
+## Device auto-select (2026-04-17 evening)
+
+Added as part of Phase 11.5. Any candidate listed here can now be run with
+`QMD_TRANSFORMERS_DEVICE=auto` and the sizer picks device/microbatch/workers
+from model config + hardware probe. See `src/llm/gpu-probe.ts` and
+`src/llm/embed-sizer.ts`.
+
+**Current limitation:** in Node, transformers.js v4.1.0 does not expose
+`navigator.gpu` to external code, so the sizer uses OS-level signals (WMI
+on Windows, sysfs on Linux, system_profiler on macOS) as primary GPU
+detection and defaults `maxBufferSize` to the WebGPU spec floor of 2 GiB.
+This is correct for all iGPUs we've measured.
+
+**Auto-sizer output for the Phase 11 candidate set on AMD Radeon 780M
+(4 GiB UMA, 2 GiB maxBuffer):**
+
+| Model | Device | Microbatch | Workers |
+|---|---|---|---|
+| mxbai-embed-xsmall-v1 (seq 4096) | webgpu | 1 | 2 |
+| embgemma-300m (seq 2048, 3 heads) | webgpu | 29 | 1 |
+| mxbai-embed-large-v1 (seq 512, 16 heads) | webgpu | 89 | 1 |
+| bge-base-en-v1.5 (seq 512, 12 heads) | webgpu | 119 | 1 |
+
+The sizer correctly picks microbatch based on `heads × seq² × 4 / (maxBuffer × 0.70)`.
+embgemma still fails in practice due to per-shape shader JIT (see attempt log above),
+not buffer math.
+
+## AMD NPU path (Ryzen AI) — pending user benchmark
+
+Ryzen 7 PRO 7840U has an XDNA NPU (Phoenix, 10 TOPS). As of 2026-04-17:
+
+- NPU is reachable only via Python + `onnxruntime-vitisai` (VitisAI EP)
+- No Node.js binding exists for VitisAI EP
+- Must quantize ONNX through `vai_q_onnx` for NPU-compatible ops
+- Most transformer embedders compile partially — unsupported ops fall back to CPU silently
+
+User is installing Ryzen AI Software 1.3+ (~2 GB, multiple reboots). Standalone
+`benchmark-npu.py` queued to compare CPU / DirectML / VitisAI EPs. If NPU shows
+≥2x CPU throughput on mxbai-xs, we scope adding `onnxruntime-node` + DML EP as
+a dedicated native backend (the Python sidecar path is a last resort).
+
+## Phase 11 results (2026-04-17 sweep — concluded)
+
+**Outcome: mxbai-xs q8 remains permanent production default.** No candidate tested produced a clear win; the ones that matched baseline cost significantly more latency for no gain.
+
+### n=100 sanity results
+
+| Model | Dim | Size | rAny@5 | R@5 | MRR | NDCG@10 | covR5 | covMRR | Verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| **mxbai-xs q8 (baseline, n=500)** | **384** | **~50 MB** | **98.4%** | **93.7%** | **0.917** | **0.913** | **93.6%** | **0.857** | **Production default** |
+| Xenova/gte-small int8 | 384 | 33 MB | 99.0% | 93.9% | **0.921** | **0.925** | 98.0% | 0.919 | **Marginally above baseline** — hold for n=500 follow-up |
+| Xenova/e5-small-v2 int8 | 384 | 33 MB | 98.0% | 92.9% | 0.909 | 0.912 | 98.0% | 0.920 | Below baseline MRR. Parked. |
+| BAAI/bge-small-en-v1.5 int8 (Xenova port) | 384 | ~33 MB | 99.0% | 93.4% | 0.916 | 0.918 | 98.0% | 0.919 | Tied. Parked. |
+| Alibaba-NLP/gte-base-en-v1.5 int8 | 768 | 140 MB | — | — | — | — | — | — | transformers.js v4.1.0 arch incompat: `model_type="new"` not registered. Silent crash. Parked. |
+| Xenova/e5-base-v2 int8 | 768 | ~110 MB | 99.0% | 93.9% | 0.913 | 0.913 | 98.0% | 0.923 | Tied. Parked (3x params, no MRR lift). |
+| BAAI/bge-base-en-v1.5 int8 (Xenova port) | 768 | ~104 MB | 99.0% | 93.9% | 0.914 | 0.913 | 98.0% | 0.920 | Tied. Parked. |
+| nomic-ai/nomic-embed-text-v1.5 int8 | 768 | 140 MB | — | — | — | — | — | — | transformers.js v4.1.0 arch incompat: custom BERT variant not registered. Silent crash. Parked. |
+| mixedbread-ai/mxbai-embed-large-v1 | 1024 | ~335 MB | — | — | — | — | — | — | Killed at 32/100 (too slow for sanity gate). Parked. |
+| **Xenova/bge-large-en-v1.5 int8** | 1024 | ~340 MB | **99.0%** | **93.88%** | **0.9267** | **0.9291** | 98.0% | 0.9253 | **Tied ceiling pick.** +1.0pp MRR, +1.6pp NDCG@10 vs baseline. 10× params, ~40 min/n=100 on CPU. Deploy only with GPU. |
+| **Xenova/UAE-Large-V1 int8** | 1024 | ~340 MB | **99.0%** | **93.88%** | **0.9267** | **0.9295** | 98.0% | 0.9250 | **Tied with bge-large** to 4 decimal places. Indistinguishable at n=100. Same ship recommendation. |
+| Xenova/e5-large-v2 int8 | 1024 | ~340 MB | 99.0% | 93.88% | 0.9093 | 0.9155 | 98.0% | 0.9140 | Below baseline. Likely needs `passage:` prefix at ingest (not done) — current run had `query:` at embed-query but raw at embed-store, which mismatches E5 training. Parked without a re-ingest. |
+| onnx-community/embeddinggemma-300m-ONNX | 768 | ~309 MB | — | — | — | — | — | — | OOM at 6.12 GB (external-data expansion in transformers.js). Parked. |
+| jinaai/jina-embeddings-v5-text-nano-retrieval | 768 | ~247 MB | — | — | — | — | — | — | `feature-extraction` pipeline returns undefined (custom Qwen3-LoRA architecture incompatible with transformers.js generic pipeline, including v4.1.0). Parked. |
+
+**Phase 11.7 final leaderboard (n=100, 2026-04-17):**
+
+| Rank | Model | MRR | Params | Practical note |
+|---|---|---|---|---|
+| 🥇 | bge-large-en-v1.5 | **0.9267** | 335M | Ceiling; CPU-too-slow without GPU |
+| 🥇 | UAE-Large-V1 | **0.9267** | 335M | Tied with bge-large, indistinguishable |
+| 🥈 | **gte-small** | **0.9212** | **30M** | **Value pick.** +0.4pp MRR, +1.2pp NDCG@10 vs baseline at same size class. n=500 follow-up recommended. |
+| — | mxbai-xs q8 (baseline) | 0.917 | 22M | Current production default |
+| — | bge-small / bge-base / e5-base | ~0.913-0.916 | 33-109M | Tied with baseline. Parked. |
+| — | e5-small / e5-large | ~0.909 | 33-335M | Below baseline (prefix-at-ingest mismatch — needs re-ingest to be fair) |
+
+**If n=500 follow-up confirms gte-small's +0.4pp MRR is real, it replaces mxbai-xs as production default** — same speed class, slightly better quality, fully CPU-native.
+
+**bge-large / UAE-Large** are ceiling options only viable after we ship GPU inference (Phase 11.5 WebGPU path or the forthcoming NPU/DirectML native backend).
+
+**Transformers.js v4.1.0 arch-incompat list** (all silent-crash on load — handled with explicit skip in `run-cpu-sweep.sh`):
+- `Alibaba-NLP/gte-base-en-v1.5` (`model_type="new"`)
+- `nomic-ai/nomic-embed-text-v1.5` (custom BERT)
+- `jinaai/jina-embeddings-v5-text-nano-retrieval` (`JinaEmbeddingsV5`)
+
+Root cause is the same for all three: transformers.js `feature-extraction` pipeline dispatches by registered `model_type`. New architectures need upstream PRs. Track the registry at `node_modules/@huggingface/transformers/dist/transformers.node.mjs`.
+
+### embgemma-300m on WebGPU — attempted 2026-04-17 evening after transformers.js v4.1.0 upgrade
+
+WebGPU loads the model without OOM (avoids the CPU int8→fp32 external-data expansion that caused 6.12 GB RSS). **Still not viable:**
+
+| Attempt | microbatch | Outcome |
+|---|---|---|
+| n=100 LME, workers=2 | 64 | **WebGPU buffer overrun** (2.26 GB > 2 GiB per-buffer cap) on first batched encode. transformers.js caught it and fell back to per-item which was never going to finish. |
+| n=100 LME, workers=1 | 4 | Stable, but **7 min on question 1** due to per-shape shader JIT. ETA 2+ hours. Killed. |
+| n=100 LME, CPU, workers=1 | 1 | Stable at 2 GB RSS (no OOM!), **~2.5 s/embed** → 3.5 h ETA. Killed. |
+
+**Root cause:** embgemma uses seq=2048 with small attention heads (3); every unique input length triggers a fresh WebGPU shader compile. LME memories vary wildly in length, so shader cache never warms.
+
+**Verdict:** embgemma-300m **permanently parked** unless:
+1. A smaller Matryoshka variant surfaces (truncated to 256d or 384d with seq ≤ 512), or
+2. We add an `onnxruntime-node` + DirectML EP backend that avoids the WebGPU shader-JIT path entirely.
+
+### Interpretation
+
+- At n=100, preference coverage numbers (covR5, covMRR) look high because the preference subset is only ~20 questions. Not comparable to n=500 baseline's 93.6% / 0.857.
+- bge-small and bge-base are essentially tied with mxbai-xs on rAny@5 and MRR, but each costs 2-5x more parameters and noticeably more wall time.
+- No candidate cleared the user's "cut off from baseline mxbai" threshold with enough headroom to justify a full n=500 validation.
+- **Phase 11 closed. Revisit if:** a retrieval-trained model ships with int8 ONNX + documented MTEB retrieval ≥65 AND the params/latency budget makes sense, OR the current pipeline is no longer BM25-dominant (a stronger embedder would help only if vec weight shifts meaningfully).
+
+### Next time a candidate looks promising
+
+Follow the same methodology:
+
+1. Verify int8 ONNX exists on the canonical repo OR a trusted port (Xenova, onnx-community).
+2. Direct load test first (`QMD_TRANSFORMERS_EMBED=<model>` + small probe) to catch architecture incompat early.
+3. Watch for external-data expansion OOMs — `.onnx` files that require a sidecar `.onnx_data` blob can balloon at load.
+4. n=100 sanity. If rAny@5 or MRR are >1pp below baseline, park.
+5. If n=100 holds, n=500 for full validation before declaring a winner.
+
 ## Phase 11 candidates (int8 ONNX, ≤1024d, retrieval-trained)
 
 Checked each model card for ONNX + int8 availability.

@@ -1,6 +1,6 @@
 # QMD TODO — Optimization Phases
 
-> Last updated: 2026-04-17 late (L# parked, vector-bench done, embedder research queued).
+> Last updated: 2026-04-17 late night (Phase 7 diagnostic — char-cap bug identified; fix in place, retest queued).
 >
 > **Reading order:** Current best → completed → pending → backlog → parked.
 > Each pending phase has pass/fail gates.
@@ -58,15 +58,80 @@ conversation text.
 BM25-heavy (0.9/0.1) on preference MRR. If flat, fact-augmented
 keys not worth the ingest cost.
 
-### Phase 7: LLM-judge QA accuracy eval mode
+### Phase 7: LLM-judge QA accuracy eval mode — PARTIAL
 Required for Supermemory/Hindsight/Zep/mem0 comparison.
 
-- [ ] Port LongMemEval `evaluate_qa.py` pattern
-- [ ] Retrieve → generate answer with LLM → judge correctness
-- [ ] ~1-2h implementation + ~2000 API calls per n=500 run
-- [ ] Produces numbers directly comparable to published leaderboard
+**What shipped 2026-04-17:**
+- [x] LLM-judge wired into eval harness (`--judge <provider>`, `--judge-model <name>`)
+- [x] Poe provider support (`--llm poe`, OpenAI-compatible shape) + `QMD_POE_MODEL`
+- [x] `poe-judge.mts` standalone helper + CLI for ad-hoc validation
+- [x] Top-K + per-memory char cap (`QMD_ANSWER_TOP_K=5`, `QMD_ANSWER_MAX_CHARS=800`) — fixes a ~91k-token prompt blowup bug
+- [x] Defense-in-depth caps on `memoryReflect` / `runReflectionPass`
+- [x] v12 answer prompt option (paper-aligned, chain-of-thought + citations)
+- [x] `--reflect` CLI flag (enables `memoryReflect` pre-pass)
+- [x] Pre-flight token estimate with warning when prompt >8k tokens
 
-**API cost estimate:** ~€5-10 per n=500 run on Gemini Flash Lite.
+**Baseline n=100 (mxbai-xs + gpt-4o-mini gen + gpt-4o judge, 2026-04-17):**
+- rAny@5: 100%, MRR 0.911 — retrieval near-ceiling
+- Judge: **22.0%** — gap vs LongMemEval paper baseline (~60-65% w/ GPT-4 gen)
+- → retrieval is done; answer generation is the bottleneck.
+
+**Published targets to match:**
+- LongMemEval _s paper: **GPT-4 gen + GPT-4 judge → ~60-65% accuracy**
+- Mem0 + GPT-4: ~55-60%
+- Letta/MemGPT + GPT-4: ~60-70%
+
+### Phase 7.1: Generator-model sweep — PARTIALLY DONE 2026-04-17
+- [x] **`gpt-4o-mini`** for generation (baseline) — Judge **22.0%** at top-5×800, **21.0%** at top-5×800 + v13
+- [x] **`gpt-4o`** for generation — Judge **27.0%** at top-5×800. Only +5pp vs mini. Suggested generator wasn't the bottleneck.
+- [ ] **`gpt-4o`** for generation at top-5×6000 chars — pending (paused by user after char-cap fix)
+- [ ] **`claude-sonnet-4.5`** — pending
+- [ ] **`claude-haiku-4.5`** — deferred (user flagged more expensive than gpt-4o on Poe points)
+
+### Phase 7.2: Answer prompt A/B — DONE 2026-04-17
+- [x] **v13** — minimal LongMemEval-paper-aligned prompt (`QMD_PROMPT_RULES=v13`). **Result: tied with v11 on gpt-4o-mini** (21% vs 22% Judge). Prompt style was NOT the bottleneck.
+- [x] v12 — chain-of-thought + structured `Answer:`/`Cited:` output (`QMD_PROMPT_RULES=v12`). Kept as option. Not run — v13 result suggested prompt wasn't the lever.
+- [x] v11 / v11.1 (old default) — kept for reproducing old F1/EM numbers. v13 is now the recommended default for `--judge` runs.
+
+**Conclusion:** v11/v13 produce same Judge on gpt-4o-mini. Prompt-style mismatch didn't explain the gap to the paper.
+
+### Phase 7.3: Reflection pre-pass A/B — pending
+- [x] Flag + plumbing (`--reflect`)
+- [x] Defense-in-depth caps (`QMD_REFLECT_TOP_K=10`, `QMD_REFLECT_MAX_CHARS=800`)
+- [ ] A/B: baseline vs baseline+reflect on gpt-4o-mini (may be needed less after char-cap fix)
+- [ ] A/B on stronger model
+
+**Expected lift:** +5-10pp if the generator was losing signal in long memory lists. Now that char-cap is fixed, this may shrink — the reflect pre-pass was largely designed to compress long context that the model couldn't scan. With the cap lifted, the model sees full sessions natively.
+
+### Phase 7.4: Memory-char budget fix — **ROOT CAUSE FOUND** 2026-04-17
+**This was the real bottleneck.** LongMemEval sessions average 8,283 chars (max 42,910). Our 800-char cap dropped 90%+ of each memory. gpt-4o couldn't find answers because they were past the truncation point.
+
+Applied fix (default): `QMD_ANSWER_MAX_CHARS` **800 → 6000**.
+
+Diagnostic per-bucket at v13+gpt-4o+800char cap:
+- single-session-user: 22.9% Judge (should be EASIEST bucket)
+- multi-session: 36.7% Judge (should be HARDER bucket)
+- Inverted difficulty ⇒ content availability, not reasoning, was the bottleneck.
+
+Still-open sweep items (now a secondary tune after the big fix):
+- [ ] Confirm 6000 is the right floor — sweep at {3000, 6000, 10000, unlimited}
+- [ ] Sweep `QMD_ANSWER_TOP_K` ∈ {3, 5, 10} in combination
+- [ ] Smart truncation (head+tail slice, or question-proximity window) instead of flat cap
+
+### Phase 7.5: Structured output + citation validation (partial)
+v12 already asks for `Cited: [indices]`. Deferred unless v12 ever becomes default.
+
+- [x] v12 prompt requests citations
+- [ ] Parse `Cited:` line, check cited memory indices contain gold-answer tokens
+- [ ] Report `avgCitationPrecision` alongside Judge
+
+### Updated sequencing (char-cap fix changes everything)
+1. **Phase 7.1b** (retest v13 + gpt-4o at 6000 chars) — highest-value open run
+2. If 7.1b clears 45%+ Judge, try reflection pre-pass (7.3) on top
+3. Char budget sweep (7.4) for finer tuning
+4. Claude generator comparison only if gpt-4o plateaus below 55%
+
+---
 
 ### Phase 8: Larger reranker model
 Current: `ms-marco-MiniLM-L-6-v2` (22M params, ~5-10ms/pair).
@@ -94,7 +159,86 @@ sqlite-vec is 2272 QPS at 1k. Real crossover at 10k-100k where LanceDB becomes
 15x faster. Defer until scale justifies it or multi-agent concurrent writes
 become a pain point.
 
-### Phase 11: Embedder upgrade
+### Phase 11: Embedder upgrade — CONCLUDED 2026-04-17
+**Result:** mxbai-xs q8 stays permanent production default. No candidate produced a clear win; closest matches cost 3-5x params for ~0 MRR gain. Full results in `docs/notes/embedder-candidates.md`.
+
+**Revisit trigger:** a new model with int8 ONNX + MTEB retrieval ≥65 AND a clear params/latency budget fit. Until then, the retrieval ceiling on LME _s is a corpus artifact (short conversations, ceiling already hit), not an embedder limitation.
+
+### Phase 11.5: GPU device auto-select — SHIPPED 2026-04-17
+**Result:** `QMD_TRANSFORMERS_DEVICE=auto` probes hardware (VRAM, driver age,
+NPU presence) and picks device + microbatch + workers. GPU-first with CPU
+fallback when buffer cap or probe fails. Works on AMD/Intel/NVIDIA/Apple.
+Deps upgraded: `@huggingface/transformers` 4.0.1→4.1.0, `better-sqlite3`
+12.8.0→12.9.0.
+
+**Files added:** `src/llm/gpu-probe.ts`, `src/llm/embed-sizer.ts`.
+**Env vars:** `QMD_TRANSFORMERS_DEVICE` (cpu|webgpu|dml|gpu|auto),
+`QMD_TRANSFORMERS_AUTO_PREFER` (cpu overrides GPU-first in auto mode).
+
+**Validated outputs on Ryzen 7 PRO 7840U / Radeon 780M / XDNA NPU:**
+- mxbai-xs → webgpu, mb=1, workers=2
+- embgemma-300m → webgpu, mb=29, workers=1
+- mxbai-embed-large → webgpu, mb=89, workers=1
+- bge-base → webgpu, mb=119, workers=1
+
+**NPU warning fires on AMD hardware**: VitisAI EP is Python-only; qmd Node
+backends don't target the NPU. User benchmarks it standalone after SDK install.
+
+---
+
+### Phase 11.6 (pending, user-action required): AMD NPU standalone benchmark
+After user finishes Ryzen AI Software 1.3+ install and reboots, write and
+run a Python benchmark that compares CPU / DirectML / VitisAI EPs on
+mxbai-xs (or whichever model is cheapest to probe). Goal: see whether the
+XDNA NPU (10 TOPS Phoenix) is worth integrating via a future Python-sidecar.
+
+- [ ] Confirm `onnxruntime-vitisai` importable and `VitisAIExecutionProvider`
+      shows in `ort.get_available_providers()`.
+- [ ] Benchmark script: mxbai-xs int8 ONNX, 100 embeds, wall time per EP.
+- [ ] Validate cosine equivalence > 0.99 vs CPU baseline (catches quantization drift).
+- [ ] If NPU ≥ 2x CPU: scope `onnxruntime-node` + DML EP path, since native
+      DML likely overlaps + simpler than a Python sidecar.
+- [ ] Document results in `docs/notes/embedder-candidates.md`.
+
+### Phase 11.7: CPU sweep of 8 embedders — COMPLETED 2026-04-17
+**Ran 6/8 candidates at n=100** (2 skipped for transformers.js v4.1.0 arch incompat).
+Full leaderboard in `docs/notes/embedder-candidates.md`. Key findings:
+
+| Rank | Model | MRR | Params | Verdict |
+|---|---|---|---|---|
+| 🥇 | Xenova/bge-large-en-v1.5 | 0.9267 | 335M | Ceiling; CPU-too-slow for prod |
+| 🥇 | Xenova/UAE-Large-V1 | 0.9267 | 335M | Tied with bge-large to 4 decimal places |
+| 🥈 | **Xenova/gte-small** | **0.9212** | **30M** | **Value pick at baseline size class** |
+| — | mxbai-xs (baseline) | 0.917 | 22M | current production default |
+
+### Phase 11.8 (pending, machine-time only): n=500 follow-up for top-3
+Confirm the n=100 lift is real at production scale. Each candidate is a single
+`npx tsx evaluate/longmemeval/eval.mts` invocation — fully local, no API cost.
+
+- [ ] **Xenova/gte-small** (30M, 384d, ~5-8 min wall) — highest-value run: if the +0.4pp MRR holds at n=500, **gte-small replaces mxbai-xs as production default**.
+- [ ] **Xenova/bge-large-en-v1.5** (335M, 1024d, ~60-90 min wall) — confirms the 0.9267 MRR ceiling is real. Ceiling reference only; not a deployment candidate until GPU backend lands.
+- [ ] **Xenova/UAE-Large-V1** (335M, 1024d, ~60-90 min wall) — tie-breaker vs bge-large. Expected to match within ±0.005 MRR.
+
+Gate: rAny@5 ≥ 98.4% AND MRR ≥ 0.917 (current mxbai-xs n=500 baseline). Any candidate ≥0.920 MRR warrants a default swap discussion.
+
+**Command template:**
+```sh
+QMD_EMBED_BACKEND=transformers \
+QMD_TRANSFORMERS_EMBED=<model> \
+QMD_TRANSFORMERS_DTYPE=q8 \
+QMD_TRANSFORMERS_DEVICE=cpu \
+QMD_VEC_MIN_SIM=0.1 \
+QMD_RECALL_RAW=on \
+QMD_INGEST_EXTRACTION=off QMD_INGEST_REFLECTIONS=off \
+QMD_INGEST_SYNTHESIS=off QMD_INGEST_PER_TURN=off \
+QMD_EMBED_MICROBATCH=32 \
+  npx tsx evaluate/longmemeval/eval.mts --ds s --limit 500 --no-llm \
+    --workers 2 --tag <tag> --db-suffix <tag>
+```
+
+---
+
+### Phase 11 (archived): Embedder upgrade
 Replace mxbai-embed-xsmall-v1 q8 with a stronger retrieval-trained embedder.
 
 **Technical requirements:**

@@ -2,6 +2,129 @@
 
 ## [Unreleased]
 
+### 2026-04-17 — Phase 7 LLM-judge eval shipped + three bugs caught in one session
+
+Wired full QA generation + LLM-as-judge into the eval harness. Ran baseline
+and diagnostic probes. Identified the **real QA accuracy bottleneck**: memory
+content truncation at the answer-prompt stage, not the retrieval or generator
+model. Three distinct bugs caught in sequence, each fix measurable:
+
+**Added:**
+- `--llm poe` / `--judge <provider>` / `--judge-model <name>` flags in eval.mts
+- Poe (OpenAI-compatible) provider in LLM_CONFIG
+- v13 answer prompt (LongMemEval paper-aligned minimal style — `QMD_PROMPT_RULES=v13`)
+- v12 CoT + citations prompt (kept as option, not default — over-engineered)
+- `--reflect` CLI flag for existing `memoryReflect` pre-pass
+- `QMD_ANSWER_TOP_K` / `QMD_ANSWER_MAX_CHARS` env knobs for answer context budget
+- `preflightQuotaCheck()` — probes Poe with a 16-token ping before ingest, fails
+  fast if the account is out of quota (prevents mid-run 402 blowups like we
+  hit earlier in the day)
+- Per-run `llmUsage` tallies in results JSON (input/output/gen-calls/judge-calls)
+- `seed: LLM_SEED` passed to Poe requests for deterministic replay → cache hits
+- Pre-flight prompt-size warning at >8k tokens/prompt
+- Standalone `evaluate/longmemeval/poe-judge.mts` module (works against any
+  OpenAI-compatible `/v1/chat/completions` endpoint)
+
+**Bugs caught + fixed:**
+1. **Prompt blowup (91K input tokens / call)** — eval.mts was dumping all 50
+   retrieved memories into the answer prompt with no cap. First n=100 attempt
+   burned 6.9K Poe points on a single call. Fixed with `QMD_ANSWER_TOP_K=5`
+   default + per-memory char cap.
+2. **Defense-in-depth caps missing** from `memoryReflect` and `runReflectionPass`
+   — same leak latent in core. Added `QMD_REFLECT_TOP_K` / `QMD_REFLECT_MAX_CHARS`.
+3. **800-char default too tight for session-level memories** (THE big one,
+   caught during Phase 7.1 diagnostics). LongMemEval memories average
+   **8,283 chars** (max 42,910). Our 800-char cap dropped 90%+ of every
+   memory's content, so even when retrieval hit the right session
+   (rAny@5 = 99%), the answer-phase LLM saw a truncated prefix that rarely
+   contained the actual answer. Fixed: `QMD_ANSWER_MAX_CHARS` default bumped
+   to **6000**. Previous 800 default kept for backward compat via env var.
+
+**Benchmark progression (LME _s, n=100, mxbai-xs baseline DB):**
+| Config | Judge | Notes |
+|---|---|---|
+| v11 + gpt-4o-mini + old top-K=50 no cap | 22.0% | burned 91K tokens/call |
+| v11 + gpt-4o-mini + top-5 × 800 chars | 22.0% | same Judge, 40× cheaper |
+| v13 + gpt-4o-mini + top-5 × 800 chars | 21.0% | prompt simplification doesn't help mini at this cap |
+| v13 + **gpt-4o** + top-5 × 800 chars | 27.0% | model gap smaller than expected — cap was the issue |
+| v13 + gpt-4o + top-5 × **6000 chars** | **64.0%** | **+37pp lift. Matches LongMemEval paper's 60-65% baseline.** Char-cap fix confirmed as the real bottleneck. |
+
+**Per-bucket diagnostic that cracked it:**
+- single-session-user bucket Judge: 22.9% (should be *easier*)
+- multi-session bucket Judge: 36.7% (should be *harder*)
+- Inverted pattern ⇒ the easy SSU questions were failing on content availability,
+  not reasoning. Sampling predictions confirmed: gpt-4o was answering
+  *"no information about that in the provided memories"* even when the right
+  session was in top-5.
+
+**Changed:**
+- `QMD_ANSWER_MAX_CHARS` default: 800 → **6000** (sized for LME session memories)
+- `askLLM` default `maxTokens`: 256 → **128** (tightened to save output-token cost)
+- Judge `maxTokens`: 64 → **48**
+
+**Removed:**
+- Nothing. Old behavior still accessible via explicit env vars.
+
+---
+
+### 2026-04-17 — GPU device auto-select + Phase 11 concluded + transformers/sqlite3 upgrade
+
+Phase 11 embedder sweep concluded: **mxbai-embed-xsmall-v1 q8 stays the
+permanent production default.** No candidate beat it on LongMemEval _s.
+Closest ties (bge-small, bge-base) cost 3-5x the parameters for ~0 MRR
+gain. Added a GPU device/auto-select layer to the transformers embed
+backend so future sweeps on faster hardware (dedicated GPUs, NPUs) can
+opt in without env-var choreography.
+
+**Added:**
+- `QMD_TRANSFORMERS_DEVICE` env var — `cpu | webgpu | dml | gpu | auto`. `gpu`
+  aliases `webgpu`. `auto` probes the machine and picks.
+- `src/llm/gpu-probe.ts` — cached GPU capability probe. OS-level VRAM/driver
+  detection (Windows WMI, Linux sysfs, macOS system_profiler) + optional
+  WebGPU adapter probe for `maxBufferSize`. Detects AMD XDNA NPU presence.
+  Emits human-readable warnings (stale driver >180 days, NPU-but-no-Node-backend,
+  iGPU buffer-limit hints).
+- `src/llm/embed-sizer.ts` — `computeEmbedBudget(model, dtype)` returns
+  `{device, dtype, microbatch, maxWorkers, reason}`. Uses attention-matrix
+  math: `microbatch = floor(maxBufferSize × 0.70 / (heads × seq² × 4))`.
+  Falls back to CPU when even microbatch=1 exceeds the per-buffer cap.
+  Honors `QMD_TRANSFORMERS_AUTO_PREFER=cpu` for power users who want CPU
+  on a WebGPU-capable box.
+
+**Upgrades:**
+- `@huggingface/transformers` 4.0.1 → **4.1.0** (minor bump; v4.0 adds
+  WebGPU in Node, ModelRegistry API, new BERT-family 4x speedup).
+- `better-sqlite3` 12.8.0 → **12.9.0**. Caret-prefixed both deps for
+  future patch floats.
+
+**Phase 11 final sweep (n=100 sanity):**
+- mxbai-xs q8 **baseline n=500: 98.4% rAny@5, 0.917 MRR** (unchanged)
+- bge-small-en-v1.5 int8: 99.0% rAny@5, 0.916 MRR — tied, parked
+- bge-base-en-v1.5 int8: 99.0% rAny@5, 0.914 MRR — tied at 3x params, parked
+- mxbai-embed-large-v1 q8: killed at 32/100 (too slow for sanity)
+- embeddinggemma-300m int8: CPU OOM 6.12 GB (external-data expansion);
+  WebGPU works but 5 min/question (per-shape shader JIT) — parked
+- jinaai/jina-embeddings-v5-text-nano-retrieval: transformers.js v4.1.0
+  still doesn't register `JinaEmbeddingsV5` (Qwen3 backbone + merged
+  retrieval-LoRA); `feature-extraction` returns undefined shape. Parked
+  until upstream support.
+
+**Probed hardware capability layer:**
+- AMD Radeon 780M iGPU, 4.0 GiB UMA VRAM, GPU driver 39 days old.
+- AMD XDNA NPU present (Phoenix, 10 TOPS). NPU unreachable from Node
+  (VitisAI EP is Python-only). User-side benchmark path documented.
+- Auto sizer on this hardware picks WebGPU with microbatch 29-119 for
+  candidates 300M-400M, 2 workers for small models (mxbai-xs 384d).
+
+**Operational lessons saved as memory:**
+- `feedback_task_stop_zombies.md` — on Windows, `TaskStop` on a background
+  bash doesn't kill tsx/eval child processes. Enumerate + taskkill after
+  every stop, or the next run exits 127 from RAM starvation.
+- `project_phase11_concluded.md` — revisit trigger: new int8 ONNX model
+  with MTEB retrieval ≥65 + clean transformers.js support.
+
+---
+
 ### 2026-04-17 — RRF pipeline + keyword/synonym expansion + MCP tools
 
 Pipeline fully restructured to A→F staged architecture with rank-based

@@ -320,7 +320,7 @@ async function embedText(text: string): Promise<number[] | null> {
   const fe = await getFastEmbedBackend();
   if (fe) {
     try {
-      const result = await fe.embed(text);
+      const result = await fe.embed(text, { isQuery: false });
       const emb = result?.embedding || null;
       if (emb) setCachedEmbedding(text, emb);
       return emb;
@@ -393,7 +393,7 @@ async function embedTextBatch(texts: string[]): Promise<(number[] | null)[]> {
   const fe = await getFastEmbedBackend();
   if (fe) {
     try {
-      const embeds = await embedInMicroBatches(missingTexts, (slice) => fe.embedBatch(slice));
+      const embeds = await embedInMicroBatches(missingTexts, (slice) => fe.embedBatch(slice, { isQuery: false }));
       for (let j = 0; j < missingTexts.length; j++) {
         const emb = embeds[j] ?? null;
         out[missingIdx[j]!] = emb;
@@ -434,7 +434,7 @@ async function embedQuery(text: string): Promise<number[] | null> {
   const fe = await getFastEmbedBackend();
   if (fe) {
     try {
-      const result = await fe.embed(text);
+      const result = await fe.embed(text, { isQuery: true });
       const emb = result?.embedding || null;
       if (emb) setCachedEmbedding(text, emb);
       return emb;
@@ -1711,7 +1711,7 @@ export async function memoryRecall(
 export async function memoryReflect(
   question: string,
   memories: Array<{ text: string }>,
-  options: { maxFacts?: number } = {}
+  options: { maxFacts?: number; topK?: number; maxCharsPerMemory?: number } = {}
 ): Promise<string | null> {
   if (memories.length === 0) return null;
 
@@ -1719,7 +1719,16 @@ export async function memoryReflect(
   if (!remote) return null;
 
   const maxFacts = options.maxFacts ?? 5;
-  const context = memories.map((m, i) => `[${i + 1}] ${m.text}`).join("\n");
+  // Defense-in-depth: cap the memories we send to the LLM. Callers often pass
+  // the full top-50 retrieval result; without capping, the prompt explodes
+  // (measured 91k input tokens on LME n=100 before this guard was added).
+  // Overridable via options or QMD_REFLECT_TOP_K / QMD_REFLECT_MAX_CHARS.
+  const topK = options.topK ?? Number(process.env.QMD_REFLECT_TOP_K ?? 10);
+  const maxChars = options.maxCharsPerMemory ?? Number(process.env.QMD_REFLECT_MAX_CHARS ?? 800);
+  const trimmed = memories
+    .slice(0, Math.max(1, topK))
+    .map(m => (m.text.length > maxChars ? m.text.slice(0, maxChars) + "…" : m.text));
+  const context = trimmed.map((t, i) => `[${i + 1}] ${t}`).join("\n");
 
   const prompt = `You are a fact-extraction assistant. Below is a question and a set of candidate memories. Extract at most ${maxFacts} facts from the memories that are directly relevant to answering the question. Output only the facts, one per line, numbered. Do not explain. Do not invent facts not in the memories. If nothing is relevant, output the single line: NONE.
 
@@ -1733,9 +1742,9 @@ Relevant facts:`;
   try {
     const reply = await remote.chatComplete(prompt);
     if (!reply) return null;
-    const trimmed = reply.trim();
-    if (!trimmed || trimmed === "NONE") return null;
-    return trimmed;
+    const replyTrimmed = reply.trim();
+    if (!replyTrimmed || replyTrimmed === "NONE") return null;
+    return replyTrimmed;
   } catch {
     return null;
   }
@@ -1798,8 +1807,15 @@ export async function runReflectionPass(
     return { reflections: 0, skipped: true, reason: `only ${rows.length} candidates (need ${minMemories})` };
   }
 
+  // Defense-in-depth: cap per-memory char length so a handful of very long
+  // session chunks can't balloon the prompt into ≥80K-token territory (the
+  // eval.mts 91K-token incident). Override via QMD_REFLECT_MAX_CHARS.
+  const reflectMaxChars = Number(process.env.QMD_REFLECT_MAX_CHARS ?? 800);
   const memoryBlock = rows
-    .map((m, i) => `[${i + 1}] ${m.text}`)
+    .map((m, i) => {
+      const t = m.text.length > reflectMaxChars ? m.text.slice(0, reflectMaxChars) + "…" : m.text;
+      return `[${i + 1}] ${t}`;
+    })
     .join("\n");
 
   const prompt = `You are summarising recent agent memories for long-term recall. Below are the last ${rows.length} memories from the session. Produce at most ${maxReflections} high-level reflections that capture recurring themes, decisions, preferences, or open questions across them. Each reflection must be:
