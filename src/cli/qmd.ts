@@ -3,6 +3,7 @@ loadQmdEnv();
 
 import { openDatabase } from "../db.js";
 import type { Database } from "../db.js";
+import { formatETA, formatTimeAgo, formatMs, formatBytes, formatLsTime, renderProgressBar } from "./format.js";
 import fastGlob from "fast-glob";
 import { execSync, spawn as nodeSpawn } from "child_process";
 import { fileURLToPath } from "url";
@@ -221,13 +222,6 @@ const progress = {
 };
 
 // Format seconds into human-readable ETA
-function formatETA(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
-  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
-}
-
-
 // Check index health and print warnings/tips
 function checkIndexHealth(db: Database): void {
   const { needsEmbedding, totalDocs, daysStale } = getIndexHealth(db);
@@ -248,30 +242,7 @@ function checkIndexHealth(db: Database): void {
   }
 }
 
-// Compute unique display path for a document
-// Always include at least parent folder + filename, add more parent dirs until unique
-function formatTimeAgo(date: Date): string {
-  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-
-function formatMs(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
+// formatTimeAgo / formatMs / formatBytes moved to cli/format.ts
 
 async function showStatus(): Promise<void> {
   const dbPath = getDbPath();
@@ -1306,24 +1277,7 @@ function listFiles(pathArg?: string): void {
 }
 
 // Format date/time like ls -l
-function formatLsTime(date: Date): string {
-  const now = new Date();
-  const sixMonthsAgo = new Date(now.getTime() - 6 * 30 * 24 * 60 * 60 * 1000);
-
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const month = months[date.getMonth()];
-  const day = date.getDate().toString().padStart(2, ' ');
-
-  // If file is older than 6 months, show year instead of time
-  if (date < sixMonthsAgo) {
-    const year = date.getFullYear();
-    return `${month} ${day}  ${year}`;
-  } else {
-    const hours = date.getHours().toString().padStart(2, '0');
-    const minutes = date.getMinutes().toString().padStart(2, '0');
-    return `${month} ${day} ${hours}:${minutes}`;
-  }
-}
+// formatLsTime moved to cli/format.ts
 
 // Collection management commands
 function collectionList(): void {
@@ -1594,12 +1548,7 @@ async function indexFiles(pwd?: string, globPattern: string = DEFAULT_GLOB, coll
   closeDb();
 }
 
-function renderProgressBar(percent: number, width: number = 30): string {
-  const filled = Math.round((percent / 100) * width);
-  const empty = width - filled;
-  const bar = "█".repeat(filled) + "░".repeat(empty);
-  return bar;
-}
+// renderProgressBar moved to cli/format.ts
 
 function parseEmbedBatchOption(name: string, value: unknown): number | undefined {
   if (value === undefined) return undefined;

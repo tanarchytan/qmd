@@ -29,7 +29,7 @@ loadQmdEnv();
 
 const { openDatabase } = await import(toUrl(join(QMD_DIR, "src/db.ts")));
 const { initializeDatabase } = await import(toUrl(join(QMD_DIR, "src/store/db-init.ts")));
-const { memoryStore, memoryStoreBatch, memoryRecall, extractAndStore, extractReflections, consolidateEntityFacts, runDecayPass, memoryReflect, turnsToText } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
+const { memoryStore, memoryStoreBatch, memoryRecall, extractAndStore, consolidateEntityFacts, memoryReflect, turnsToText } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
 
 type Database = ReturnType<typeof openDatabase>;
 
@@ -680,11 +680,16 @@ async function main() {
   let useLLM = true;
   let shardIdx = 0;            // cat E: 0-indexed shard
   let shardTotal = 1;          // cat E: total shards
+  let idsFilePath: string | null = null;   // --ids-file: subset dataset by question_id
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--ds" && args[i + 1]) dsName = args[i + 1]!;
     if (args[i] === "--limit" && args[i + 1]) limit = parseInt(args[i + 1]!, 10);
     if (args[i] === "--type" && args[i + 1]) questionTypeFilter = args[i + 1]!;
+    // --ids-file <path>: subset the dataset to only questions whose question_id
+    // appears in the given JSON file (a flat array of strings). Useful for
+    // re-running ONLY the previously-failing questions after a config tweak.
+    if (args[i] === "--ids-file" && args[i + 1]) idsFilePath = args[i + 1]!;
     if (args[i] === "--llm" && args[i + 1]) activeLLM = args[i + 1] as LLMProvider;
     if (args[i] === "--judge" && args[i + 1]) judgeProvider = args[i + 1] as LLMProvider;
     if (args[i] === "--judge-model" && args[i + 1]) judgeModelOverride = args[i + 1]!;
@@ -760,6 +765,13 @@ async function main() {
 
   let instances = data;
   if (questionTypeFilter) instances = instances.filter(q => q.question_type === questionTypeFilter);
+  if (idsFilePath) {
+    const ids = JSON.parse(readFileSync(idsFilePath, "utf8")) as string[];
+    const idSet = new Set(ids);
+    const before = instances.length;
+    instances = instances.filter(q => idSet.has(q.question_id));
+    console.log(`  Filtered to ${instances.length}/${before} questions from ${idsFilePath}`);
+  }
   if (limit > 0) instances = instances.slice(0, limit);
   // cat E: shard the question list — each shard processes every Nth question starting at shardIdx
   if (shardTotal > 1) {
