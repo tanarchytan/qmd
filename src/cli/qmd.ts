@@ -5,6 +5,7 @@ import { openDatabase } from "../db.js";
 import type { Database } from "../db.js";
 import { formatETA, formatTimeAgo, formatMs, formatBytes, formatLsTime, renderProgressBar } from "./format.js";
 import { getStore, getDb, resyncConfig, closeDb, getDbPath, setIndexName, ensureVecTable } from "./db-state.js";
+import { c, cursor, progress, useColor, isTTY } from "./terminal.js";
 import fastGlob from "fast-glob";
 import { execSync, spawn as nodeSpawn } from "child_process";
 import { fileURLToPath } from "url";
@@ -114,45 +115,7 @@ enableProductionMode();
 // Store/DB lifecycle (getStore, getDb, resyncConfig, closeDb, getDbPath,
 // setIndexName, ensureVecTable) moved to cli/db-state.ts.
 
-// Terminal colors (respects NO_COLOR env)
-const useColor = !process.env.NO_COLOR && process.stdout.isTTY;
-const c = {
-  reset: useColor ? "\x1b[0m" : "",
-  dim: useColor ? "\x1b[2m" : "",
-  bold: useColor ? "\x1b[1m" : "",
-  cyan: useColor ? "\x1b[36m" : "",
-  yellow: useColor ? "\x1b[33m" : "",
-  green: useColor ? "\x1b[32m" : "",
-  magenta: useColor ? "\x1b[35m" : "",
-  blue: useColor ? "\x1b[34m" : "",
-};
-
-// Terminal cursor control
-const cursor = {
-  hide() { process.stderr.write('\x1b[?25l'); },
-  show() { process.stderr.write('\x1b[?25h'); },
-};
-
-// Ensure cursor is restored on exit
-process.on('SIGINT', () => { cursor.show(); process.exit(130); });
-process.on('SIGTERM', () => { cursor.show(); process.exit(143); });
-
-// Terminal progress bar using OSC 9;4 escape sequence (TTY only)
-const isTTY = process.stderr.isTTY;
-const progress = {
-  set(percent: number) {
-    if (isTTY) process.stderr.write(`\x1b]9;4;1;${Math.round(percent)}\x07`);
-  },
-  clear() {
-    if (isTTY) process.stderr.write(`\x1b]9;4;0\x07`);
-  },
-  indeterminate() {
-    if (isTTY) process.stderr.write(`\x1b]9;4;3\x07`);
-  },
-  error() {
-    if (isTTY) process.stderr.write(`\x1b]9;4;2\x07`);
-  },
-};
+// c (color codes), cursor, progress moved to cli/terminal.ts.
 
 // Format seconds into human-readable ETA
 // Check index health and print warnings/tips
