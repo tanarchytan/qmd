@@ -20,8 +20,9 @@ import {
   renameCollection as yamlRenameCollectionFn,
 } from "../collections.js";
 import { getDb, closeDb } from "./db-state.js";
-import { c } from "./terminal.js";
+import { c, warn, success, info } from "./terminal.js";
 import { formatTimeAgo } from "./format.js";
+import { requireCollectionOrExit } from "./command-helpers.js";
 
 export function collectionList(): void {
   const db = getDb();
@@ -41,15 +42,15 @@ export function collectionList(): void {
 
     const yamlColl = getCollectionFromYaml(coll.name);
     const excluded = yamlColl?.includeByDefault === false;
-    const excludeTag = excluded ? ` ${c.yellow}[excluded]${c.reset}` : "";
+    const excludeTag = excluded ? ` ${warn("[excluded]")}` : "";
 
-    console.log(`${c.cyan}${coll.name}${c.reset} ${c.dim}(qmd://${coll.name}/)${c.reset}${excludeTag}`);
-    console.log(`  ${c.dim}Pattern:${c.reset}  ${coll.glob_pattern}`);
+    console.log(`${c.cyan}${coll.name}${c.reset} ${info(`(qmd://${coll.name}/)`)}${excludeTag}`);
+    console.log(`  ${info("Pattern:")}  ${coll.glob_pattern}`);
     if (yamlColl?.ignore?.length) {
-      console.log(`  ${c.dim}Ignore:${c.reset}   ${yamlColl.ignore.join(", ")}`);
+      console.log(`  ${info("Ignore:")}   ${yamlColl.ignore.join(", ")}`);
     }
-    console.log(`  ${c.dim}Files:${c.reset}    ${coll.active_count}`);
-    console.log(`  ${c.dim}Updated:${c.reset}  ${timeAgo}`);
+    console.log(`  ${info("Files:")}    ${coll.active_count}`);
+    console.log(`  ${info("Updated:")}  ${timeAgo}`);
     console.log();
   }
 
@@ -57,19 +58,14 @@ export function collectionList(): void {
 }
 
 export function collectionRemove(name: string): void {
-  const coll = getCollectionFromYaml(name);
-  if (!coll) {
-    console.error(`${c.yellow}Collection not found: ${name}${c.reset}`);
-    console.error(`Run 'qmd collection list' to see available collections.`);
-    process.exit(1);
-  }
+  requireCollectionOrExit(name);
 
   const db = getDb();
   const result = removeCollection(db, name);
   yamlRemoveCollectionFn(name);
   closeDb();
 
-  console.log(`${c.green}✓${c.reset} Removed collection '${name}'`);
+  console.log(success(`Removed collection '${name}'`));
   console.log(`  Deleted ${result.deletedDocs} documents`);
   if (result.cleanedHashes > 0) {
     console.log(`  Cleaned up ${result.cleanedHashes} orphaned content hashes`);
@@ -77,16 +73,11 @@ export function collectionRemove(name: string): void {
 }
 
 export function collectionRename(oldName: string, newName: string): void {
-  const coll = getCollectionFromYaml(oldName);
-  if (!coll) {
-    console.error(`${c.yellow}Collection not found: ${oldName}${c.reset}`);
-    console.error(`Run 'qmd collection list' to see available collections.`);
-    process.exit(1);
-  }
+  requireCollectionOrExit(oldName);
 
   const existing = getCollectionFromYaml(newName);
   if (existing) {
-    console.error(`${c.yellow}Collection name already exists: ${newName}${c.reset}`);
+    console.error(warn(`Collection name already exists: ${newName}`));
     console.error(`Choose a different name or remove the existing collection first.`);
     process.exit(1);
   }
@@ -96,6 +87,6 @@ export function collectionRename(oldName: string, newName: string): void {
   yamlRenameCollectionFn(oldName, newName);
   closeDb();
 
-  console.log(`${c.green}✓${c.reset} Renamed collection '${oldName}' to '${newName}'`);
+  console.log(success(`Renamed collection '${oldName}' to '${newName}'`));
   console.log(`  Virtual paths updated: ${c.cyan}qmd://${oldName}/${c.reset} → ${c.cyan}qmd://${newName}/${c.reset}`);
 }

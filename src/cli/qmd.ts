@@ -5,7 +5,7 @@ import { openDatabase } from "../db.js";
 import type { Database } from "../db.js";
 import { formatETA, formatTimeAgo, formatMs, formatBytes, formatLsTime, renderProgressBar } from "./format.js";
 import { getStore, getDb, resyncConfig, closeDb, getDbPath, setIndexName, ensureVecTable } from "./db-state.js";
-import { c, cursor, progress, useColor, isTTY } from "./terminal.js";
+import { c, cursor, progress, useColor, isTTY, warn, success, info } from "./terminal.js";
 import { collectionList, collectionRemove, collectionRename } from "./collection-commands.js";
 import { contextAdd, contextList, contextRemove, detectCollectionFromPath } from "./context-commands.js";
 import { showSkill, installSkill } from "./skill-commands.js";
@@ -130,7 +130,7 @@ function checkIndexHealth(db: Database): void {
   if (needsEmbedding > 0) {
     const pct = Math.round((needsEmbedding / totalDocs) * 100);
     if (pct >= 10) {
-      process.stderr.write(`${c.yellow}Warning: ${needsEmbedding} documents (${pct}%) need embeddings. Run 'qmd embed' for better results.${c.reset}\n`);
+      process.stderr.write(warn(`Warning: ${needsEmbedding} documents (${pct}%) need embeddings. Run 'qmd embed' for better results.`) + "\n");
     } else {
       process.stderr.write(`${c.dim}Tip: ${needsEmbedding} documents need embeddings. Run 'qmd embed' to index them.${c.reset}\n`);
     }
@@ -235,7 +235,7 @@ async function showStatus(): Promise<void> {
       console.log(`  Languages: ${ok.join(", ")}`);
       if (fail.length > 0) {
         for (const f of fail) {
-          console.log(`  ${c.yellow}Unavailable: ${f.language} (${f.error})${c.reset}`);
+          console.log(`  ${warn(`Unavailable: ${f.language} (${f.error})`)}`);
         }
       }
     } else {
@@ -401,11 +401,11 @@ async function updateCollections(): Promise<void> {
         }
 
         if (exitCode !== 0) {
-          console.log(`${c.yellow}✗ Update command failed with exit code ${exitCode}${c.reset}`);
+          console.log(warn(`✗ Update command failed with exit code ${exitCode}`));
           process.exit(exitCode);
         }
       } catch (err) {
-        console.log(`${c.yellow}✗ Update command failed: ${err}${c.reset}`);
+        console.log(warn(`✗ Update command failed: ${err}`));
         process.exit(1);
       }
     }
@@ -1004,7 +1004,7 @@ async function collectionAdd(pwd: string, globPattern: string, name?: string): P
 
   // Check if path exists
   if (!existsSync(pwd)) {
-    console.error(`${c.yellow}Error: path does not exist: ${pwd}${c.reset}`);
+    console.error(warn(`Error: path does not exist: ${pwd}`));
     console.error(`  Tip: use an absolute path or check your working directory.`);
     process.exit(1);
   }
@@ -1012,7 +1012,7 @@ async function collectionAdd(pwd: string, globPattern: string, name?: string): P
   // Check if collection with this name already exists in YAML
   const existing = getCollectionFromYaml(collName);
   if (existing) {
-    console.error(`${c.yellow}Collection '${collName}' already exists.${c.reset}`);
+    console.error(warn(`Collection '${collName}' already exists.`));
     console.error(`Use a different name with --name <name>`);
     process.exit(1);
   }
@@ -1022,7 +1022,7 @@ async function collectionAdd(pwd: string, globPattern: string, name?: string): P
   const existingPwdGlob = allCollections.find(c => c.path === pwd && c.pattern === globPattern);
 
   if (existingPwdGlob) {
-    console.error(`${c.yellow}A collection already exists for this path and pattern:${c.reset}`);
+    console.error(warn("A collection already exists for this path and pattern:"));
     console.error(`  Name: ${existingPwdGlob.name} (qmd://${existingPwdGlob.name}/)`);
     console.error(`  Pattern: ${globPattern}`);
     console.error(`\nUse 'qmd update' to re-index it, or remove it first with 'qmd collection remove ${existingPwdGlob.name}'`);
@@ -1038,7 +1038,7 @@ async function collectionAdd(pwd: string, globPattern: string, name?: string): P
   console.log(`Creating collection '${collName}'...`);
   const newColl = getCollectionFromYaml(collName);
   await indexFiles(pwd, globPattern, collName, false, newColl?.ignore);
-  console.log(`${c.green}✓${c.reset} Collection '${collName}' created successfully`);
+  console.log(success(`Collection '${collName}' created successfully`));
 }
 
 // collectionRemove and collectionRename moved to cli/collection-commands.ts
@@ -1208,7 +1208,7 @@ async function vectorIndex(
   const db = storeInstance.db;
 
   if (force) {
-    console.log(`${c.yellow}Force re-indexing: clearing all vectors...${c.reset}`);
+    console.log(warn("Force re-indexing: clearing all vectors..."));
   }
 
   // Check if there's work to do before starting
@@ -1272,7 +1272,7 @@ async function vectorIndex(
     console.log(`\r${c.green}${renderProgressBar(100)}${c.reset} ${c.bold}100%${c.reset}                                    `);
     console.log(`\n${c.green}✓ Done!${c.reset} Embedded ${c.bold}${result.chunksEmbedded}${c.reset} chunks from ${c.bold}${result.docsProcessed}${c.reset} documents in ${c.bold}${formatETA(totalTimeSec)}${c.reset}`);
     if (result.errors > 0) {
-      console.log(`${c.yellow}⚠ ${result.errors} chunks failed${c.reset}`);
+      console.log(warn(`⚠ ${result.errors} chunks failed`));
     }
   }
 
@@ -2546,12 +2546,12 @@ if (isMain) {
 
       // 1. Clear llm_cache
       const cacheCount = deleteLLMCache(db);
-      console.log(`${c.green}✓${c.reset} Cleared ${cacheCount} cached API responses`);
+      console.log(success(`Cleared ${cacheCount} cached API responses`));
 
       // 2. Remove orphaned vectors
       const orphanedVecs = cleanupOrphanedVectors(db);
       if (orphanedVecs > 0) {
-        console.log(`${c.green}✓${c.reset} Removed ${orphanedVecs} orphaned embedding chunks`);
+        console.log(success(`Removed ${orphanedVecs} orphaned embedding chunks`));
       } else {
         console.log(`${c.dim}No orphaned embeddings to remove${c.reset}`);
       }
@@ -2559,12 +2559,12 @@ if (isMain) {
       // 3. Remove inactive documents
       const inactiveDocs = deleteInactiveDocuments(db);
       if (inactiveDocs > 0) {
-        console.log(`${c.green}✓${c.reset} Removed ${inactiveDocs} inactive document records`);
+        console.log(success(`Removed ${inactiveDocs} inactive document records`));
       }
 
       // 4. Vacuum to reclaim space
       vacuumDatabase(db);
-      console.log(`${c.green}✓${c.reset} Database vacuumed`);
+      console.log(success("Database vacuumed"));
 
       closeDb();
       break;
@@ -2577,7 +2577,7 @@ if (isMain) {
       vacuumDatabase(db);
       const sizeAfter = statSync(dbPath).size;
       const freed = sizeBefore - sizeAfter;
-      console.log(`${c.green}✓${c.reset} Vacuumed: ${formatBytes(sizeBefore)} → ${formatBytes(sizeAfter)}${freed > 0 ? ` (${formatBytes(freed)} freed)` : ''}`);
+      console.log(success(`Vacuumed: ${formatBytes(sizeBefore)} → ${formatBytes(sizeAfter)}${freed > 0 ? ` (${formatBytes(freed)} freed)` : ''}`));
       closeDb();
       break;
     }

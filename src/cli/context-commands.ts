@@ -13,10 +13,8 @@
  * implementations need row-level data.
  */
 
-import { getRealPath, isVirtualPath, parseVirtualPath } from "../store.js";
-import { getPwd, homedir, resolve } from "../store.js";
+import { getRealPath, isVirtualPath } from "../store.js";
 import {
-  getCollection as getCollectionFromYaml,
   listCollections as yamlListCollections,
   addContext as yamlAddContext,
   removeContext as yamlRemoveContext,
@@ -25,7 +23,8 @@ import {
 } from "../collections.js";
 import type { Database } from "../db.js";
 import { getDb, getStore, closeDb, resyncConfig } from "./db-state.js";
-import { c } from "./terminal.js";
+import { c, warn, success, info } from "./terminal.js";
+import { resolveFsPath, requireValidVirtualPath } from "./command-helpers.js";
 
 /** Walk the YAML-configured collections and find the one whose root is the
  *  longest prefix of the given filesystem path. Returns the collection name
@@ -64,48 +63,32 @@ export async function contextAdd(pathArg: string | undefined, contextText: strin
   if (pathArg === "/") {
     setGlobalContext(contextText);
     resyncConfig();
-    console.log(`${c.green}✓${c.reset} Set global context`);
-    console.log(`${c.dim}Context: ${contextText}${c.reset}`);
+    console.log(success("Set global context"));
+    console.log(info(`Context: ${contextText}`));
     closeDb();
     return;
   }
 
-  let fsPath = pathArg || ".";
-  if (fsPath === "." || fsPath === "./") {
-    fsPath = getPwd();
-  } else if (fsPath.startsWith("~/")) {
-    fsPath = homedir() + fsPath.slice(1);
-  } else if (!fsPath.startsWith("/") && !fsPath.startsWith("qmd://")) {
-    fsPath = resolve(getPwd(), fsPath);
-  }
+  const fsPath = resolveFsPath(pathArg);
 
   if (isVirtualPath(fsPath)) {
-    const parsed = parseVirtualPath(fsPath);
-    if (!parsed) {
-      console.error(`${c.yellow}Invalid virtual path: ${fsPath}${c.reset}`);
-      process.exit(1);
-    }
-    const coll = getCollectionFromYaml(parsed.collectionName);
-    if (!coll) {
-      console.error(`${c.yellow}Collection not found: ${parsed.collectionName}${c.reset}`);
-      process.exit(1);
-    }
+    const parsed = requireValidVirtualPath(fsPath);
     yamlAddContext(parsed.collectionName, parsed.path, contextText);
     resyncConfig();
 
     const displayPath = parsed.path
       ? `qmd://${parsed.collectionName}/${parsed.path}`
       : `qmd://${parsed.collectionName}/ (collection root)`;
-    console.log(`${c.green}✓${c.reset} Added context for: ${displayPath}`);
-    console.log(`${c.dim}Context: ${contextText}${c.reset}`);
+    console.log(success(`Added context for: ${displayPath}`));
+    console.log(info(`Context: ${contextText}`));
     closeDb();
     return;
   }
 
   const detected = detectCollectionFromPath(db, fsPath);
   if (!detected) {
-    console.error(`${c.yellow}Path is not in any indexed collection: ${fsPath}${c.reset}`);
-    console.error(`${c.dim}Run 'qmd status' to see indexed collections${c.reset}`);
+    console.error(warn(`Path is not in any indexed collection: ${fsPath}`));
+    console.error(info(`Run 'qmd status' to see indexed collections`));
     process.exit(1);
   }
 
@@ -115,8 +98,8 @@ export async function contextAdd(pathArg: string | undefined, contextText: strin
   const displayPath = detected.relativePath
     ? `qmd://${detected.collectionName}/${detected.relativePath}`
     : `qmd://${detected.collectionName}/`;
-  console.log(`${c.green}✓${c.reset} Added context for: ${displayPath}`);
-  console.log(`${c.dim}Context: ${contextText}${c.reset}`);
+  console.log(success(`Added context for: ${displayPath}`));
+  console.log(info(`Context: ${contextText}`));
   closeDb();
 }
 
@@ -125,7 +108,7 @@ export function contextList(): void {
   const allContexts = listAllContexts();
 
   if (allContexts.length === 0) {
-    console.log(`${c.dim}No contexts configured. Use 'qmd context add' to add one.${c.reset}`);
+    console.log(info("No contexts configured. Use 'qmd context add' to add one."));
     closeDb();
     return;
   }
@@ -140,7 +123,7 @@ export function contextList(): void {
     }
     const displayPath = ctx.path ? `  ${ctx.path}` : "  / (root)";
     console.log(`${displayPath}`);
-    console.log(`    ${c.dim}${ctx.context}${c.reset}`);
+    console.log(`    ${info(ctx.context)}`);
   }
 
   closeDb();
@@ -153,53 +136,37 @@ export function contextRemove(pathArg: string): void {
     void getStore();
     resyncConfig();
     closeDb();
-    console.log(`${c.green}✓${c.reset} Removed global context`);
+    console.log(success("Removed global context"));
     return;
   }
 
   if (isVirtualPath(pathArg)) {
-    const parsed = parseVirtualPath(pathArg);
-    if (!parsed) {
-      console.error(`${c.yellow}Invalid virtual path: ${pathArg}${c.reset}`);
+    const parsed = requireValidVirtualPath(pathArg);
+    const removed = yamlRemoveContext(parsed.collectionName, parsed.path);
+    if (!removed) {
+      console.error(warn(`No context found for: ${pathArg}`));
       process.exit(1);
     }
-    const coll = getCollectionFromYaml(parsed.collectionName);
-    if (!coll) {
-      console.error(`${c.yellow}Collection not found: ${parsed.collectionName}${c.reset}`);
-      process.exit(1);
-    }
-    const success = yamlRemoveContext(coll.name, parsed.path);
-    if (!success) {
-      console.error(`${c.yellow}No context found for: ${pathArg}${c.reset}`);
-      process.exit(1);
-    }
-    console.log(`${c.green}✓${c.reset} Removed context for: ${pathArg}`);
+    console.log(success(`Removed context for: ${pathArg}`));
     return;
   }
 
-  let fsPath = pathArg;
-  if (fsPath === "." || fsPath === "./") {
-    fsPath = getPwd();
-  } else if (fsPath.startsWith("~/")) {
-    fsPath = homedir() + fsPath.slice(1);
-  } else if (!fsPath.startsWith("/")) {
-    fsPath = resolve(getPwd(), fsPath);
-  }
+  const fsPath = resolveFsPath(pathArg);
 
   const db = getDb();
   const detected = detectCollectionFromPath(db, fsPath);
   closeDb();
 
   if (!detected) {
-    console.error(`${c.yellow}Path is not in any indexed collection: ${fsPath}${c.reset}`);
+    console.error(warn(`Path is not in any indexed collection: ${fsPath}`));
     process.exit(1);
   }
 
-  const success = yamlRemoveContext(detected.collectionName, detected.relativePath);
-  if (!success) {
-    console.error(`${c.yellow}No context found for: qmd://${detected.collectionName}/${detected.relativePath}${c.reset}`);
+  const removed = yamlRemoveContext(detected.collectionName, detected.relativePath);
+  if (!removed) {
+    console.error(warn(`No context found for: qmd://${detected.collectionName}/${detected.relativePath}`));
     process.exit(1);
   }
 
-  console.log(`${c.green}✓${c.reset} Removed context for: qmd://${detected.collectionName}/${detected.relativePath}`);
+  console.log(success(`Removed context for: qmd://${detected.collectionName}/${detected.relativePath}`));
 }

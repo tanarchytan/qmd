@@ -50,3 +50,23 @@ export const progress = {
     if (isTTY) process.stderr.write(`\x1b]9;4;2\x07`);
   },
 };
+
+// =============================================================================
+// Uniform message formatters — use these to keep color conventions consistent
+// across the CLI. Each returns a string; callers pick stdout vs stderr vs log.
+// =============================================================================
+
+/** Yellow-tagged warning line. Intended for recoverable user errors and tips. */
+export function warn(message: string): string {
+  return `${c.yellow}${message}${c.reset}`;
+}
+
+/** Green ✓ prefixed success line. Use after completing a user-visible action. */
+export function success(message: string): string {
+  return `${c.green}✓${c.reset} ${message}`;
+}
+
+/** Dim-grey info / hint line. Use for secondary context that shouldn't grab focus. */
+export function info(message: string): string {
+  return `${c.dim}${message}${c.reset}`;
+}
