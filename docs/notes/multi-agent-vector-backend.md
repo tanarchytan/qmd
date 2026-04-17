@@ -496,3 +496,271 @@ each independently validated against LME.
 - [Mem0 DeepWiki: Vector Store Providers](https://deepwiki.com/mem0ai/mem0/5.2-vector-store-providers)
 - [Mem0 Issue #4290 (path bugs)](https://github.com/mem0ai/mem0/issues/4290)
 - [Mem0 Core Architecture](https://deepwiki.com/mem0ai/mem0/2-core-architecture)
+
+---
+
+## Deep dive: memory-lancedb-pro (2026-04-17)
+
+The gold-standard LanceDB-based OpenClaw memory plugin. Closer to qmd's
+use case than Mem0 — single-agent memory layer, zero-setup, hybrid
+search native, lifecycle decay built in.
+
+### LanceDB deployment model
+
+- **Single `memories` table** in one LanceDB database (file-based)
+- **No vector index required** — LanceDB's Arrow columnar format does
+  fast brute-force at millions of vectors
+- Everything embedded: `@lancedb/lancedb ^0.26.2` shipped prebuilt via npm
+- No server process, no Docker, no Python runtime
+
+### Schema
+
+```
+id            UUID primary key
+text          string (LanceDB native FTS-indexed)
+vector        embedding array (Jina / OpenAI / any provider)
+category      one of: preference | fact | decision | entity | reflection | other
+scope         isolation key: global | agent:<id> | custom:<n> | project:<id> | user:<id>
+importance    float 0-1
+timestamp     ms since epoch
+metadata      JSON blob: { L0, L1, L2 layers, tier, access_count, confidence }
+```
+
+**Same 6 categories as qmd** — they took the taxonomy we share from
+mem0/MemPalace lineage. Metadata already carries L0/L1/L2 layers —
+their L# blend is apparently shipped in production.
+
+### Retrieval pipeline (their version of our A→F)
+
+```
+Query
+ → embedQuery() → vector search (LanceDB native)
+ → FTS search (LanceDB native, no separate extension)
+ → Hybrid fusion (vec base + BM25 boost, not standard RRF)
+ → Cross-encoder rerank (optional, Jina/SiliconFlow/Voyage/Pinecone)
+ → Lifecycle decay boost (recency + frequency + intrinsic)
+ → Length normalization
+ → minScore filter
+```
+
+### Fusion formula — different from qmd
+
+Their default:
+- `vectorWeight = 0.7`, `bm25Weight = 0.3` — **vec-heavy**
+- **NOT standard RRF.** Their docs: "vector score as base, BM25 hits
+  receive a weighted boost (not standard RRF — tuned for real-world
+  recall quality)"
+
+qmd default (RRF):
+- `MEMORY_RRF_W_BM25 = 0.9`, `MEMORY_RRF_W_VEC = 0.1` — **BM25-heavy**
+- Standard weighted RRF over 1-indexed ranks
+
+**Why the flip?** Their embedder is OpenAI `text-embedding-3-small` or
+Jina — both much stronger than our quantized mxbai-xs q8. With a good
+embedder, vec carries. With a quantized 384d model, vec is noise and
+BM25 has to carry. If we swap to Jina or OpenAI embeds, we'd probably
+see the same inversion.
+
+### Rerank formula — almost identical to our early sweep
+
+Their default:
+- `60% cross-encoder + 40% original fused score`
+- `candidatePoolSize = 20`
+- `minScore` threshold for early cutoff
+- Graceful fallback to cosine on API failure
+
+qmd default (post-2026-04-17 normalized):
+- `0.3 rerank + 0.7 original fused` — **inverse direction** after normalization
+- `RERANK_CANDIDATE_LIMIT = 40`
+
+**Why the flip?** Same reason: their fused score is vec-rich, ours is
+BM25-rich. More cross-encoder weight helps when the first stage is
+weak at semantic matching.
+
+### Headline latency/accuracy (from LanceDB blog)
+
+Their benchmark is **LLM-judge accuracy on OpenClaw tool-use tasks**,
+NOT LongMemEval. NOT directly comparable to our 98.4% rAny@5.
+
+| Backend | Accuracy | Wall |
+|---|---|---|
+| memory-core (SQLite + sqlite-vec, two tool calls) | 52% | 8.4s |
+| memory-lancedb (LanceDB, no rerank, one tool call) | 76% | 4.8s |
+| memory-lancedb-pro (LanceDB + Jina rerank) | 80% | 14.3s |
+
+**Key insight:** the jump from 52 → 76% came from **simplifying the
+agent interface** (two tool calls → one) more than from switching
+vector backends. Their memory-core ran on the same sqlite-vec we do.
+The tool-call architecture drove most of the accuracy delta.
+
+Implication: qmd already does single-call `memory_search`. We've
+captured that architectural win. Swapping to LanceDB wouldn't give us
+the 24pp the blog cites — that was about the tool UX, not the backend.
+
+### Hooks (OpenClaw integration)
+
+| Hook | Event | Priority | Purpose |
+|---|---|---|---|
+| Auto-recall | `before_prompt_build` | 10 | Inject memories into context |
+| Reflection invariants | `before_prompt_build` | 12 | Enforce memory constraints |
+| Auto-capture | `agent_end` | — | Extract + store new memories |
+| Session memory | `command:new` | — | Summarize prior session |
+| Post-tool | `after_tool_call` | — | Update memory access counts |
+
+qmd's OpenClaw plugin registers the same 5 hooks. Parity here.
+
+### Install flow (`setup-memory.sh` workflow)
+
+1. **Detect location** — `extensions/` vs `plugins/` (OpenClaw CLI variant)
+2. **Config selection** — provider presets: Jina, DashScope, SiliconFlow, OpenAI, Ollama
+3. **Write config to `openclaw.json`** — env var substitution (`${OPENAI_API_KEY}`)
+4. **Install plugin** — `openclaw plugins install memory-lancedb-pro@beta`
+5. **Install peer dep** — `npm install apache-arrow@18.1.0` (!!!)
+6. **Enable** — `openclaw config set plugins.slots.memory memory-lancedb-pro`
+7. **Validate** — `openclaw config validate && openclaw plugins doctor`
+8. **Restart gateway** — `openclaw gateway restart`
+
+**Takeaway:** not actually a one-liner. The peer dep (`apache-arrow`)
+is a gotcha — LanceDB doesn't bundle its Arrow transitively so users
+have to install it manually. qmd's current install (`npm install
+@tanarchy/qmd`) really is a one-liner.
+
+### Lifecycle (decay + tier) — they match qmd
+
+Same config surface we already have:
+- `recencyHalfLifeDays` — Weibull decay parameter
+- `frequencyWeight` + `intrinsicWeight` — composite score blend
+- `betaCore`, `betaWorking`, `betaPeripheral` — per-tier decay rates
+- `coreAccessThreshold`, `peripheralAgeDays` — tier promotion gates
+
+qmd's `src/memory/decay.ts` has the same formulation. Parity.
+
+### Admission control / rate limiting — **not shipped**
+
+The plugin description mentions "admission control" but the actual
+config has only:
+- `autoRecallTimeoutMs` (default 5s) — timeout, not admission
+- `extractMinMessages: 2` — minimum messages before extraction
+- `extractMaxChars: 8000` — max chars per extraction
+
+No true rate limiting, quota enforcement, or circuit breakers. The
+"admission control" wording is aspirational / marketing.
+
+### Concurrency model — **scope-based, no locks**
+
+- Each agent gets `agent:<id>` + shared `global` scope
+- `scopes.agentAccess` config defines which scopes each agent can read
+- **No mutex, no locking** — relies on LanceDB's concurrent read
+  safety (native Rust) and timestamp-based writes
+
+This is the multi-agent advantage over sqlite-vec: LanceDB allows
+concurrent writers natively. SQLite WAL mode + single writer limits
+qmd today. If a real multi-agent workload hits us, this is the
+concrete case where LanceDB pays off.
+
+### Complete config surface (~30 keys)
+
+```yaml
+embedding:
+  apiKey, model, baseURL, dimensions, taskQuery, taskPassage
+retrieval:
+  mode, vectorWeight, bm25Weight, minScore
+  rerank, rerankProvider, rerankModel, candidatePoolSize
+  recencyHalfLifeDays, reinforcementFactor
+autoCapture, autoRecall, autoRecallTimeoutMs, autoRecallExcludeAgents
+smartExtraction, llm.*, extractMinMessages, extractMaxChars
+scopes:
+  default, definitions, agentAccess
+decay:
+  recencyHalfLifeDays, frequencyWeight, intrinsicWeight
+  betaCore, betaWorking, betaPeripheral
+tier:
+  coreAccessThreshold, peripheralAgeDays
+sessionMemory:
+  enabled, messageCount
+enableManagementTools
+```
+
+qmd's equivalents are mostly in `src/store/constants.ts` (hardcoded +
+validated) and `QMD_*` env vars. Similar surface area, different
+presentation. Their YAML config is more discoverable; our hardcoded
+constants are safer against accidental misconfiguration.
+
+### Comparison matrix — memory-lancedb-pro vs qmd (current)
+
+| Feature | memory-lancedb-pro | qmd (2026-04-17) |
+|---|---|---|
+| Storage | LanceDB (single table) | SQLite + sqlite-vec + FTS5 |
+| Vec backend | LanceDB columnar brute-force | sqlite-vec brute-force (partitioned by scope) |
+| FTS | LanceDB native | SQLite FTS5 |
+| Hybrid fusion | Custom (vec base + BM25 boost, 0.7/0.3) | Proper weighted RRF (0.9/0.1) |
+| Synonym expansion | No | Yes (curated dict, default on) |
+| Keyword expansion | No | Yes (2-word fanout, default on) |
+| Cross-encoder rerank | 40% orig + 60% rerank, opt-in | 70% orig + 30% rerank (normalized), opt-in |
+| Categories | 6 (same as qmd) | 6 (same) |
+| Decay model | Weibull, 3-tier | Weibull, 3-tier (same formulation) |
+| Scope isolation | Filter column (`scope`) | Partition key + filter |
+| Multi-agent concurrent writes | Yes (LanceDB) | No (SQLite WAL 1-writer) |
+| L0/L1/L2 in metadata | Yes (shipped) | Yes (gated opt-in, pending validation) |
+| KG in recall | No | Yes (QMD_MEMORY_KG=on) |
+| Temporal retrieval | No | Yes (3rd RRF list) |
+| Push Pack API | No | Yes |
+| Tiered recall API | No | Yes |
+| Install | Multi-step (openclaw + peer dep) | One-liner (`npm install @tanarchy/qmd`) |
+| Benchmark on LME | Not published | 98.4% rAny@5, 0.917 MRR |
+
+### What to borrow from them
+
+1. **LanceDB as second backend adapter.** Already in our plan; this
+   confirms the choice. Concurrent writes + no peer dep hell if we
+   bundle `apache-arrow` transitively.
+2. **scopes.agentAccess config** — explicit multi-agent access matrix.
+   qmd has scope filter but not a declarative access policy.
+3. **Session memory hook** — `command:new` trigger for session
+   summary. We have dream but not this specific entrypoint.
+4. **Config surface as YAML.** `~/.config/qmd/config.yaml` alongside
+   `.env` would be more discoverable for new users.
+
+### What we already do better
+
+1. **Synonym + keyword expansion by default** — they have neither.
+   Our preference MRR would likely be higher than theirs on
+   comparable workloads.
+2. **Proper RRF fusion** — they use a custom boost pattern, we use
+   standard weighted RRF. Easier to reason about, easier to tune.
+3. **Temporal retrieval as proper ranked list** — they have recency
+   boost (decay-based) but not time-window retrieval.
+4. **KG in recall** — they don't have KG injection at all.
+5. **One-liner install.** Our `npm install @tanarchy/qmd` really works;
+   their setup requires 8 steps including a peer dep.
+6. **Metric rigor** — we report `recall_any@K`, `R@K` (fractional),
+   MRR, NDCG@10 on LongMemEval. They report LLM-judge accuracy on an
+   internal benchmark with no public leaderboard.
+
+### Conclusion
+
+memory-lancedb-pro validates our plan:
+1. LanceDB is the right second backend (their production prod)
+2. The embedded-via-npm path works (they ship this successfully)
+3. Multi-agent via scope-filter (not separate tables) is the
+   industry pattern — matches our design
+4. Hybrid + rerank + decay + tier is the common stack — we already
+   have all four
+
+Where we diverge (and should stay the course):
+- Our RRF weights invert theirs because our embedder is quantized
+- Our install is genuinely simpler
+- We have richer retrieval (synonym/keyword expansion, KG, temporal,
+  push pack, tiered)
+
+Where we should copy:
+- LanceDB as a `MemoryBackend` adapter (Phase 9)
+- `scopes.agentAccess` declarative access policy (Phase 10+)
+- Optional YAML config (DX improvement, not required)
+
+### Sources for this deep dive
+
+- [CortexReach/memory-lancedb-pro](https://github.com/CortexReach/memory-lancedb-pro)
+- [LanceDB blog: OpenClaw Memory from Zero to LanceDB Pro](https://www.lancedb.com/blog/openclaw-memory-from-zero-to-lancedb-pro)
+- [LanceDB openclaw-lancedb-demo](https://github.com/lancedb/openclaw-lancedb-demo)
+- [openclaw/skills memory-lancedb-pro SKILL.md](https://github.com/openclaw/skills/blob/main/skills/aaronx-hu/memory-lancedb-pro/SKILL.md)
