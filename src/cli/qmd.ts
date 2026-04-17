@@ -8,6 +8,7 @@ import { getStore, getDb, resyncConfig, closeDb, getDbPath, setIndexName, ensure
 import { c, cursor, progress, useColor, isTTY } from "./terminal.js";
 import { collectionList, collectionRemove, collectionRename } from "./collection-commands.js";
 import { contextAdd, contextList, contextRemove, detectCollectionFromPath } from "./context-commands.js";
+import { showSkill, installSkill } from "./skill-commands.js";
 import fastGlob from "fast-glob";
 import { execSync, spawn as nodeSpawn } from "child_process";
 import { fileURLToPath } from "url";
@@ -2040,131 +2041,7 @@ function parseCLI() {
   };
 }
 
-function getSkillInstallDir(globalInstall: boolean): string {
-  return globalInstall
-    ? resolve(homedir(), ".agents", "skills", "qmd")
-    : resolve(getPwd(), ".agents", "skills", "qmd");
-}
-
-function getClaudeSkillLinkPath(globalInstall: boolean): string {
-  return globalInstall
-    ? resolve(homedir(), ".claude", "skills", "qmd")
-    : resolve(getPwd(), ".claude", "skills", "qmd");
-}
-
-function pathExists(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function removePath(path: string): void {
-  const stat = lstatSync(path);
-  if (stat.isDirectory() && !stat.isSymbolicLink()) {
-    rmSync(path, { recursive: true, force: true });
-  } else {
-    unlinkSync(path);
-  }
-}
-
-function showSkill(): void {
-  console.log("QMD Skill (embedded)");
-  console.log("");
-  const content = getEmbeddedQmdSkillContent();
-  process.stdout.write(content.endsWith("\n") ? content : content + "\n");
-}
-
-function writeEmbeddedSkill(targetDir: string, force: boolean): void {
-  if (pathExists(targetDir)) {
-    if (!force) {
-      throw new Error(`Skill already exists: ${targetDir} (use --force to replace it)`);
-    }
-    removePath(targetDir);
-  }
-
-  mkdirSync(targetDir, { recursive: true });
-  for (const file of getEmbeddedQmdSkillFiles()) {
-    const destination = resolve(targetDir, file.relativePath);
-    mkdirSync(dirname(destination), { recursive: true });
-    writeFileSync(destination, file.content, "utf-8");
-  }
-}
-
-function ensureClaudeSymlink(linkPath: string, targetDir: string, force: boolean): boolean {
-  const parentDir = dirname(linkPath);
-  if (pathExists(parentDir)) {
-    const resolvedTargetDir = realpathSync(dirname(targetDir));
-    const resolvedLinkParent = realpathSync(parentDir);
-
-    // If .claude/skills already resolves to the same directory as .agents/skills,
-    // the skill is already visible to Claude and creating qmd -> qmd would loop.
-    if (resolvedTargetDir === resolvedLinkParent) {
-      return false;
-    }
-  }
-
-  const linkTarget = relativePath(parentDir, targetDir) || ".";
-
-  mkdirSync(parentDir, { recursive: true });
-
-  if (pathExists(linkPath)) {
-    const stat = lstatSync(linkPath);
-    if (stat.isSymbolicLink() && readlinkSync(linkPath) === linkTarget) {
-      return true;
-    }
-    if (!force) {
-      throw new Error(`Claude skill path already exists: ${linkPath} (use --force to replace it)`);
-    }
-    removePath(linkPath);
-  }
-
-  symlinkSync(linkTarget, linkPath, "dir");
-  return true;
-}
-
-async function shouldCreateClaudeSymlink(linkPath: string, autoYes: boolean): Promise<boolean> {
-  if (autoYes) {
-    return true;
-  }
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    console.log(`Tip: create a Claude symlink manually at ${linkPath}`);
-    return false;
-  }
-
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  try {
-    const answer = await rl.question(`Create a symlink in ${linkPath}? [y/N] `);
-    const normalized = answer.trim().toLowerCase();
-    return normalized === "y" || normalized === "yes";
-  } finally {
-    rl.close();
-  }
-}
-
-async function installSkill(globalInstall: boolean, force: boolean, autoYes: boolean): Promise<void> {
-  const installDir = getSkillInstallDir(globalInstall);
-  writeEmbeddedSkill(installDir, force);
-  console.log(`✓ Installed QMD skill to ${installDir}`);
-
-  const claudeLinkPath = getClaudeSkillLinkPath(globalInstall);
-  if (!(await shouldCreateClaudeSymlink(claudeLinkPath, autoYes))) {
-    return;
-  }
-
-  const linked = ensureClaudeSymlink(claudeLinkPath, installDir, force);
-  if (linked) {
-    console.log(`✓ Linked Claude skill at ${claudeLinkPath}`);
-  } else {
-    console.log(`✓ Claude already sees the skill via ${dirname(claudeLinkPath)}`);
-  }
-}
+// skill commands moved to cli/skill-commands.ts
 
 function showHelp(): void {
   console.log("qmd — Quick Markdown Search");
