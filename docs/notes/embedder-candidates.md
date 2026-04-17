@@ -11,10 +11,31 @@ Benchmarks against LongMemEval _s. Scores are the period's best; the 2026-04-13 
 | Model | Dim | Size (q8) | ONNX int8 | LME R@5 | LME MRR | multi-R@5 | Wall | Verdict |
 |---|---|---|---|---|---|---|---|---|
 | **mixedbread-ai/mxbai-embed-xsmall-v1** | 384 | ~50 MB | ✅ native | 94.2% (old), 98.4% (new) | 0.857 → 0.917 | 82% | 14m49s | **Production default** |
-| Xenova/all-MiniLM-L6-v2 (file=`model_quint8_avx2`) | 384 | ~23 MB | ✅ Xenova | 94.4% | 0.859 | 83% | 17m09s | Viable fallback |
+| sentence-transformers/all-MiniLM-L6-v2 (file=`model_quint8_avx2`) | 384 | ~23 MB | ✅ canonical | 94.4% | 0.859 | 83% | 17m09s | Viable fallback |
 | sentence-transformers/all-MiniLM-L6-v2 (fp32 via fastembed, not q8) | 384 | ~90 MB | n/a | 93.2% | 0.862 | 81% | 23m33s | Too slow (fp32) |
 | Snowflake/snowflake-arctic-embed-s q8 | 384 | ~35 MB | ✅ | 93.2% | — | 84.2% | — | **Strictly worse than mxbai-xs on every sr5 bucket.** Pref -10pp. Parked 2026-04-14 post metric-audit. |
 | intfloat/multilingual-e5-small | 384 | — | ✅ | n/a (toy probe only) | — | — | — | Weak spread on probe, not LME-tested |
+
+### all-MiniLM-L6-v2 ONNX variant catalog (canonical repo)
+
+Previously we only tested `model_quint8_avx2`. The official repo ships 9 variants:
+
+| File | Size | Type | When to use |
+|---|---|---|---|
+| `model.onnx` | 90.4 MB | fp32 | Ground truth, no speedup |
+| `model_O1.onnx` | 90.4 MB | fp32 + O1 opt | Mild graph optimization |
+| `model_O2.onnx` | 90.3 MB | fp32 + O2 opt | More aggressive |
+| `model_O3.onnx` | 90.3 MB | fp32 + O3 opt | Extended graph opt |
+| `model_O4.onnx` | 45.2 MB | fp16 + O4 opt | Half-precision + aggressive |
+| `model_qint8_arm64.onnx` | 23 MB | int8, ARM | Apple Silicon, ARM servers |
+| `model_qint8_avx512.onnx` | 23 MB | int8, AVX-512 | Server Xeons |
+| `model_qint8_avx512_vnni.onnx` | 23 MB | int8, AVX-512 VNNI | Modern Intel (Ice Lake+, Alder Lake+) |
+| `model_quint8_avx2.onnx` | 23 MB | int8 (unsigned), AVX2 | **Older x64 / safe default (we tested this one)** |
+
+**Implication for Phase 11 retesting:**
+On modern Intel CPUs, `model_qint8_avx512_vnni` may give a free throughput bump over `model_quint8_avx2` without any quality change. Worth testing as part of the same A/B matrix.
+
+Pattern applies to **all retrieval models that ship canonical ONNX variants** — we should check each Phase 11 candidate's `/onnx/` folder and pick the best arch match for the target CPU.
 
 **Key finding (2026-04-13):** int8/uint8 quantization broke the 81% multi-session ceiling that 6 fp32 models all hit. Quantization noise is a soft ranking diversifier.
 
