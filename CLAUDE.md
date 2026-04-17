@@ -2,23 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Code navigation (READ FIRST — default tool routing)
+## Tool routing
 
-**MANDATORY:** Prefer Serena + vexp MCP tools over grep/glob/Read. 60-90% token savings.
-
-| Task | First tool |
-|---|---|
-| Architecture / "what does this project look like" | `graphify-out/GRAPH_REPORT.md` if exists, else `mcp__vexp__run_pipeline` |
-| Find symbol by name | `mcp__serena__find_symbol({name_path, include_body: false, depth: 1})` |
-| File outline before reading | `mcp__vexp__get_skeleton({files, detail: "minimal"\|"standard"\|"detailed"})` |
-| Find all callers / rename impact | `mcp__serena__find_referencing_symbols` |
-| Blast radius / debug / cross-file feature | `mcp__vexp__search_memory` (free) → `mcp__vexp__run_pipeline({preset: "refactor"\|"debug"\|"modify"})` |
-| Literal regex audit | `Grep` (only case where grep wins) |
-| Known file + line edit | `Read` + `Edit` |
-
-**vexp budget:** 8 paid `run_pipeline`/day. Always precede with free `search_memory`. Default compression: `max_tokens: 6000, include_file_content: false, prose_compression: "full"`.
-
-**Full tool guide:** `.claude/CLAUDE.md`. Serena memories at `.serena/memories/`. Auto-memory at `~/.claude/projects/.../memory/` loads `MEMORY.md` every session.
+Generic routing rules in `~/.claude/CLAUDE.md` (global). Project-specific
+decision tree + token savings in `.claude/CLAUDE.md`. Serena memories at
+`.serena/memories/`, auto-memory at `~/.claude/projects/.../memory/`.
 
 ## Where to find docs
 
