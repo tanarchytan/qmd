@@ -14,7 +14,7 @@ Project documentation lives in `docs/`. **Read these before starting non-trivial
 
 - **`docs/ROADMAP.md`** — version history, technique tables, SOTA reference targets, session lessons learned, quality fix tracker, next testing phases. **Always check the latest version + lessons before proposing changes.**
 - **`docs/EVAL.md`** — how to run LoCoMo + LongMemEval benchmarks, env-var ablation toggles, parallel sharded runs, reproducibility notes (seed=42, model name pitfalls, cache invalidation).
-- **`docs/SYNTAX.md`** — markdown/qmd syntax reference for indexed content.
+- **`docs/SYNTAX.md`** — markdown/lotl syntax reference for indexed content.
 
 `CHANGELOG.md` tracks shipped releases. This file (CLAUDE.md) is for code structure and constraints — not benchmark history.
 
@@ -23,9 +23,9 @@ Project documentation lives in `docs/`. **Read these before starting non-trivial
 `@tanarchy/lotl` — Lotl (Living-off-the-Land): on-device hybrid search + agent memory + temporal knowledge graph. Everything runs on SQLite + sqlite-vec + local ONNX (`@huggingface/transformers`). No new infra, no LLM required. Cloud APIs (OpenAI, Gemini, ZeroEntropy, etc.) are opt-in for cheaper embed/rerank.
 
 Repo: `github.com/tanarchytan/lotl` — `main` (stable) + `dev` (active development).
-npm: `@tanarchy/lotl` (scope: tanarchy, not tanarchytan). CLI binary: `lotl` (primary), `qmd` (alias for legacy installs).
+npm: `@tanarchy/lotl` (scope: tanarchy, not tanarchytan). CLI binary: `lotl`.
 
-**Renamed from `@tanarchy/qmd` at v1.0.0 (2026-04-18).** Env vars are now `LOTL_*`; config dir is `~/.config/lotl`; virtual path scheme is `lotl://`. The `qmd` CLI binary remains as an alias for existing installs through v1.x.
+**Renamed from `@tanarchy/qmd` at v1.0.0 (2026-04-18).** Env vars are `LOTL_*`; config dir is `~/.config/lotl`; virtual path scheme is `lotl://`. The `qmd` CLI alias was dropped at the rename — user explicitly chose hard break over backward compat.
 
 ## Build & Development
 
@@ -36,7 +36,7 @@ npm run typecheck                  # tsc --noEmit (no emit, just type-check)
 npx tsx src/cli/lotl.ts <command>   # Run CLI from source (dev mode)
 ```
 
-**Never run `bun build --compile`** — it overwrites the shell wrapper (`bin/lotl`) and breaks sqlite-vec. The `lotl` binary is a shell script that dispatches to `dist/cli/lotl.js`.
+The `lotl` binary is a shell script (`bin/lotl`) that `exec`s `node dist/cli/lotl.js`. No runtime detection since Bun was dropped.
 
 **Node.js ≥22 required.** Bun support was removed — all code is Node-only with synchronous `createRequire()` in db.ts.
 
@@ -151,53 +151,54 @@ Key env vars:
 - `LOTL_MEMORY_MMR=session` — dialog-aware diversity reranking (default off)
 - `LOTL_RECALL_RAW=on` — skip all post-fusion boosts (for eval baselines)
 - `LOTL_MEMORY_EXPAND=keywords|entities` — zero-LLM query expansion (default off)
+- `LOTL_MEMORY_RRF_W_BM25` / `LOTL_MEMORY_RRF_W_VEC` — override the hardcoded 0.9/0.1 RRF fusion weights (Phase 2 sweep)
 
-Memory recall tunables are hardcoded in `src/store/constants.ts` (validated at n=500 LME 2026-04-16).
+Memory recall tunables are in `src/store/constants.ts`, validated at n=500 LME 2026-04-16. Most are hardcoded; BM25/vec fusion weights and a handful of tunables read env overrides so sweeps work without a recompile.
 
 When running as OpenClaw plugin: provider config lives in `openclaw.json` under `plugins.entries.tanarchy-lotl.config` (embed/rerank/queryExpansion objects). Plugin maps these to LOTL_* env vars on register().
 
 ## Commands
 
 ```sh
-qmd collection add . --name <n>       # Index a directory
-qmd collection list                   # List collections
-qmd collection remove <name>          # Remove collection
-qmd collection rename <old> <new>     # Rename collection
-qmd collection show <name>            # Show collection details
-qmd collection update-cmd <n> [cmd]   # Set pre-index command (e.g. 'git pull')
-qmd collection include <name>         # Include in default queries
-qmd collection exclude <name>         # Exclude from default queries
-qmd ls [collection[/path]]            # List files
-qmd context add [path] "text"         # Add context for path
-qmd context list                      # List contexts
-qmd context check                     # Find missing contexts
-qmd context rm <path>                 # Remove context
-qmd get <file>                        # Get doc by path or docid (#abc123)
-qmd multi-get <pattern>               # Get multiple docs
-qmd status                            # Index status
-qmd update [--pull]                   # Re-index (--pull: git pull first)
-qmd pull                              # Git pull + re-index
-qmd embed                             # Generate embeddings
-qmd query <query>                     # Full search (expand + rerank)
-qmd search <query>                    # BM25 keyword search
-qmd vsearch <query>                   # Vector similarity search
-qmd mcp                               # MCP server (stdio)
-qmd mcp --http [--port N]             # MCP server (HTTP)
-qmd mcp --http --daemon               # MCP daemon
-qmd mcp stop                          # Stop daemon
-qmd sync                              # update + embed
-qmd cleanup                           # Remove inactive docs + orphaned content/vectors
-qmd vacuum                            # Reclaim space
-qmd skill show                        # Show embedded skill
-qmd skill install [--global] [--yes]  # Install skill files
-qmd memory store <text>               # Store memory
-qmd memory recall <query>             # Search memories
-qmd memory forget <id>                # Delete memory
-qmd memory extract <text>             # Extract from conversation
-qmd memory stats                      # Memory stats
-qmd memory decay                      # Run decay pass
-qmd memory import <file>              # Import memories
-qmd memory export [file.json]         # Export memories
+lotl collection add . --name <n>       # Index a directory
+lotl collection list                   # List collections
+lotl collection remove <name>          # Remove collection
+lotl collection rename <old> <new>     # Rename collection
+lotl collection show <name>            # Show collection details
+lotl collection update-cmd <n> [cmd]   # Set pre-index command (e.g. 'git pull')
+lotl collection include <name>         # Include in default queries
+lotl collection exclude <name>         # Exclude from default queries
+lotl ls [collection[/path]]            # List files
+lotl context add [path] "text"         # Add context for path
+lotl context list                      # List contexts
+lotl context check                     # Find missing contexts
+lotl context rm <path>                 # Remove context
+lotl get <file>                        # Get doc by path or docid (#abc123)
+lotl multi-get <pattern>               # Get multiple docs
+lotl status                            # Index status
+lotl update [--pull]                   # Re-index (--pull: git pull first)
+lotl pull                              # Git pull + re-index
+lotl embed                             # Generate embeddings
+lotl query <query>                     # Full search (expand + rerank)
+lotl search <query>                    # BM25 keyword search
+lotl vsearch <query>                   # Vector similarity search
+lotl mcp                               # MCP server (stdio)
+lotl mcp --http [--port N]             # MCP server (HTTP)
+lotl mcp --http --daemon               # MCP daemon
+lotl mcp stop                          # Stop daemon
+lotl sync                              # update + embed
+lotl cleanup                           # Remove inactive docs + orphaned content/vectors
+lotl vacuum                            # Reclaim space
+lotl skill show                        # Show embedded skill
+lotl skill install [--global] [--yes]  # Install skill files
+lotl memory store <text>               # Store memory
+lotl memory recall <query>             # Search memories
+lotl memory forget <id>                # Delete memory
+lotl memory extract <text>             # Extract from conversation
+lotl memory stats                      # Memory stats
+lotl memory decay                      # Run decay pass
+lotl memory import <file>              # Import memories
+lotl memory export [file.json]         # Export memories
 ```
 
 ## MCP Tools

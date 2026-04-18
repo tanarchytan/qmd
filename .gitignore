@@ -49,3 +49,4 @@ evaluate/longmemeval/results*.json
 evaluate/longmemeval/llm-cache.json
 evaluate/longmemeval/**/*.log
 evaluate/sweeps/*/
+!evaluate/sweeps/configs/

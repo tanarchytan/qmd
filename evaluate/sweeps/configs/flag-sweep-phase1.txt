@@ -1,0 +1,13 @@
+# Phase 1 flag-impact sweep. mxbai-xs only, no LLM.
+# Each line: <tag> [KEY=VALUE ...]
+# The baseline row must stay at the top — summarize-sweep.mjs diffs against it.
+
+baseline
+mmr-session          LOTL_MEMORY_MMR=session
+expand-keywords      LOTL_MEMORY_EXPAND=keywords
+expand-entities      LOTL_MEMORY_EXPAND=entities
+synonyms             LOTL_MEMORY_SYNONYMS=on
+scope-norm           LOTL_MEMORY_SCOPE_NORM=on
+lhash                LOTL_MEMORY_LHASH=on
+diversify            LOTL_RECALL_DIVERSIFY=on
+vec-min-sim-off      LOTL_VEC_MIN_SIM=0.0

@@ -43,8 +43,10 @@ export const MEMORY_RRF_K = 60;
 // 0.9/0.1 best MRR (0.918) + pref MRR (0.741) of BM25-heavy configs.
 // Vec is weak (mxbai-xs q8) — more vec weight collapses s-user.
 // Path to better vec: fact-augmented embedding keys (see ROADMAP).
-export const MEMORY_RRF_W_BM25 = 0.9;
-export const MEMORY_RRF_W_VEC = 0.1;
+// Env overrides let the Phase 2 BM25/vec re-sweep flip ratios without a
+// recompile. Weights should sum to 1.0 but nothing enforces it.
+export const MEMORY_RRF_W_BM25 = Number(process.env.LOTL_MEMORY_RRF_W_BM25 ?? 0.9);
+export const MEMORY_RRF_W_VEC = Number(process.env.LOTL_MEMORY_RRF_W_VEC ?? 0.1);
 // Temporal window retrieval (3rd RRF list, fires only when query has
 // a parseable time reference). Weight 0.1 — on LME this is a no-op
 // because all memories have the same created_at (ingestion time), but

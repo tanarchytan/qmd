@@ -1,0 +1,28 @@
+# LoCoMo flag × weight sweep.
+# Same shape as the LME combined sweep, but weights are 9/1 (explicit baseline)
+# and 1/9 (extreme vec-heavy). LoCoMo has R@5 ~67% baseline — much more
+# headroom than LME (98%). A flag that's null on LME may show signal here.
+
+baseline
+
+# --- 9/1 (explicit baseline weights) ---
+baseline-w91         LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1
+mmr-w91              LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1 LOTL_MEMORY_MMR=session
+expand-keywords-w91  LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1 LOTL_MEMORY_EXPAND=keywords
+expand-entities-w91  LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1 LOTL_MEMORY_EXPAND=entities
+synonyms-w91         LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1 LOTL_MEMORY_SYNONYMS=on
+scope-norm-w91       LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1 LOTL_MEMORY_SCOPE_NORM=on
+lhash-w91            LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1 LOTL_MEMORY_LHASH=on
+diversify-w91        LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1 LOTL_RECALL_DIVERSIFY=on
+vec-min-sim-off-w91  LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1 LOTL_VEC_MIN_SIM=0.0
+
+# --- 1/9 (extreme vec-heavy) ---
+baseline-w19         LOTL_MEMORY_RRF_W_BM25=0.1 LOTL_MEMORY_RRF_W_VEC=0.9
+mmr-w19              LOTL_MEMORY_RRF_W_BM25=0.1 LOTL_MEMORY_RRF_W_VEC=0.9 LOTL_MEMORY_MMR=session
+expand-keywords-w19  LOTL_MEMORY_RRF_W_BM25=0.1 LOTL_MEMORY_RRF_W_VEC=0.9 LOTL_MEMORY_EXPAND=keywords
+expand-entities-w19  LOTL_MEMORY_RRF_W_BM25=0.1 LOTL_MEMORY_RRF_W_VEC=0.9 LOTL_MEMORY_EXPAND=entities
+synonyms-w19         LOTL_MEMORY_RRF_W_BM25=0.1 LOTL_MEMORY_RRF_W_VEC=0.9 LOTL_MEMORY_SYNONYMS=on
+scope-norm-w19       LOTL_MEMORY_RRF_W_BM25=0.1 LOTL_MEMORY_RRF_W_VEC=0.9 LOTL_MEMORY_SCOPE_NORM=on
+lhash-w19            LOTL_MEMORY_RRF_W_BM25=0.1 LOTL_MEMORY_RRF_W_VEC=0.9 LOTL_MEMORY_LHASH=on
+diversify-w19        LOTL_MEMORY_RRF_W_BM25=0.1 LOTL_MEMORY_RRF_W_VEC=0.9 LOTL_RECALL_DIVERSIFY=on
+vec-min-sim-off-w19  LOTL_MEMORY_RRF_W_BM25=0.1 LOTL_MEMORY_RRF_W_VEC=0.9 LOTL_VEC_MIN_SIM=0.0

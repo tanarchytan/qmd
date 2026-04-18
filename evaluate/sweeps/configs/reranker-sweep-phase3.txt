@@ -1,0 +1,12 @@
+# Phase 3 reranker A/B — mxbai-xs embed + pre-populated v17 DB
+# Each non-baseline row: enable rerank + set the model + force local transformers backend.
+# Pair with Phase 1 winners (add overlays here once Phase 1 resolves).
+# Remember to flip STRONG_SIGNAL_SKIP on if Phase 1 validated it.
+
+baseline
+jina-tiny             LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=jinaai/jina-reranker-v1-tiny-en
+jina-turbo            LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=jinaai/jina-reranker-v1-turbo-en
+mxbai-xsmall          LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=mixedbread-ai/mxbai-rerank-xsmall-v1
+mxbai-base            LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=mixedbread-ai/mxbai-rerank-base-v1
+gte-modernbert        LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=Alibaba-NLP/gte-reranker-modernbert-base
+tomaarsen-modernbert  LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=tomaarsen/reranker-ModernBERT-base-gooaq-bce

@@ -1,0 +1,28 @@
+# Combined Phase 1 (flag ablation) × Phase 2 (BM25/vec re-sweep).
+# Each flag tested at two fusion weights: 7/3 (lighter BM25) and 3/7 (vec-heavy).
+# Baseline anchor stays at current shipped default 9/1 (no overlay).
+# Goal: catch flags that are null at 9/1 but become wins when vec gets more say.
+
+baseline
+
+# --- 7/3 (BM25 0.7, VEC 0.3) ---
+baseline-w73         LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3
+mmr-w73              LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_MMR=session
+expand-keywords-w73  LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_EXPAND=keywords
+expand-entities-w73  LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_EXPAND=entities
+synonyms-w73         LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_SYNONYMS=on
+scope-norm-w73       LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_SCOPE_NORM=on
+lhash-w73            LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_LHASH=on
+diversify-w73        LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_RECALL_DIVERSIFY=on
+vec-min-sim-off-w73  LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_VEC_MIN_SIM=0.0
+
+# --- 3/7 (BM25 0.3, VEC 0.7) ---
+baseline-w37         LOTL_MEMORY_RRF_W_BM25=0.3 LOTL_MEMORY_RRF_W_VEC=0.7
+mmr-w37              LOTL_MEMORY_RRF_W_BM25=0.3 LOTL_MEMORY_RRF_W_VEC=0.7 LOTL_MEMORY_MMR=session
+expand-keywords-w37  LOTL_MEMORY_RRF_W_BM25=0.3 LOTL_MEMORY_RRF_W_VEC=0.7 LOTL_MEMORY_EXPAND=keywords
+expand-entities-w37  LOTL_MEMORY_RRF_W_BM25=0.3 LOTL_MEMORY_RRF_W_VEC=0.7 LOTL_MEMORY_EXPAND=entities
+synonyms-w37         LOTL_MEMORY_RRF_W_BM25=0.3 LOTL_MEMORY_RRF_W_VEC=0.7 LOTL_MEMORY_SYNONYMS=on
+scope-norm-w37       LOTL_MEMORY_RRF_W_BM25=0.3 LOTL_MEMORY_RRF_W_VEC=0.7 LOTL_MEMORY_SCOPE_NORM=on
+lhash-w37            LOTL_MEMORY_RRF_W_BM25=0.3 LOTL_MEMORY_RRF_W_VEC=0.7 LOTL_MEMORY_LHASH=on
+diversify-w37        LOTL_MEMORY_RRF_W_BM25=0.3 LOTL_MEMORY_RRF_W_VEC=0.7 LOTL_RECALL_DIVERSIFY=on
+vec-min-sim-off-w37  LOTL_MEMORY_RRF_W_BM25=0.3 LOTL_MEMORY_RRF_W_VEC=0.7 LOTL_VEC_MIN_SIM=0.0
