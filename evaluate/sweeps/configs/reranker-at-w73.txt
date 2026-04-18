@@ -1,0 +1,10 @@
+# Reranker × 7/3 weight — 6 rerankers paired with the 7/3 BM25/vec weight.
+# Replicates Stage 4 structure but with the vec-lean weight some flags preferred.
+
+baseline                LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3
+jina-tiny-w73           LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=jinaai/jina-reranker-v1-tiny-en
+jina-turbo-w73          LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=jinaai/jina-reranker-v1-turbo-en
+mxbai-xsmall-w73        LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=mixedbread-ai/mxbai-rerank-xsmall-v1
+mxbai-base-w73          LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=mixedbread-ai/mxbai-rerank-base-v1
+gte-modernbert-w73      LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=Alibaba-NLP/gte-reranker-modernbert-base
+tomaarsen-modernbert-w73 LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=tomaarsen/reranker-ModernBERT-base-gooaq-bce

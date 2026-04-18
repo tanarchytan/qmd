@@ -1,0 +1,9 @@
+# MRR drift repro on LoCoMo — 5 identical baseline passes.
+# Complements the LME Stage 5. If LoCoMo baseline is stable but LME drifts,
+# the drift is LME-specific (FTS5 tie-breaking on a specific corpus shape).
+
+baseline
+pass-2
+pass-3
+pass-4
+pass-5
