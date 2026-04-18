@@ -1,0 +1,17 @@
+# Phase 1 corrected polarity — reruns the 3 invalid Phase 1 tests:
+#
+#   LOTL_MEMORY_SYNONYMS defaults to ON (needs =off to disable).
+#     Phase 1 set =on → no-op. Here we test disabling.
+#   LOTL_MEMORY_SCOPE_NORM needs ="rank" to enable (not =on).
+#     Phase 1 set =on → no-op.
+#   LOTL_MEMORY_EXPAND defaults to "keywords" (not empty).
+#     Phase 1 expand-keywords config was identical to baseline. Here we add
+#     a 4th value "off" — but check the code: only "keywords" / "entities"
+#     are live values; anything else silently falls through to the default
+#     code path. So "disable expansion" isn't a supported state.
+
+baseline
+synonyms-off         LOTL_MEMORY_SYNONYMS=off
+scope-norm-rank      LOTL_MEMORY_SCOPE_NORM=rank
+expand-none          LOTL_MEMORY_EXPAND=none
+expand-entities      LOTL_MEMORY_EXPAND=entities

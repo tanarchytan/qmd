@@ -5,10 +5,24 @@
 **Script:** `evaluate/scripts/sweep-flags.sh evaluate/sweeps/configs/flag-sweep-phase1.txt`
 **Run:** `evaluate/sweeps/flag-sweep-phase1-20260418-232607/` (single-flag ablation, 9 configs).
 
-## Headline: null result across the board
+## Headline: null result across the board — BUT 3 of 9 tests were invalid
 
 No flag moves MRR by ≥0.005 or rAny@5 by ≥0.3pp. Every delta is inside the
 measurement noise floor.
+
+**Correction (2026-04-19):** audit revealed 3 of the 9 Phase 1 configs
+silently tested a no-op because of flag-polarity assumptions:
+
+- `LOTL_MEMORY_SYNONYMS=on` — synonyms are ON by default (`!== "off"`).
+  Setting `=on` was a no-op. Correct inverse test is `=off`.
+- `LOTL_MEMORY_SCOPE_NORM=on` — code checks `=== "rank"`, not `=== "on"`.
+  Setting `=on` was a no-op.
+- `LOTL_MEMORY_EXPAND=keywords` — `keywords` is the default. Setting
+  `=keywords` was a no-op (identical to baseline).
+
+These are re-tested in Stage 14 of the follow-up chain with correct polarities.
+The other 6 Phase 1 configs (mmr, expand-entities, lhash, diversify,
+vec-min-sim-off, expand-keywords-as-baseline) were valid tests.
 
 | tag | rAny@5 | R@5 | MRR | NDCG@10 | wall | verdict |
 |---|---|---|---|---|---|---|

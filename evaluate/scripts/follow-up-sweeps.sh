@@ -123,13 +123,32 @@ S13=$?; D13=$(ls -d evaluate/sweeps/judge-ab-content-*/ 2>/dev/null | tail -1)
 record stage13 $S13 "$D13"
 
 # ---------------------------------------------------------------------------
+# Stage 14: Phase 1 corrected-polarity rerun (3 invalid Phase 1 tests)
+# ---------------------------------------------------------------------------
+stage "stage14" "Corrected polarity: synonyms=off, scope-norm=rank, expand-none"
+bash evaluate/scripts/sweep-flags.sh \
+  evaluate/sweeps/configs/flag-sweep-corrected.txt \
+  --corpus lme --limit 500 --name flag-sweep-corrected-lme \
+  > "$FOLLOW_ROOT/14-flag-sweep-corrected-lme.log" 2>&1
+S14=$?; D14=$(ls -d evaluate/sweeps/flag-sweep-corrected-lme-*/ 2>/dev/null | tail -1)
+record stage14 $S14 "$D14"
+
+stage "stage14b" "Corrected polarity on LoCoMo"
+bash evaluate/scripts/sweep-flags.sh \
+  evaluate/sweeps/configs/flag-sweep-corrected.txt \
+  --corpus locomo --name flag-sweep-corrected-locomo \
+  > "$FOLLOW_ROOT/14b-flag-sweep-corrected-locomo.log" 2>&1
+S14B=$?; D14B=$(ls -d evaluate/sweeps/flag-sweep-corrected-locomo-*/ 2>/dev/null | tail -1)
+record stage14b $S14B "$D14B"
+
+# ---------------------------------------------------------------------------
 # Recap
 # ---------------------------------------------------------------------------
 echo "" | tee -a "$MASTER"
 echo "===== FOLLOW-UP DONE — $(date +%H:%M:%S) =====" | tee -a "$MASTER"
 echo "" | tee -a "$MASTER"
 echo "## Sweep outputs" >> "$MASTER"
-for d in "$D7" "$D8" "$D9" "$D10" "$D11" "$D12" "$D12B" "$D13"; do
+for d in "$D7" "$D8" "$D9" "$D10" "$D11" "$D12" "$D12B" "$D13" "$D14" "$D14B"; do
   [[ -n "$d" && -f "$d/SUMMARY.md" ]] && echo "- \`$d/SUMMARY.md\`" >> "$MASTER"
 done
 echo "" | tee -a "$MASTER"
