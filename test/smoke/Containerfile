@@ -1,0 +1,25 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      curl ca-certificates bash git build-essential python3 libatomic1 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install mise (for pinning Node version)
+ENV MISE_YES=1
+RUN curl https://mise.run | sh
+ENV PATH="/root/.local/bin:$PATH"
+
+RUN mise use -g node@latest
+
+# Install lotl globally from the packed tarball
+COPY tanarchy-lotl-*.tgz /tmp/
+RUN mise exec node@latest -- npm install -g /tmp/tanarchy-lotl-*.tgz
+
+# Copy test project (src + test + configs) for in-container vitest runs
+COPY test-src/ /opt/lotl/
+RUN cd /opt/lotl && mise exec node@latest -- npm install 2>/dev/null
+
+ENV PATH="/root/.local/share/mise/shims:/root/.local/bin:$PATH"
+
+CMD ["bash"]

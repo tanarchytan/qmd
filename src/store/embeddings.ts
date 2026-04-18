@@ -376,11 +376,11 @@ export async function generateEmbeddings(
   }
 
   // Local path: use store's LLM override or load the default transformers
-  // embed backend (mxbai-xs q8 by default, opt-in via QMD_EMBED_BACKEND=
+  // embed backend (mxbai-xs q8 by default, opt-in via LOTL_EMBED_BACKEND=
   // transformers to avoid loading the native onnxruntime binding when not
   // needed). Wrapped in a session for the existing batch + abort plumbing.
   let llm: LLM | null = store.llm ?? null;
-  if (!llm && process.env.QMD_EMBED_BACKEND === "transformers") {
+  if (!llm && process.env.LOTL_EMBED_BACKEND === "transformers") {
     llm = await createTransformersEmbedBackend();
   }
   if (!llm) {

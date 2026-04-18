@@ -13,7 +13,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { spawn } from "child_process";
 import { setTimeout as sleep } from "timers/promises";
-import { buildEditorUri, termLink } from "../src/cli/qmd.ts";
+import { buildEditorUri, termLink } from "../src/cli/lotl.js";
 
 // Test fixtures directory and database path
 let testDir: string;
@@ -25,7 +25,7 @@ let testCounter = 0; // Unique counter for each test run
 // Get the directory where this test file lives
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(thisDir, "..");
-const qmdScript = join(projectRoot, "src", "cli", "qmd.ts");
+const qmdScript = join(projectRoot, "src", "cli", "lotl.ts");
 // Resolve tsx binary from project's node_modules (not cwd-dependent)
 const tsxBin = (() => {
   const ext = process.platform === "win32" ? ".cmd" : "";
@@ -49,7 +49,7 @@ async function runQmd(
     env: {
       ...process.env,
       INDEX_PATH: dbPath,
-      QMD_CONFIG_DIR: configDir, // Use test config directory
+      LOTL_CONFIG_DIR: configDir, // Use test config directory
       PWD: workingDir, // Must explicitly set PWD since getPwd() checks this
       ...options.env,
     },
@@ -232,9 +232,9 @@ describe("CLI Help", () => {
     const { stdout, exitCode } = await runQmd(["--help"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Usage:");
-    expect(stdout).toContain("qmd collection add");
-    expect(stdout).toContain("qmd search");
-    expect(stdout).toContain("qmd skill show/install");
+    expect(stdout).toContain("lotl collection add");
+    expect(stdout).toContain("lotl search");
+    expect(stdout).toContain("lotl skill show/install");
   });
 
   test("shows help with no arguments", async () => {
@@ -262,15 +262,15 @@ describe("CLI Skill Commands", () => {
   test("shows embedded skill with --skill alias", async () => {
     const { stdout, exitCode } = await runQmd(["--skill"]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("QMD Skill (embedded)");
-    expect(stdout).toContain("name: qmd");
-    expect(stdout).toContain("allowed-tools: Bash(qmd:*), mcp__qmd__*");
+    expect(stdout).toContain("Lotl Skill (embedded)");
+    expect(stdout).toContain("name: lotl");
+    expect(stdout).toContain("allowed-tools: Bash(lotl:*), mcp__lotl__*");
   });
 
   test("shows skill help with -h", async () => {
     const { stdout, exitCode } = await runQmd(["skill", "-h"]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("Usage: qmd skill <show|install> [options]");
+    expect(stdout).toContain("Usage: lotl skill <show|install> [options]");
     expect(stdout).toContain("install");
     expect(stdout).toContain("--global");
   });
@@ -282,10 +282,10 @@ describe("CLI Skill Commands", () => {
     const { stdout, exitCode } = await runQmd(["skill", "install"], { cwd: projectDir });
     expect(exitCode).toBe(0);
 
-    const skillDir = join(projectDir, ".agents", "skills", "qmd");
-    expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toContain("name: qmd");
+    const skillDir = join(projectDir, ".agents", "skills", "lotl");
+    expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toContain("name: lotl");
     expect(readFileSync(join(skillDir, "references", "mcp-setup.md"), "utf-8")).toContain("Claude Code");
-    expect(existsSync(join(projectDir, ".claude", "skills", "qmd"))).toBe(false);
+    expect(existsSync(join(projectDir, ".claude", "skills", "lotl"))).toBe(false);
     // CLI output may use forward slashes even on Windows
     const skillDirNorm = skillDir.replace(/\\/g, '/');
     expect(stdout.replace(/\\/g, '/')).toContain(`✓ Installed QMD skill to ${skillDirNorm}`);
@@ -301,12 +301,12 @@ describe("CLI Skill Commands", () => {
     });
     expect(exitCode).toBe(0);
 
-    const skillDir = join(fakeHome, ".agents", "skills", "qmd");
-    const claudeLink = join(fakeHome, ".claude", "skills", "qmd");
+    const skillDir = join(fakeHome, ".agents", "skills", "lotl");
+    const claudeLink = join(fakeHome, ".claude", "skills", "lotl");
 
-    expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toContain("name: qmd");
+    expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toContain("name: lotl");
     expect(lstatSync(claudeLink).isSymbolicLink()).toBe(true);
-    expect(readFileSync(join(claudeLink, "SKILL.md"), "utf-8")).toContain("name: qmd");
+    expect(readFileSync(join(claudeLink, "SKILL.md"), "utf-8")).toContain("name: lotl");
     const skillDirN = skillDir.replace(/\\/g, '/');
     const claudeLinkN = claudeLink.replace(/\\/g, '/');
     expect(stdout.replace(/\\/g, '/')).toContain(`✓ Installed QMD skill to ${skillDirN}`);
@@ -324,9 +324,9 @@ describe("CLI Skill Commands", () => {
     });
     expect(exitCode).toBe(0);
 
-    const skillDir = join(fakeHome, ".agents", "skills", "qmd");
+    const skillDir = join(fakeHome, ".agents", "skills", "lotl");
     expect(lstatSync(skillDir).isSymbolicLink()).toBe(false);
-    expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toContain("name: qmd");
+    expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toContain("name: lotl");
     expect(stdout).toContain(`✓ Claude already sees the skill via ${join(fakeHome, ".claude", "skills")}`);
   });
 
@@ -581,7 +581,7 @@ ${token}
     );
     expect(add.exitCode).toBe(0);
 
-    const before = await runQmd(["get", "qmd://empty-check/only.md"], { dbPath, configDir });
+    const before = await runQmd(["get", "lotl://empty-check/only.md"], { dbPath, configDir });
     expect(before.exitCode).toBe(0);
     expect(before.stdout).toContain(token);
 
@@ -591,7 +591,7 @@ ${token}
     expect(update.exitCode).toBe(0);
     expect(update.stdout).toContain("0 new, 0 updated, 0 unchanged, 1 removed");
 
-    const after = await runQmd(["get", "qmd://empty-check/only.md"], { dbPath, configDir });
+    const after = await runQmd(["get", "lotl://empty-check/only.md"], { dbPath, configDir });
     expect(after.exitCode).toBe(1);
   });
 });
@@ -620,7 +620,7 @@ describe("CLI Add-Context Command", () => {
     const { stdout, exitCode } = await runQmd([
       "context",
       "add",
-      `qmd://${collName}/`,
+      `lotl://${collName}/`,
       "Personal notes and meeting logs",
     ], { dbPath: localDbPath, configDir: localConfigDir });
     expect(exitCode).toBe(0);
@@ -769,11 +769,11 @@ describe("CLI Context Management", () => {
     const { stdout, exitCode } = await runQmd([
       "context",
       "add",
-      "qmd://fixtures/notes",
+      "lotl://fixtures/notes",
       "Context for notes subdirectory",
     ], { dbPath: localDbPath });
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("✓ Added context for: qmd://fixtures/notes");
+    expect(stdout).toContain("✓ Added context for: lotl://fixtures/notes");
   });
 
   test("remove global context", async () => {
@@ -799,24 +799,24 @@ describe("CLI Context Management", () => {
     await runQmd([
       "context",
       "add",
-      "qmd://fixtures/notes",
+      "lotl://fixtures/notes",
       "Context to remove",
     ], { dbPath: localDbPath });
 
     const { stdout, exitCode } = await runQmd([
       "context",
       "rm",
-      "qmd://fixtures/notes",
+      "lotl://fixtures/notes",
     ], { dbPath: localDbPath });
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("✓ Removed context for: qmd://fixtures/notes");
+    expect(stdout).toContain("✓ Removed context for: lotl://fixtures/notes");
   });
 
   test("fails to remove non-existent context", async () => {
     const { stdout, stderr, exitCode } = await runQmd([
       "context",
       "rm",
-      "qmd://nonexistent/path",
+      "lotl://nonexistent/path",
     ], { dbPath: localDbPath });
     expect(exitCode).toBe(1);
     expect(stderr || stdout).toContain("not found");
@@ -837,30 +837,30 @@ describe("CLI ls Command", () => {
     const { stdout, exitCode } = await runQmd(["ls"], { dbPath: localDbPath });
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Collections:");
-    expect(stdout).toContain("qmd://fixtures/");
+    expect(stdout).toContain("lotl://fixtures/");
   });
 
   test("lists files in a collection", async () => {
     const { stdout, exitCode } = await runQmd(["ls", "fixtures"], { dbPath: localDbPath });
     expect(exitCode).toBe(0);
     // handelize converts to lowercase
-    expect(stdout).toContain("qmd://fixtures/readme.md");
-    expect(stdout).toContain("qmd://fixtures/notes/meeting.md");
+    expect(stdout).toContain("lotl://fixtures/readme.md");
+    expect(stdout).toContain("lotl://fixtures/notes/meeting.md");
   });
 
   test("lists files with path prefix", async () => {
     const { stdout, exitCode } = await runQmd(["ls", "fixtures/notes"], { dbPath: localDbPath });
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("qmd://fixtures/notes/meeting.md");
-    expect(stdout).toContain("qmd://fixtures/notes/ideas.md");
+    expect(stdout).toContain("lotl://fixtures/notes/meeting.md");
+    expect(stdout).toContain("lotl://fixtures/notes/ideas.md");
     // Should not include files outside the prefix (handelize converts to lowercase)
-    expect(stdout).not.toContain("qmd://fixtures/readme.md");
+    expect(stdout).not.toContain("lotl://fixtures/readme.md");
   });
 
   test("lists files with virtual path", async () => {
-    const { stdout, exitCode } = await runQmd(["ls", "qmd://fixtures/docs"], { dbPath: localDbPath });
+    const { stdout, exitCode } = await runQmd(["ls", "lotl://fixtures/docs"], { dbPath: localDbPath });
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("qmd://fixtures/docs/api.md");
+    expect(stdout).toContain("lotl://fixtures/docs/api.md");
   });
 
   test("handles non-existent collection", async () => {
@@ -885,7 +885,7 @@ describe("CLI Collection Commands", () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Collections");
     expect(stdout).toContain("fixtures");
-    expect(stdout).toContain("qmd://fixtures/");
+    expect(stdout).toContain("lotl://fixtures/");
     expect(stdout).toContain("Pattern:");
     expect(stdout).toContain("Files:");
   });
@@ -927,19 +927,19 @@ describe("CLI Collection Commands", () => {
   test("renames a collection", async () => {
     // First verify the collection exists
     const { stdout: listBefore } = await runQmd(["collection", "list"], { dbPath: localDbPath });
-    expect(listBefore).toContain("qmd://fixtures/");
+    expect(listBefore).toContain("lotl://fixtures/");
 
     // Rename it
     const { stdout, exitCode } = await runQmd(["collection", "rename", "fixtures", "my-fixtures"], { dbPath: localDbPath });
     expect(exitCode).toBe(0);
     expect(stdout).toContain("✓ Renamed collection 'fixtures' to 'my-fixtures'");
-    expect(stdout).toContain("qmd://fixtures/");
-    expect(stdout).toContain("qmd://my-fixtures/");
+    expect(stdout).toContain("lotl://fixtures/");
+    expect(stdout).toContain("lotl://my-fixtures/");
 
     // Verify the new name exists and old name is gone
     const { stdout: listAfter } = await runQmd(["collection", "list"], { dbPath: localDbPath });
-    expect(listAfter).toContain("qmd://my-fixtures/");
-    expect(listAfter).not.toContain("qmd://fixtures/"); // Old collection should not appear
+    expect(listAfter).toContain("lotl://my-fixtures/");
+    expect(listAfter).not.toContain("lotl://fixtures/"); // Old collection should not appear
   });
 
   test("handles renaming non-existent collection", async () => {
@@ -961,8 +961,8 @@ describe("CLI Collection Commands", () => {
 
     // Verify both collections exist
     const { stdout: listBoth } = await runQmd(["collection", "list"], { dbPath: localDbPath });
-    expect(listBoth).toContain("qmd://fixtures/");
-    expect(listBoth).toContain("qmd://second/");
+    expect(listBoth).toContain("lotl://fixtures/");
+    expect(listBoth).toContain("lotl://second/");
 
     // Try to rename fixtures to second (which already exists)
     const { stderr, exitCode } = await runQmd(["collection", "rename", "fixtures", "second"], { dbPath: localDbPath });
@@ -1408,7 +1408,7 @@ describe("collection ignore patterns", () => {
 });
 
 // =============================================================================
-// Output Format Tests - qmd:// URIs, context, and docid
+// Output Format Tests - lotl:// URIs, context, and docid
 // =============================================================================
 
 describe("search output formats", () => {
@@ -1430,10 +1430,10 @@ describe("search output formats", () => {
     expect(exitCode).toBe(0);
 
     // Add context
-    await runQmd(["context", "add", `qmd://${collName}/`, "Test fixtures for QMD"], { dbPath: localDbPath, configDir: localConfigDir });
+    await runQmd(["context", "add", `lotl://${collName}/`, "Test fixtures for QMD"], { dbPath: localDbPath, configDir: localConfigDir });
   });
 
-  test("search --json includes qmd:// path, docid, and context", async () => {
+  test("search --json includes lotl:// path, docid, and context", async () => {
     const { stdout, exitCode } = await runQmd(["search", "test", "--json", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
     expect(exitCode).toBe(0);
 
@@ -1441,7 +1441,7 @@ describe("search output formats", () => {
     expect(results.length).toBeGreaterThan(0);
 
     const result = results[0];
-    expect(result.file).toMatch(new RegExp(`^qmd://${collName}/`));
+    expect(result.file).toMatch(new RegExp(`^lotl://${collName}/`));
     expect(result.docid).toMatch(/^#[a-f0-9]{6}$/);
     expect(result.context).toBe("Test fixtures for QMD");
     // Ensure no full filesystem paths
@@ -1449,26 +1449,26 @@ describe("search output formats", () => {
     expect(result.file).not.toMatch(/^\/home\//);
   });
 
-  test("search --files includes qmd:// path, docid, and context", async () => {
+  test("search --files includes lotl:// path, docid, and context", async () => {
     const { stdout, exitCode } = await runQmd(["search", "test", "--files", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
     expect(exitCode).toBe(0);
 
-    // Format: #docid,score,qmd://collection/path,"context"
-    expect(stdout).toMatch(new RegExp(`^#[a-f0-9]{6},[\\d.]+,qmd://${collName}/`, "m"));
+    // Format: #docid,score,lotl://collection/path,"context"
+    expect(stdout).toMatch(new RegExp(`^#[a-f0-9]{6},[\\d.]+,lotl://${collName}/`, "m"));
     expect(stdout).toContain("Test fixtures for QMD");
     // Ensure no full filesystem paths
     expect(stdout).not.toMatch(/\/Users\//);
     expect(stdout).not.toMatch(/\/home\//);
   });
 
-  test("search --csv includes qmd:// path, docid, and context", async () => {
+  test("search --csv includes lotl:// path, docid, and context", async () => {
     const { stdout, exitCode } = await runQmd(["search", "test", "--csv", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
     expect(exitCode).toBe(0);
 
     // Header should include context
     expect(stdout).toMatch(/^docid,score,file,title,context,line,snippet$/m);
-    // Data rows should have qmd:// paths and context
-    expect(stdout).toMatch(new RegExp(`#[a-f0-9]{6},[\\d.]+,qmd://${collName}/`));
+    // Data rows should have lotl:// paths and context
+    expect(stdout).toMatch(new RegExp(`#[a-f0-9]{6},[\\d.]+,lotl://${collName}/`));
     expect(stdout).toContain("Test fixtures for QMD");
     // Ensure no full filesystem paths
     expect(stdout).not.toMatch(/\/Users\//);
@@ -1483,23 +1483,23 @@ describe("search output formats", () => {
     expect(stdout).toContain("**context:** Test fixtures for QMD");
   });
 
-  test("search --xml includes qmd:// path, docid, and context", async () => {
+  test("search --xml includes lotl:// path, docid, and context", async () => {
     const { stdout, exitCode } = await runQmd(["search", "test", "--xml", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
     expect(exitCode).toBe(0);
 
-    expect(stdout).toMatch(new RegExp(`<file docid="#[a-f0-9]{6}" name="qmd://${collName}/`));
+    expect(stdout).toMatch(new RegExp(`<file docid="#[a-f0-9]{6}" name="lotl://${collName}/`));
     expect(stdout).toContain('context="Test fixtures for QMD"');
     // Ensure no full filesystem paths
     expect(stdout).not.toMatch(/\/Users\//);
     expect(stdout).not.toMatch(/\/home\//);
   });
 
-  test("search default CLI format includes plain qmd:// path, docid, and context in non-TTY mode", async () => {
+  test("search default CLI format includes plain lotl:// path, docid, and context in non-TTY mode", async () => {
     const { stdout, exitCode } = await runQmd(["search", "test", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
     expect(exitCode).toBe(0);
 
     // runQmd uses piped stdio, so stdout is non-TTY and should not contain OSC 8 links.
-    expect(stdout).toMatch(new RegExp(`^qmd://${collName}/.*#[a-f0-9]{6}`, "m"));
+    expect(stdout).toMatch(new RegExp(`^lotl://${collName}/.*#[a-f0-9]{6}`, "m"));
     expect(stdout).toContain("Context: Test fixtures for QMD");
     expect(stdout).not.toContain("\x1b]8;;");
     // Ensure no full filesystem paths
@@ -1566,8 +1566,8 @@ describe("get command path normalization", () => {
     expect(exitCode).toBe(0);
   });
 
-  test("get with qmd://collection/path format", async () => {
-    const { stdout, exitCode } = await runQmd(["get", `qmd://${collName}/test1.md`, "-l", "3"], { dbPath: localDbPath, configDir: localConfigDir });
+  test("get with lotl://collection/path format", async () => {
+    const { stdout, exitCode } = await runQmd(["get", `lotl://${collName}/test1.md`, "-l", "3"], { dbPath: localDbPath, configDir: localConfigDir });
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Test Document 1");
   });
@@ -1584,8 +1584,8 @@ describe("get command path normalization", () => {
     expect(stdout).toContain("Test Document 1");
   });
 
-  test("get with qmd:////collection/path format (extra slashes)", async () => {
-    const { stdout, exitCode } = await runQmd(["get", `qmd:////${collName}/test1.md`, "-l", "3"], { dbPath: localDbPath, configDir: localConfigDir });
+  test("get with lotl:////collection/path format (extra slashes)", async () => {
+    const { stdout, exitCode } = await runQmd(["get", `lotl:////${collName}/test1.md`, "-l", "3"], { dbPath: localDbPath, configDir: localConfigDir });
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Test Document 1");
   });
@@ -1597,8 +1597,8 @@ describe("get command path normalization", () => {
     expect(stdout).not.toMatch(/^# Test Document 1$/m);
   });
 
-  test("get with qmd://path:line format", async () => {
-    const { stdout, exitCode } = await runQmd(["get", `qmd://${collName}/test1.md:3`, "-l", "2"], { dbPath: localDbPath, configDir: localConfigDir });
+  test("get with lotl://path:line format", async () => {
+    const { stdout, exitCode } = await runQmd(["get", `lotl://${collName}/test1.md:3`, "-l", "2"], { dbPath: localDbPath, configDir: localConfigDir });
     expect(exitCode).toBe(0);
     // Should start from line 3, not line 1
     expect(stdout).not.toMatch(/^# Test Document 1$/m);
@@ -1631,8 +1631,8 @@ describe("status and collection list hide filesystem paths", () => {
     const { stdout, exitCode } = await runQmd(["status"], { dbPath: localDbPath, configDir: localConfigDir });
     expect(exitCode).toBe(0);
 
-    // Should show qmd:// URIs
-    expect(stdout).toContain(`qmd://${collName}/`);
+    // Should show lotl:// URIs
+    expect(stdout).toContain(`lotl://${collName}/`);
     // Should NOT show full filesystem paths (except for the index location which is ok)
     const lines = stdout.split('\n').filter(l => !l.includes('Index:'));
     const pathLines = lines.filter(l => l.includes('/Users/') || l.includes('/home/') || l.includes('/tmp/'));
@@ -1643,8 +1643,8 @@ describe("status and collection list hide filesystem paths", () => {
     const { stdout, exitCode } = await runQmd(["collection", "list"], { dbPath: localDbPath, configDir: localConfigDir });
     expect(exitCode).toBe(0);
 
-    // Should show qmd:// URIs
-    expect(stdout).toContain(`qmd://${collName}/`);
+    // Should show lotl:// URIs
+    expect(stdout).toContain(`lotl://${collName}/`);
     // Should NOT show Path: lines with filesystem paths
     expect(stdout).not.toMatch(/Path:\s+\//);
   });
@@ -1665,7 +1665,7 @@ describe.skipIf(process.platform === "win32")("mcp http daemon", () => {
 
   /** Get path to PID file inside the test cache dir */
   function pidPath(): string {
-    return join(daemonCacheDir, "qmd", "mcp.pid");
+    return join(daemonCacheDir, "lotl", "mcp.pid");
   }
 
   /** Run qmd with test-isolated env (cache, db, config) */
@@ -1686,7 +1686,7 @@ describe.skipIf(process.platform === "win32")("mcp http daemon", () => {
       env: {
         ...process.env,
         INDEX_PATH: daemonDbPath,
-        QMD_CONFIG_DIR: daemonConfigDir,
+        LOTL_CONFIG_DIR: daemonConfigDir,
       },
       stdio: ["ignore", "pipe", "pipe"],
       ...(process.platform === "win32" ? { shell: true } : {}),
@@ -1719,7 +1719,7 @@ describe.skipIf(process.platform === "win32")("mcp http daemon", () => {
     daemonDbPath = join(daemonTestDir, "test.sqlite");
     daemonConfigDir = join(daemonTestDir, "config");
 
-    await mkdir(join(daemonCacheDir, "qmd"), { recursive: true });
+    await mkdir(join(daemonCacheDir, "lotl"), { recursive: true });
     await mkdir(daemonConfigDir, { recursive: true });
     await writeFile(join(daemonConfigDir, "index.yml"), "collections: {}\n");
   });

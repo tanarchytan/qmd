@@ -78,7 +78,7 @@ async function createTestStore(): Promise<Store> {
   testConfigDir = await mkdtemp(configPrefix);
 
   // Set environment variable to use test config
-  process.env.QMD_CONFIG_DIR = testConfigDir;
+  process.env.LOTL_CONFIG_DIR = testConfigDir;
 
   // Create empty YAML config
   const emptyConfig: CollectionConfig = { collections: {} };
@@ -114,7 +114,7 @@ async function cleanupTestDb(store: Store): Promise<void> {
   }
 
   // Clear environment variable
-  delete process.env.QMD_CONFIG_DIR;
+  delete process.env.LOTL_CONFIG_DIR;
 }
 
 // Helper to insert a test document directly into the database
@@ -1121,7 +1121,7 @@ describe("FTS Search", () => {
     const results = store.searchFTS("fox", 10);
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]!.displayPath).toBe(`${collectionName}/test/doc1.md`);
-    expect(results[0]!.filepath).toBe(`qmd://${collectionName}/test/doc1.md`);
+    expect(results[0]!.filepath).toBe(`lotl://${collectionName}/test/doc1.md`);
     expect(results[0]!.source).toBe("fts");
 
     await cleanupTestDb(store);
@@ -1359,7 +1359,7 @@ describe("FTS Search", () => {
     const results = store.searchFTS("findme", 10);
     expect(results).toHaveLength(1);
     expect(results[0]!.displayPath).toBe(`${collectionName}/test/active.md`);
-    expect(results[0]!.filepath).toBe(`qmd://${collectionName}/test/active.md`);
+    expect(results[0]!.filepath).toBe(`lotl://${collectionName}/test/active.md`);
 
     await cleanupTestDb(store);
   });
@@ -1433,7 +1433,7 @@ describe("Document Retrieval", () => {
       if (!("error" in result)) {
         expect(result.title).toBe("My Document");
         expect(result.displayPath).toBe(`${collectionName}/mydoc.md`);
-        expect(result.filepath).toBe(`qmd://${collectionName}/mydoc.md`);
+        expect(result.filepath).toBe(`lotl://${collectionName}/mydoc.md`);
         expect(result.body).toBeUndefined(); // body not included by default
       }
 
@@ -2225,7 +2225,7 @@ describe("Vector Table", () => {
     expect(before.sql).toContain("float[768]");
 
     // Default: auto-reindex — drops stale table, recreates at new dim, warns.
-    delete process.env.QMD_STRICT_DIM_MISMATCH;
+    delete process.env.LOTL_STRICT_DIM_MISMATCH;
     expect(() => store.ensureVecTable(1024)).not.toThrow();
     const after = store.db.prepare(`
       SELECT sql FROM sqlite_master WHERE type='table' AND name='vectors_vec'
@@ -2234,9 +2234,9 @@ describe("Vector Table", () => {
 
     // Opt-in strict mode: old failure preserved for pipelines that need it.
     store.ensureVecTable(1024); // no-op at current dim
-    process.env.QMD_STRICT_DIM_MISMATCH = "on";
+    process.env.LOTL_STRICT_DIM_MISMATCH = "on";
     expect(() => store.ensureVecTable(768)).toThrow(/dimension mismatch/i);
-    delete process.env.QMD_STRICT_DIM_MISMATCH;
+    delete process.env.LOTL_STRICT_DIM_MISMATCH;
 
     await cleanupTestDb(store);
   });
@@ -2322,11 +2322,11 @@ describe("Integration", () => {
 
     expect(results1).toHaveLength(1);
     expect(results1[0]!.displayPath).toBe("store1/doc.md");
-    expect(results1[0]!.filepath).toBe("qmd://store1/doc.md");
+    expect(results1[0]!.filepath).toBe("lotl://store1/doc.md");
 
     expect(results2).toHaveLength(1);
     expect(results2[0]!.displayPath).toBe("store2/doc.md");
-    expect(results2[0]!.filepath).toBe("qmd://store2/doc.md");
+    expect(results2[0]!.filepath).toBe("lotl://store2/doc.md");
 
     // Cross-check: store1 shouldn't find store2's content
     const cross1 = store1.searchFTS("different", 10);
@@ -2791,30 +2791,30 @@ describe("Content-Addressable Storage", () => {
 // =============================================================================
 
 describe("normalizeVirtualPath", () => {
-  test("already normalized qmd:// path passes through", () => {
-    expect(normalizeVirtualPath("qmd://collection/path.md")).toBe("qmd://collection/path.md");
-    expect(normalizeVirtualPath("qmd://journals/2025-01-01.md")).toBe("qmd://journals/2025-01-01.md");
+  test("already normalized lotl:// path passes through", () => {
+    expect(normalizeVirtualPath("lotl://collection/path.md")).toBe("lotl://collection/path.md");
+    expect(normalizeVirtualPath("lotl://journals/2025-01-01.md")).toBe("lotl://journals/2025-01-01.md");
   });
 
   test("handles //collection/path format (missing qmd: prefix)", () => {
-    expect(normalizeVirtualPath("//collection/path.md")).toBe("qmd://collection/path.md");
-    expect(normalizeVirtualPath("//journals/2025-01-01.md")).toBe("qmd://journals/2025-01-01.md");
+    expect(normalizeVirtualPath("//collection/path.md")).toBe("lotl://collection/path.md");
+    expect(normalizeVirtualPath("//journals/2025-01-01.md")).toBe("lotl://journals/2025-01-01.md");
   });
 
-  test("handles qmd:// with extra slashes", () => {
-    expect(normalizeVirtualPath("qmd:////collection/path.md")).toBe("qmd://collection/path.md");
-    expect(normalizeVirtualPath("qmd:///journals/2025-01-01.md")).toBe("qmd://journals/2025-01-01.md");
-    expect(normalizeVirtualPath("qmd:///////archive/file.md")).toBe("qmd://archive/file.md");
+  test("handles lotl:// with extra slashes", () => {
+    expect(normalizeVirtualPath("lotl:////collection/path.md")).toBe("lotl://collection/path.md");
+    expect(normalizeVirtualPath("lotl:///journals/2025-01-01.md")).toBe("lotl://journals/2025-01-01.md");
+    expect(normalizeVirtualPath("lotl:///////archive/file.md")).toBe("lotl://archive/file.md");
   });
 
   test("handles collection root paths", () => {
-    expect(normalizeVirtualPath("qmd://collection/")).toBe("qmd://collection/");
-    expect(normalizeVirtualPath("qmd://collection")).toBe("qmd://collection");
-    expect(normalizeVirtualPath("//collection/")).toBe("qmd://collection/");
+    expect(normalizeVirtualPath("lotl://collection/")).toBe("lotl://collection/");
+    expect(normalizeVirtualPath("lotl://collection")).toBe("lotl://collection");
+    expect(normalizeVirtualPath("//collection/")).toBe("lotl://collection/");
   });
 
   test("preserves bare collection/path format (not auto-converted)", () => {
-    // Bare paths without qmd:// or // prefix are NOT converted
+    // Bare paths without lotl:// or // prefix are NOT converted
     // (could be relative filesystem paths)
     expect(normalizeVirtualPath("collection/path.md")).toBe("collection/path.md");
     expect(normalizeVirtualPath("journals/2025-01-01.md")).toBe("journals/2025-01-01.md");
@@ -2835,16 +2835,16 @@ describe("normalizeVirtualPath", () => {
   });
 
   test("handles whitespace trimming", () => {
-    expect(normalizeVirtualPath("  qmd://collection/path.md  ")).toBe("qmd://collection/path.md");
-    expect(normalizeVirtualPath("  //collection/path.md  ")).toBe("qmd://collection/path.md");
+    expect(normalizeVirtualPath("  lotl://collection/path.md  ")).toBe("lotl://collection/path.md");
+    expect(normalizeVirtualPath("  //collection/path.md  ")).toBe("lotl://collection/path.md");
   });
 });
 
 describe("isVirtualPath", () => {
-  test("recognizes qmd:// paths", () => {
-    expect(isVirtualPath("qmd://collection/path.md")).toBe(true);
-    expect(isVirtualPath("qmd://journals/2025-01-01.md")).toBe(true);
-    expect(isVirtualPath("qmd://collection")).toBe(true);
+  test("recognizes lotl:// paths", () => {
+    expect(isVirtualPath("lotl://collection/path.md")).toBe(true);
+    expect(isVirtualPath("lotl://journals/2025-01-01.md")).toBe(true);
+    expect(isVirtualPath("lotl://collection")).toBe(true);
   });
 
   test("recognizes //collection/path format", () => {
@@ -2881,30 +2881,30 @@ describe("isVirtualPath", () => {
 });
 
 describe("parseVirtualPath", () => {
-  test("parses standard qmd:// paths", () => {
-    expect(parseVirtualPath("qmd://collection/path.md")).toEqual({
+  test("parses standard lotl:// paths", () => {
+    expect(parseVirtualPath("lotl://collection/path.md")).toEqual({
       collectionName: "collection",
       path: "path.md",
     });
-    expect(parseVirtualPath("qmd://journals/2025-01-01.md")).toEqual({
+    expect(parseVirtualPath("lotl://journals/2025-01-01.md")).toEqual({
       collectionName: "journals",
       path: "2025-01-01.md",
     });
   });
 
   test("parses paths with nested directories", () => {
-    expect(parseVirtualPath("qmd://archive/subfolder/file.md")).toEqual({
+    expect(parseVirtualPath("lotl://archive/subfolder/file.md")).toEqual({
       collectionName: "archive",
       path: "subfolder/file.md",
     });
   });
 
   test("parses collection root paths", () => {
-    expect(parseVirtualPath("qmd://collection/")).toEqual({
+    expect(parseVirtualPath("lotl://collection/")).toEqual({
       collectionName: "collection",
       path: "",
     });
-    expect(parseVirtualPath("qmd://collection")).toEqual({
+    expect(parseVirtualPath("lotl://collection")).toEqual({
       collectionName: "collection",
       path: "",
     });
@@ -2917,8 +2917,8 @@ describe("parseVirtualPath", () => {
     });
   });
 
-  test("parses qmd:// with extra slashes (normalizes first)", () => {
-    expect(parseVirtualPath("qmd:////collection/path.md")).toEqual({
+  test("parses lotl:// with extra slashes (normalizes first)", () => {
+    expect(parseVirtualPath("lotl:////collection/path.md")).toEqual({
       collectionName: "collection",
       path: "path.md",
     });
@@ -3029,7 +3029,7 @@ describe("isDocid", () => {
   test("rejects file paths", () => {
     expect(isDocid("/path/to/file.md")).toBe(false);
     expect(isDocid("path/to/file.md")).toBe(false);
-    expect(isDocid("qmd://collection/file.md")).toBe(false);
+    expect(isDocid("lotl://collection/file.md")).toBe(false);
   });
 
   test("rejects paths that look like hex with extensions", () => {

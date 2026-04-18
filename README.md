@@ -1,41 +1,45 @@
-# QMD — Search + Memory for AI Agents
+# Lotl 🦎 — Living-off-the-Land Memory for AI Agents
 
-A unified search engine and memory system for AI agents. Index your documents, store conversation memories, track knowledge — all in one SQLite database.
+> *"I'll build my own memory framework — with FTS5 and sqlite-vec."*
+
+A unified search + memory + knowledge-graph system that runs on what's already on your machine. No new infra, no LLM required, no cloud dependency. Everything lives in one SQLite database.
 
 **Document search:** BM25 + vector + RRF fusion + LLM reranking across markdown, code, and notes.
-**Agent memory:** Store, recall, forget, and extract memories with automatic deduplication and decay.
-**Knowledge graph:** Temporal entity-relationship triples — "what was true when?"
+**Agent memory:** Store, recall, forget, and extract memories with automatic deduplication and Weibull decay.
+**Knowledge graph:** Temporal subject-predicate-object triples — "what was true when?"
 
-Runs against cloud APIs (ZeroEntropy, SiliconFlow, Nebius, Gemini, OpenAI) by default — no cmake, no GPU required. Set `QMD_EMBED_BACKEND=transformers` to opt in to local ONNX embeddings via `@huggingface/transformers`.
+**Lotl** = *Living-off-the-Land* (the cybersecurity term for "use what's already there to avoid new infrastructure"). Repurposed here: FTS5 + sqlite-vec + local ONNX embeddings via `@huggingface/transformers`. Cloud APIs (ZeroEntropy, SiliconFlow, Nebius, Gemini, OpenAI) are opt-in, not required.
+
+> Evolved from a fork of [tobi/qmd](https://github.com/tobilu/qmd) — see the origin story below. CLI binary `lotl` is the canonical name; `qmd` stays as an alias for existing installs. Env vars are `LOTL_*`; `qmd://` virtual-path callers should migrate to `lotl://`.
 
 ```sh
-npm install -g @tanarchy/qmd
+npm install -g @tanarchy/lotl
 ```
 
 ## Quick Start
 
 ```sh
 # Index your documents
-qmd collection add ~/notes --name notes
-qmd collection add ~/work/docs --name docs
-qmd context add qmd://notes/ "Personal notes and ideas"
-qmd context add qmd://docs/ "Work documentation"
-qmd embed
+lotl collection add ~/notes --name notes
+lotl collection add ~/work/docs --name docs
+lotl context add lotl://notes/ "Personal notes and ideas"
+lotl context add lotl://docs/ "Work documentation"
+lotl embed
 
 # Search
-qmd search "project timeline"           # BM25 keyword search
-qmd vsearch "how to deploy"             # Vector semantic search
-qmd query "quarterly planning process"  # Hybrid + reranking (best quality)
+lotl search "project timeline"           # BM25 keyword search
+lotl vsearch "how to deploy"             # Vector semantic search
+lotl query "quarterly planning process"  # Hybrid + reranking (best quality)
 
 # Get documents
-qmd get "docs/api-reference.md"
-qmd get "#abc123"                        # by docid
-qmd multi-get "journals/2025-05*.md"     # by glob pattern
+lotl get "docs/api-reference.md"
+lotl get "#abc123"                        # by docid
+lotl multi-get "journals/2025-05*.md"     # by glob pattern
 ```
 
 ## MCP Server
 
-QMD exposes all functionality via MCP (Model Context Protocol). Works with Claude Desktop, Claude Code, Cursor, OpenClaw, and any MCP client.
+Lotl exposes all functionality via MCP (Model Context Protocol). Works with Claude Desktop, Claude Code, Cursor, OpenClaw, and any MCP client.
 
 ### Document tools
 | Tool | Description |
@@ -79,7 +83,7 @@ QMD exposes all functionality via MCP (Model Context Protocol). Works with Claud
 ```json
 {
   "mcpServers": {
-    "qmd": { "command": "qmd", "args": ["mcp"] }
+    "lotl": { "command": "lotl", "args": ["mcp"] }
   }
 }
 ```
@@ -88,65 +92,81 @@ QMD exposes all functionality via MCP (Model Context Protocol). Works with Claud
 ```json
 {
   "mcpServers": {
-    "qmd": { "command": "qmd", "args": ["mcp"] }
+    "lotl": { "command": "lotl", "args": ["mcp"] }
   }
 }
 ```
 
 **HTTP transport** (shared daemon, models stay loaded):
 ```sh
-qmd mcp --http --daemon           # start on localhost:8181
-qmd mcp stop                      # stop
+lotl mcp --http --daemon           # start on localhost:8181
+lotl mcp stop                      # stop
 ```
 
 ## ⭐ Recommended local config — beats MemPalace + agentmemory on LongMemEval
 
-Four lines in `~/.config/qmd/.env`:
+Four lines in `~/.config/lotl/.env`:
 
 ```sh
-QMD_EMBED_BACKEND=transformers
-QMD_TRANSFORMERS_MODEL=mixedbread-ai/mxbai-embed-xsmall-v1
-QMD_TRANSFORMERS_DTYPE=q8
-QMD_VEC_MIN_SIM=0.1
+LOTL_EMBED_BACKEND=transformers
+LOTL_TRANSFORMERS_MODEL=mixedbread-ai/mxbai-embed-xsmall-v1
+LOTL_TRANSFORMERS_DTYPE=q8
+LOTL_VEC_MIN_SIM=0.1
 ```
 
-**Benchmark (2026-04-17, LongMemEval `_s` n=500, session-id retrieval, RAW recall):**
+**Benchmarks** (full reproduction recipes + per-config metrics in [`evaluate/SNAPSHOTS.md`](evaluate/SNAPSHOTS.md)).
 
-| System | recall_any@5 | R@5 (fractional) | MRR | NDCG@10 | Wall |
-|---|---|---|---|---|---|
-| **qmd (this config, no rerank)** | **98.4%** ✅ | **93.7%** | **0.917** | **0.913** | ~15 min |
-| qmd + cross-encoder rerank (opt-in) | 98.0% | 93.8% | 0.911 | 0.912 | ~17 min |
-| agentmemory hybrid (live reproduction) | 95.2% | — | 0.882 | 0.879 | ~10 min |
-| MemPalace raw (live reproduction) | 96.6% | — | — | — | 12m59s |
+**LongMemEval `_s` n=500** (session-id retrieval, RAW recall) — winner is mxbai-xs q8:
 
-**Preference rAny5 lifted 93 → 97%** via zero-LLM keyword expansion (shipped 2026-04-17).
-See [`docs/notes/metrics.md`](docs/notes/metrics.md) for `recall_any@K` (binary, what agentmemory/mem0/MemPalace publish) vs `R@K` (fractional, LongMemEval paper) distinction.
+| System | recall_any@5 | R@5 (fractional) | MRR | NDCG@10 | Pref MRR | Wall |
+|---|---|---|---|---|---|---|
+| **lotl / mxbai-xs q8** (default) | **98.4%** | **93.7%** | 0.917 | 0.913 | **0.745** | 26 min |
+| lotl / UAE-Large 1024d | 98.0% | 93.8% | **0.921** | **0.919** | 0.714 | 145 min |
+| lotl / gte-small 384d | 97.8% | 93.2% | 0.919 | 0.914 | 0.703 | 26 min |
+| lotl / bge-large 1024d | 98.0% | 93.6% | 0.917 | 0.917 | 0.680 | 147 min |
+| lotl / jina-v5-nano 768d | 95.4% | 89.6% | 0.860 | 0.849 | 0.533 | ~5 h |
+| agentmemory hybrid | 95.2% | — | 0.882 | 0.879 | — | — |
+| MemPalace raw | 96.6% | — | — | — | — | — |
 
-**LLM-judge QA accuracy (2026-04-17, `_s` n=100, mxbai-xs retrieval + gpt-4o answerer + gpt-4o judge):**
+n=500 sweep across 5 candidates concluded mxbai-xs stays default — challengers cost 5-15× params for tied or worse retrieval, all regressed on preference MRR.
 
-| Metric | qmd | LongMemEval paper (GPT-4 baseline) |
-|---|---|---|
-| Judge correctness | **64.0%** | 60–65% published |
-| rAny@5 | 100.0% | — |
+**LongMemEval `_s` n=500 with LLM judge** (Phase 7):
 
-Eval harness supports `--llm poe --judge poe --judge-model gpt-4o` for paper-comparable numbers. See [`docs/EVAL.md`](docs/EVAL.md) for the full flag surface and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the bug hunt that led here (top-5 × 6000-char memory cap was the critical fix — `QMD_ANSWER_MAX_CHARS` default raised from 800 to 6000).
+| Generator | Judge | Judge-Acc | n | Notes |
+|---|---|---|---|---|
+| gpt-4o (Phase 7.1b, n=100) | gpt-4o | **64.0%** | 100 | Matches LongMemEval paper baseline |
+| Poe gpt-4o-mini | Poe gpt-4o | 47.0% | 134 | Quota hit at q55, partial result |
+| Gemini-2.5-flash | Gemini-2.5-flash | 29.7% | 499 | Generator-bound — Gemini-flash hedges |
+
+**LoCoMo (10 convs, n=1986) with LLM judge** — generator + judge = gemini-2.5-flash:
+
+| Metric | Value |
+|---|---|
+| R@5 | 67.6% |
+| MRR | 0.593 |
+| F1 | 66.2% |
+| **Judge-Acc** | **81.4%** |
+
+vs published LoCoMo: Mem0 91.6% (GPT-4 class), Hindsight 89.6% (top backbone). With a stronger generator (gpt-4o, gemini-2.5-pro), Lotl's 81.4% is expected to climb into the 85-90% range on the same retrieval layer.
+
+See [`devnotes/metrics/metric-discipline.md`](devnotes/metrics/metric-discipline.md) for `recall_any@K` (binary, agentmemory/mem0/MemPalace style) vs `R@K` (fractional, LongMemEval paper) distinction. Eval harness CLI flags + reproduction recipes in [`evaluate/longmemeval/README.md`](evaluate/longmemeval/README.md) and [`evaluate/locomo/README.md`](evaluate/locomo/README.md). Honest-harness rationale (top-k=10 not the MemPalace top-k=50 cheat) in [`evaluate/locomo/HYBRID_HARNESS.md`](evaluate/locomo/HYBRID_HARNESS.md).
 
 **What these four lines do:**
 - **Local ONNX embed** via `@huggingface/transformers` — no cmake, no GPU, ~50 MB download on first use.
 - **mxbai-xs q8** — 384-dim quantized encoder; 2-3s per query on CPU.
-- **`QMD_VEC_MIN_SIM=0.1`** — overrides the adaptive cosine acceptance floor (tight-cluster q8 models need this; default floor prunes too aggressively).
+- **`LOTL_VEC_MIN_SIM=0.1`** — overrides the adaptive cosine acceptance floor (tight-cluster q8 models need this; default floor prunes too aggressively).
 
 **Under the hood (all shipped, no config needed):**
 - Rank-based **weighted RRF fusion** (0.9 BM25 / 0.1 vec); proper rank normalization, not additive scores.
 - **Keyword expansion** — zero-LLM sub-query fanout (default on).
 - **Synonym expansion** — curated preference/temporal dict (default on).
-- **Cross-encoder rerank** available via `QMD_MEMORY_RERANK=on` (optional, +1-2pp MRR).
+- **Cross-encoder rerank** available via `LOTL_MEMORY_RERANK=on` (optional, +1-2pp MRR).
 
 All tunables hardcoded in `src/store/constants.ts` (validated at n=500 LME). See `docs/ROADMAP.md` "2026-04-17" for full sweep history.
 
 ## Cloud Configuration
 
-Copy `.env.example` to `~/.config/qmd/.env`. Loaded automatically.
+Copy `.env.example` to `~/.config/lotl/.env`. Loaded automatically.
 
 Each operation (embed, rerank, query expansion) is configured independently:
 
@@ -166,35 +186,35 @@ QMD_{OP}_MODEL=      # model name
 ### Example: ZeroEntropy embed + rerank
 
 ```sh
-QMD_EMBED_PROVIDER=zeroentropy
-QMD_EMBED_API_KEY=ze_your-key
-QMD_EMBED_MODEL=zembed-1
-QMD_RERANK_PROVIDER=zeroentropy
-QMD_RERANK_API_KEY=ze_your-key
-QMD_RERANK_MODEL=zerank-2
-QMD_RERANK_MODE=rerank
-QMD_QUERY_EXPANSION_PROVIDER=api
-QMD_QUERY_EXPANSION_API_KEY=nebius-key
-QMD_QUERY_EXPANSION_URL=https://api.studio.nebius.ai/v1
-QMD_QUERY_EXPANSION_MODEL=meta-llama/Meta-Llama-3.1-8B-Instruct
+LOTL_EMBED_PROVIDER=zeroentropy
+LOTL_EMBED_API_KEY=ze_your-key
+LOTL_EMBED_MODEL=zembed-1
+LOTL_RERANK_PROVIDER=zeroentropy
+LOTL_RERANK_API_KEY=ze_your-key
+LOTL_RERANK_MODEL=zerank-2
+LOTL_RERANK_MODE=rerank
+LOTL_QUERY_EXPANSION_PROVIDER=api
+LOTL_QUERY_EXPANSION_API_KEY=nebius-key
+LOTL_QUERY_EXPANSION_URL=https://api.studio.nebius.ai/v1
+LOTL_QUERY_EXPANSION_MODEL=meta-llama/Meta-Llama-3.1-8B-Instruct
 ```
 
 ### Example: SiliconFlow all three operations
 
 ```sh
-QMD_EMBED_PROVIDER=siliconflow
-QMD_EMBED_API_KEY=sk-your-key
-QMD_EMBED_MODEL=Qwen/Qwen3-Embedding-8B
-QMD_RERANK_PROVIDER=siliconflow
-QMD_RERANK_API_KEY=sk-your-key
-QMD_RERANK_MODEL=BAAI/bge-reranker-v2-m3
-QMD_RERANK_MODE=rerank
-QMD_QUERY_EXPANSION_PROVIDER=siliconflow
-QMD_QUERY_EXPANSION_API_KEY=sk-your-key
-QMD_QUERY_EXPANSION_MODEL=zai-org/GLM-4.5-Air
+LOTL_EMBED_PROVIDER=siliconflow
+LOTL_EMBED_API_KEY=sk-your-key
+LOTL_EMBED_MODEL=Qwen/Qwen3-Embedding-8B
+LOTL_RERANK_PROVIDER=siliconflow
+LOTL_RERANK_API_KEY=sk-your-key
+LOTL_RERANK_MODEL=BAAI/bge-reranker-v2-m3
+LOTL_RERANK_MODE=rerank
+LOTL_QUERY_EXPANSION_PROVIDER=siliconflow
+LOTL_QUERY_EXPANSION_API_KEY=sk-your-key
+LOTL_QUERY_EXPANSION_MODEL=zai-org/GLM-4.5-Air
 ```
 
-Embed can also run locally via `QMD_EMBED_BACKEND=transformers` (ONNX, opt-in). Rerank and query expansion are remote-only.
+Embed can also run locally via `LOTL_EMBED_BACKEND=transformers` (ONNX, opt-in). Rerank and query expansion are remote-only.
 
 ## Memory System
 
@@ -300,49 +320,49 @@ All scoring parameters are env-configurable. See `.env.example`.
 
 ```sh
 # Collections
-qmd collection add <path> --name <name>
-qmd collection list
-qmd collection remove <name>
-qmd collection rename <old> <new>
-qmd ls [collection[/path]]
+lotl collection add <path> --name <name>
+lotl collection list
+lotl collection remove <name>
+lotl collection rename <old> <new>
+lotl ls [collection[/path]]
 
 # Context
-qmd context add [path] "description"
-qmd context list
-qmd context check
-qmd context rm <path>
+lotl context add [path] "description"
+lotl context list
+lotl context check
+lotl context rm <path>
 
 # Search
-qmd search <query>              # BM25 keyword search
-qmd vsearch <query>             # Vector similarity search
-qmd query <query>               # Hybrid + reranking (best quality)
+lotl search <query>              # BM25 keyword search
+lotl vsearch <query>             # Vector similarity search
+lotl query <query>               # Hybrid + reranking (best quality)
 
 # Retrieval
-qmd get <file>                  # by path or docid (#abc123)
-qmd multi-get <pattern>         # by glob or comma-separated list
+lotl get <file>                  # by path or docid (#abc123)
+lotl multi-get <pattern>         # by glob or comma-separated list
 
 # Indexing
-qmd embed                       # generate vector embeddings
-qmd embed --force               # re-embed everything
-qmd update                      # re-index all collections
-qmd sync                        # update + embed in one command
+lotl embed                       # generate vector embeddings
+lotl embed --force               # re-embed everything
+lotl update                      # re-index all collections
+lotl sync                        # update + embed in one command
 
 # Maintenance
-qmd status                      # index status + remote providers
-qmd cleanup                     # clear cache + orphans + vacuum
-qmd vacuum                      # reclaim DB space
+lotl status                      # index status + remote providers
+lotl cleanup                     # clear cache + orphans + vacuum
+lotl vacuum                      # reclaim DB space
 
 # MCP
-qmd mcp                         # stdio transport
-qmd mcp --http [--port N]       # HTTP transport
-qmd mcp --http --daemon         # background daemon
-qmd mcp stop                    # stop daemon
+lotl mcp                         # stdio transport
+lotl mcp --http [--port N]       # HTTP transport
+lotl mcp --http --daemon         # background daemon
+lotl mcp stop                    # stop daemon
 ```
 
 ## SDK Usage
 
 ```typescript
-import { createStore } from '@tanarchy/qmd'
+import { createStore } from '@tanarchy/lotl'
 
 const store = await createStore({
   dbPath: './my-index.sqlite',
@@ -360,7 +380,7 @@ await store.close()
 ## Development
 
 ```sh
-npx tsx src/cli/qmd.ts <command>   # Run CLI from source (dev mode)
+npx tsx src/cli/lotl.ts <command>   # Run CLI from source (dev mode)
 npm link                            # Install globally as 'qmd'
 npx vitest run test/                # Run tests
 npm run build                       # Compile TypeScript to dist/
@@ -371,7 +391,7 @@ Node.js ≥22 required. Bun support was dropped — all code is Node-only.
 
 ## Benchmarks
 
-QMD ships a **local-first, zero-cost benchmark loop** that matches MemPalace's setup exactly: local ONNX embeddings via `fastembed`, no API keys, deterministic. The cost discipline is "iterate locally with `--no-llm`, validate answer quality with one paid Gemini run at the end." A full `longmemeval_s_cleaned` n=500 retrieval pass costs **$0** and runs in ~25 min on a laptop.
+Lotl ships a **local-first, zero-cost benchmark loop** that matches MemPalace's setup exactly: local ONNX embeddings via `fastembed`, no API keys, deterministic. The cost discipline is "iterate locally with `--no-llm`, validate answer quality with one paid Gemini run at the end." A full `longmemeval_s_cleaned` n=500 retrieval pass costs **$0** and runs in ~25 min on a laptop.
 
 **Primary metrics: R@5 / R@10 (token-overlap recall), MRR (rank quality), F1 / EM / SH (answer quality).** These actually discriminate pipeline changes. MemPalace-style session recall (SR@K) and dialog recall (DR@K) are reported as secondary reference rows; they're ceilinged or near-ceilinged on these datasets and should be taken with a grain of salt (see caveats below).
 
@@ -380,14 +400,14 @@ QMD ships a **local-first, zero-cost benchmark loop** that matches MemPalace's s
 | Pipeline | n | R@5 | R@10 | F1 | EM | Cost | Time |
 |---|---|---|---|---|---|---|---|
 | **MemPalace raw + fastembed** (their published run) | 500 | **96.6%** | 98.2% | — | — | $0 | 12.5m |
-| **QMD raw + fastembed + scope-partitioned vec0** | 500 | **93.2%** | **95.2%** | — | — | $0 | 24m |
-| QMD raw + fastembed + adaptive cosine (n=100 first slice) | 100 | 97.0% | 97.0% | 64.9% | 48.0% | $0 | 5m |
+| **Lotl raw + fastembed + scope-partitioned vec0** | 500 | **93.2%** | **95.2%** | — | — | $0 | 24m |
+| Lotl raw + fastembed + adaptive cosine (n=100 first slice) | 100 | 97.0% | 97.0% | 64.9% | 48.0% | $0 | 5m |
 
-Same embed model (`all-MiniLM-L6-v2`, 384-dim ONNX). Same dataset. Zero API keys for retrieval. Deterministic. QMD additionally measures end-to-end answer quality (F1/EM/SH) that MemPalace's benchmark doesn't produce — their 96.6% is retrieval-only.
+Same embed model (`all-MiniLM-L6-v2`, 384-dim ONNX). Same dataset. Zero API keys for retrieval. Deterministic. Lotl additionally measures end-to-end answer quality (F1/EM/SH) that MemPalace's benchmark doesn't produce — their 96.6% is retrieval-only.
 
 **Per-category performance** on full n=500 (pre-fix baseline — illustrates how diagnostic the per-category split is):
 
-| Category | n | QMD R@5 | MemPalace R@5 | Δ |
+| Category | n | Lotl R@5 | MemPalace R@5 | Δ |
 |---|---|---|---|---|
 | single-session-user | 70 | 99% | 97% | +2 ✓ |
 | single-session-assistant | 56 | 98% | 96% | +2 ✓ |
@@ -401,7 +421,7 @@ The 7-pp overall gap was concentrated in the two largest categories (multi-sessi
 Two fixes shipped this session:
 
 1. **Adaptive cosine threshold** (`pickVectorMatches`, 7 unit tests) — replaces the fixed 0.3 floor with `max(0.05, top1 × 0.5)`. Quality fix for both production (open vaults) and benchmarks (focused haystacks). Documented in `docs/EVAL.md`.
-2. **K-multiplier bump** (`QMD_VEC_K_MULTIPLIER=20`) — workaround that fetches K=1000 vec hits instead of K=150, so the post-vector scope filter has enough candidates per scope to fill top-50. Architecturally proper fix (a `scope` partition key on `memories_vec`) is queued as a separate schema-migration commit.
+2. **K-multiplier bump** (`LOTL_VEC_K_MULTIPLIER=20`) — workaround that fetches K=1000 vec hits instead of K=150, so the post-vector scope filter has enough candidates per scope to fill top-50. Architecturally proper fix (a `scope` partition key on `memories_vec`) is queued as a separate schema-migration commit.
 
 n=500 rerun with both fixes is in flight at session-close.
 
@@ -409,8 +429,8 @@ n=500 rerun with both fixes is in flight at session-close.
 
 | Pipeline | R@5 | R@10 | F1 | EM | SR@5 (MP-compat) |
 |---|---|---|---|---|---|
-| QMD v15.1 | **87.0%** | **93.0%** | **50.6%** | 27.5% | 100% ceiling |
-| QMD v16.1 (reflect augment) | 84.5% | 91.5% | 49.4% | 27.0% | 100% |
+| Lotl v15.1 | **87.0%** | **93.0%** | **50.6%** | 27.5% | 100% ceiling |
+| Lotl v16.1 (reflect augment) | 84.5% | 91.5% | 49.4% | 27.0% | 100% |
 | **MemPalace (own benchmark)** | **100%** | **100%** | — | — | 100% ceiling |
 
 Oracle is pre-filtered to relevant sessions — SR@K hits 100% by construction for any retriever. Use the `_s_cleaned` row above for a meaningful comparison.
@@ -419,16 +439,16 @@ Oracle is pre-filtered to relevant sessions — SR@K hits 100% by construction f
 
 | Pipeline | R@5 | R@10 | F1 | EM | DR@50 (MP-compat) |
 |---|---|---|---|---|---|
-| QMD v15-final | — | — | 60.9% | 38.6% | — |
-| QMD v15.1 | 50.0% | 60.9% | **58.6%** | 36.2% | **74.9%** |
-| QMD v16 (diversity only) | **50.9%** | **60.9%** | 58.9% | 37.2% | 75.7% |
+| Lotl v15-final | — | — | 60.9% | 38.6% | — |
+| Lotl v15.1 | 50.0% | 60.9% | **58.6%** | 36.2% | **74.9%** |
+| Lotl v16 (diversity only) | **50.9%** | **60.9%** | 58.9% | 37.2% | 75.7% |
 | **MemPalace (own benchmark)** | — | — | — | — | **74.8%** |
 
 Single-conv breakdowns and v16.1 (reflect augment) detail live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 **What this says:**
 
-- On the one metric where both sides cleanly discriminate — **LoCoMo dialog-level DR@50** — QMD v15.1 matches MemPalace's own benchmark to within 0.1pp (74.9 vs 74.8). Parity on their metric with their own pipeline.
+- On the one metric where both sides cleanly discriminate — **LoCoMo dialog-level DR@50** — Lotl v15.1 matches MemPalace's own benchmark to within 0.1pp (74.9 vs 74.8). Parity on their metric with their own pipeline.
 - On **LongMemEval oracle**, MemPalace's own benchmark scores **Recall@1 = 100%** because the oracle dataset is pre-filtered to relevant sessions — any retriever that returns anything trivially hits 100%. It's a ceiling measurement, not a comparison. Their published 96.6% headline is on the `longmemeval_s_cleaned` dataset (the fully unfiltered haystack), not oracle. Comparing our numbers to that requires running `_s` — a future benchmark.
 
 **Caveats on the MP-compat metrics** (this is why we demote them to reference rows):
@@ -448,9 +468,9 @@ curl -L -o evaluate/longmemeval/longmemeval_s_cleaned.json \
   https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json
 
 # Run the same recipe MemPalace uses, on the same dataset
-QMD_EMBED_BACKEND=fastembed \
-QMD_RECALL_RAW=on \
-QMD_INGEST_EXTRACTION=off QMD_INGEST_SYNTHESIS=off QMD_INGEST_PER_TURN=off \
+LOTL_EMBED_BACKEND=fastembed \
+LOTL_RECALL_RAW=on \
+LOTL_INGEST_EXTRACTION=off LOTL_INGEST_SYNTHESIS=off LOTL_INGEST_PER_TURN=off \
   npx tsx evaluate/longmemeval/eval.mts --ds s --limit 500 --no-llm \
   --workers 4 --tag local-baseline
 ```
@@ -472,7 +492,7 @@ Full version history, technique tables, lessons learned, and SOTA targets in [`d
 
 ## Standing on the Shoulders of Giants
 
-QMD is a pile of good ideas from other projects, glued together with one
+Lotl is a pile of good ideas from other projects, glued together with one
 SQLite database and a lot of benchmarking. Everything below is shipped and
 verified in code.
 
@@ -542,7 +562,7 @@ shape.
 - **Importance log-modulation** in scoring — the v12 formula
   `effective = cos_sim × (1 + α·log(importance))`, α≈0.15
 - **MMR / dialog diversity** for top-K reshuffling
-  (`applyDialogDiversity()` + `QMD_MEMORY_MMR=session`)
+  (`applyDialogDiversity()` + `LOTL_MEMORY_MMR=session`)
 - **LRU-K-flavored eviction** with type weighting
   (`runEvictionPass()` in `src/memory/decay.ts:135`)
 - **Importance components** that informed our category + length
@@ -587,20 +607,22 @@ with `category=reflection`. Wired into the OpenClaw `session_end` hook.
 ### Tooling & infrastructure
 
 - [**better-sqlite3**](https://github.com/WiseLibs/better-sqlite3) —
-  synchronous SQLite bindings. The reason QMD can stay zero-async at
+  synchronous SQLite bindings. The reason Lotl can stay zero-async at
   the storage layer.
 - [**sqlite-vec**](https://github.com/asg017/sqlite-vec) — Alex Garcia's
   vector extension. Cosine, partition keys, the whole vector pipeline.
 - [**@huggingface/transformers**](https://github.com/huggingface/transformers.js) —
   the rebranded `@xenova/transformers`. Local ONNX embed backend
-  (default: Snowflake `arctic-embed-s` q8 after the 2026-04-13/14
-  small-class A/B).
+  (default: `mixedbread-ai/mxbai-embed-xsmall-v1` q8, confirmed at
+  n=500 LongMemEval after the Phase 11.8 sweep on 2026-04-18; Snowflake
+  arctic-embed-s was briefly a candidate but lost to mxbai-xs after
+  the metric audit).
 - [**tree-sitter**](https://github.com/tree-sitter/tree-sitter) +
   language grammars — AST-aware code chunking for TS/JS/Python/Go/Rust.
 - [**Model Context Protocol**](https://github.com/modelcontextprotocol/specification) —
-  the MCP transport for the `qmd mcp` server.
+  the MCP transport for the `lotl mcp` server.
 - [**OpenClaw**](https://docs.claude.com/en/docs/claude-code/openclaw) —
-  the agent integration framework whose hook system QMD plugs into.
+  the agent integration framework whose hook system Lotl plugs into.
 
 ### Benchmarks we honor
 
@@ -619,14 +641,14 @@ with `category=reflection`. Wired into the OpenClaw `session_end` hook.
 
 - **One database for everything.** Documents, memories, knowledge graph,
   vectors, FTS5, decay scores, embedding cache — all in a single
-  `~/.cache/qmd/index.sqlite`. No ChromaDB, no LanceDB, no separate
+  `~/.cache/lotl/index.sqlite`. No ChromaDB, no LanceDB, no separate
   vector store, no Redis.
 - **Zero-LLM-first.** Every search-quality improvement that doesn't need
   an API call ships before any that does. LLM rerank, query expansion,
   and reflection synthesis are all opt-in enhancements.
 - **Remote-first dispatch with optional local embed.** When cloud
   providers are configured, they take priority. Local embed via
-  `QMD_EMBED_BACKEND=transformers` is opt-in — no cmake, no GPU
+  `LOTL_EMBED_BACKEND=transformers` is opt-in — no cmake, no GPU
   required for the default install.
 - **Scope = partition key.** `memories_vec` ships with `scope TEXT
   PARTITION KEY` so vector KNN walks only the current scope's slice of
@@ -637,13 +659,120 @@ with `category=reflection`. Wired into the OpenClaw `session_end` hook.
   `minKeep=5` safety net. Survives both open-vault and focused-
   haystack regimes.
 - **Multi-query expansion (zero-LLM).** Two variants:
-  `QMD_MEMORY_EXPAND=entities` (proper nouns) and
-  `QMD_MEMORY_EXPAND=keywords` (top-N keyword groups). The keyword
+  `LOTL_MEMORY_EXPAND=entities` (proper nouns) and
+  `LOTL_MEMORY_EXPAND=keywords` (top-N keyword groups). The keyword
   variant gave +1pp multi-session R@5 on LongMemEval n=500 in our
   2026-04-13/14 night cycle.
 - **Compact local provider footprint.** No `node-llama-cpp`, no `cmake`
   builds, no fastembed enum. Single ONNX backend that accepts any HF
   repo via env vars.
+
+---
+
+## From v0 to v1.0 — the origin story + metrics journey
+
+**How Lotl started.** Two weeks before this release (my first fork commit is `2026-04-04`), I was running [tobi/qmd](https://github.com/tobilu/qmd) (a local BM25+vector markdown search CLI) alongside [memory-lancedb-pro](https://github.com/CortexReach/memory-lancedb-pro) for agent memory — and the mismatch between the two databases constantly bit me. Two separate stores, two separate ingest paths, two different query APIs, syncing by hand. I forked qmd because it was the easiest codebase to get running and modify, and set out to merge the memory layer into the same SQLite file.
+
+That "just get them to sync cleanly" goal turned into a rabbit hole. The first attempts at a proper memory framework on top of qmd **didn't work** — recall was bad, decay was wrong, extraction produced garbage. That failure sent me into the research literature (LongMemEval, LoCoMo, Mem0, Hindsight, MemPalace, MemGPT, GraphRAG), and each paper changed a piece of the design. Every version below is my fork — **not upstream tobi/qmd** — evolving the memory layer while keeping the hybrid-search core qmd was already good at.
+
+Two weeks later (2026-04-04 → 2026-04-18), the result was unrecognizable from the starting point. Hence the rename to Lotl.
+
+**Why rename instead of staying `qmd`.** Tobi's `qmd` is a carefully-designed, focused search CLI — small, deliberate, well-scoped. What I built is the opposite: a vibe-coded rabbit hole, shipped fast, that ended up as a memory framework with its own opinions. Calling my fork `qmd` would have (a) risked confusing users about who authored what, and (b) attached my experimental, research-driven work to tobi's proper project in a way that doesn't honor the difference. Renaming to **Lotl** makes the boundary clean: tobi keeps `qmd` as the tight search-CLI he designed; this fork gets its own identity for its own trade-offs. Not stealing, not competing — just not squatting on his name.
+
+### Version history (all on my fork, after branching from tobi/qmd)
+
+| Version | Date | Configuration | rAny@5 | MRR | pref MRR | What changed |
+|---|---|---|---|---|---|---|
+| tobi/qmd upstream | 2025-12-07 onwards | BM25 + vector + RRF + rerank CLI, sqlite-vec, MCP server, no memory layer | — | — | — | Tobi Lutke's original. My fork branches off this. |
+| fork v0 (cloud + rebrand) | 2026-04-04 → 04-08 | + ZeroEntropy cloud LLM config, per-op remote dispatch, `@tanarchy/qmd` rebrand | — | — | — | First David commits. Still mostly tobi's shape + minor cloud plumbing |
+| fork v1 | 2026-04-09 → 04-12 | FTS AND, no memory vectors — first naive memory attempt | — | — | — | Baseline LoCoMo F1=8%. Tried to add memory by intuition; didn't work |
+| fork v2 | 2026-04-12 | FTS OR + stopwords + sqlite-vec for memory | — | — | — | F1=22.5%, EM=6%. First usable recall |
+| fork v3 | 2026-04-12 | + ZeroEntropy rerank + date-reasoning prompt | — | — | — | F1=27.7% |
+| fork v4–v6 | 2026-04-13 | + query expansion + KG triples + adversarial-fix | — | — | — | F1=49–51%, EM=30%. Mem0 paper changed extraction |
+| fork v7–v8 | 2026-04-13 | + decay + strong-signal, then rip KG-in-recall (regressed R@5) | — | — | — | F1=53%, then R@5=38.7%/F1=49.5% after KG-rip |
+| fork v10 | 2026-04-11 | Mem0-style LLM fact extraction + KG auto-pop | **59.0%**¹ | — | — | conv-30 F1=54.3%, EM=34.3% |
+| fork v11–v16 | 2026-04-13 → 04-17 | RRF pipeline + keyword expansion + synonym expansion | 96.6 → 98.4% | 0.88 → 0.917 | 0.72 → 0.745 | LongMemEval era. Phase 1–7 sweeps |
+| fork v17 (pre-rename) | 2026-04-17 | n=500 validated best-config | 98.4% | 0.917 | 0.745 | Last version under the `qmd` name |
+| **Lotl v1.0** | 2026-04-18 | n=500 sweep of 5 embedders, honest-eval harness, LoCoMo Judge-Acc | **98.4%** | **0.917** | **0.745** | mxbai-xs q8 confirmed as permanent default. Renamed |
+
+¹ LoCoMo conv-30, 105Q sample
+
+**LoCoMo end-to-end at v1.0** (10 convs, 1986 QA, gemini-2.5-flash gen+judge): **81.4% Judge-Acc**. Competitive with published LoCoMo claims (Mem0 91.6% on GPT-4-class, Hindsight 89.6%/83.6%). See [`evaluate/SNAPSHOTS.md`](evaluate/SNAPSHOTS.md) for reproduction recipes.
+
+## What we learned about `R@5` — a metric-collision story
+
+One sentence: **most memory-framework "R@5" claims are not apples-to-apples**.
+
+Three metrics all get called "R@5":
+
+| Name | Definition | Who publishes this |
+|---|---|---|
+| `recall_any@5` | 1 if ANY gold session appears in top-5, else 0 | agentmemory, Mem0, MemPalace |
+| `R@5` (fractional) | `(gold sessions in top-5) / (total gold sessions)` | LongMemEval paper (ICLR 2025) |
+| `session_recall@5` ("sr5") | Set-membership on unique session IDs | our original metric pre-audit |
+
+For a question with 3 gold sessions where top-5 contains 2:
+- `recall_any@5` = 1.0
+- `R@5` (fractional) = 0.667
+- `sr5` = 1.0 (same as recall_any@5 modulo duplicates)
+
+**Before the audit** we compared our `sr5` against MemPalace's `R@5` label and thought we were 7pp behind. **After the audit** we realized MemPalace's 96.6% "R@5" is actually `recall_any@5`, and ours was already 98.4% — we were *ahead*, not behind. Six hours of chasing a fake gap.
+
+Lessons that shaped Lotl's eval:
+
+1. **Always report the metric *name* AND *definition*.** `evaluate/SNAPSHOTS.md` logs both.
+2. **Report all three** when comparing — `recall_any@5` for Mem0/MemPalace parity, `R@5` (fractional) for LongMemEval paper parity, `MRR`/`NDCG@10` for ranking-quality signal.
+3. **top-k must be < max sessions per conv.** Publishing "100% recall" with `top_k=50` on conversations that have ≤32 sessions is a whole-conversation leak (MemPalace admitted this in their own BENCHMARKS.md). Lotl caps LLM context at top-k=10 (Mem0 paper default) regardless of retrieval-pool size.
+4. **Preference MRR is the metric that matters for a memory system.** rAny@5 and overall MRR can stay high while single-session-preference collapses. In our Phase 11.8 sweep, all 4 challengers (gte-small, bge-large, UAE-Large, jina-v5) tied or beat mxbai-xs on overall MRR, but *all regressed on preference MRR* — which is why mxbai-xs stays the default.
+5. **Generator-bound vs retriever-bound Judge-Acc.** Of our 500 LongMemEval questions, 86% had the correct session in top-5 — but 67.7% of those got a wrong answer from gemini-2.5-flash (it hedges instead of committing to retrieved facts). Phase 7 measured 64% Judge-Acc with gpt-4o on the same retrieval layer. Lotl's retrieval doesn't need fixing; the generator choice dominates the end-to-end score.
+
+Full audit at [`evaluate/locomo/HYBRID_HARNESS.md`](evaluate/locomo/HYBRID_HARNESS.md) and the competitor methodology table in [`evaluate/CLEANUP_PLAN.md`](evaluate/CLEANUP_PLAN.md).
+
+## Acknowledgments — papers + frameworks we learned from
+
+Lotl stands on a lot of shoulders. This list is not exhaustive and reflects what moved the needle for v1.0.
+
+### Origin
+
+- **[tobi/qmd](https://github.com/tobilu/qmd)** — the upstream project I forked in January 2026. Tobi's qmd was "Quick Markdown" — a local BM25+vector search CLI for notes, opt-in local ONNX embeddings, no memory layer. It's a clean, small codebase and that's exactly why it was the right place to start: easy to read, easy to modify, and I didn't have to fight a framework to bolt memory onto it. The BM25+vector+RRF foundation, the sqlite-vec integration, the MCP server scaffolding, and the zero-setup install story are all tobi's. Lotl would not exist without qmd to fork.
+
+### The rabbit hole
+
+- **[memory-lancedb-pro](https://github.com/CortexReach/memory-lancedb-pro)** — the agent-memory plugin I was running alongside tobi/qmd when I hit the two-database problem that started all of this. Their admission-control pattern, decay-after-ingest flow, and OpenClaw plugin shape all made it into Lotl. The original goal was literally just "make qmd and memory-lancedb-pro not feel like two separate worlds" — that goal expanded into a rewrite of the memory layer on qmd's SQLite. So: every architecture decision in `src/memory/` either adopts or deliberately diverges from memory-lancedb-pro.
+
+### The development fork (my v0)
+
+- **My own fork of qmd, 2026-04-04 → 2026-04-18.** Everything in the version table above (fork v0 onward) is my fork, not upstream tobi/qmd. Dates come from `git log`: my first commit on this tree is 2026-04-04 ("feat: add cloud LLM support with ZeroEntropy"); the Lotl v1.0 rename is 2026-04-18 — **exactly two weeks of work**. Early iterations (fork v1–v8) in that window were my own failed attempts at adding a memory framework by intuition alone. It didn't work — recall was poor, extraction produced noise, decay was wrong. That failure made me sit down and read the research literature (below). Every version from v10 onward explicitly takes technique from a specific paper or framework. The BM25+vector+RRF+rerank search pipeline stays close to tobi's original shape; the memory system, KG, decay engine, extraction, honest-eval harness, and metric discipline were written from scratch in the last six of those fourteen days. **Lotl is qmd-forked with most of the memory code written from scratch**, renamed because the result is no longer "qmd with memory" — it's a different project.
+
+### Papers
+
+- **LongMemEval** — *"Benchmarking Chat Assistants on Long-Term Interactive Memory"* (Wu et al., ICLR 2025, arXiv:2410.10813). Canonical benchmark; the `R@5` (fractional) definition used across all retrieval claims; the 6000-char per-memory cap in Phase 7 came from reading their eval harness carefully.
+- **LoCoMo** — *"Evaluating Very Long-Term Conversational Memory of LLM Agents"* (Maharana et al., Snap Research). Dataset + stemmed-F1 scoring that we still report alongside LLM-Judge.
+- **Mem0** — *"Building Production-Ready AI Agents with Scalable Long-Term Memory"* (arXiv:2504.19413). LLM conflict-resolution (ADD/UPDATE/DELETE/NONE), the "generous topic-match" judge prompt ported into Lotl's honest-harness, the fact-extraction + entity-triple combined prompt in `src/memory/extractor.ts`.
+- **Hindsight** — *"Hindsight is 20/20: Building Agent Memory that Retains, Recalls, and Reflects"* (arXiv:2512.12818). TEMPR 4-way retrieval inspired our RRF hybrid; the token-budgets-not-raw-top-k framing shaped our top-k=10 LLM-context decision.
+- **FACTS Grounding** (Google DeepMind). Benchmark that identified gemini-3.1-pro as the strongest generator for hallucination-resistant answers — directly informs the LLM recommendations in `evaluate/SNAPSHOTS.md`.
+- **MemGPT / Letta**. Two-tier recall + archival-memory pattern. Lotl's Weibull decay + three-tier promotion (peripheral → working → core) shares the same philosophical ancestry.
+- **GraphRAG** (Microsoft Research). Community-summaries approach for graph-augmented retrieval — influenced the `knowledge_*` MCP tools' subject-predicate-object design.
+- **Vannevar Bush's "As We May Think"** (Atlantic Monthly, 1945). Coined `memex` = MEMory EXtender, proto-ancestor of every personal knowledge system since. Lotl's architecture is literally what Bush described 80 years ago: associative trails through indexed records.
+
+### Frameworks
+
+- **[MemPalace](https://github.com/MemPalace/mempalace)** — Ported their zero-LLM boost patterns: keyword-overlap multiplier, quoted-phrase boost, person-name filtering/boost. We also publicly disagreed with their top-k=50 whole-conversation-leak (credit to their own `BENCHMARKS.md` for admitting it first).
+- **[memory-lancedb-pro](https://github.com/CortexReach/memory-lancedb-pro)** — Reference for OpenClaw plugin integration (hooks, config schema, install flow). Their admission-control + decay-after-ingest pattern informed `src/memory/decay.ts`.
+- **[Mastra](https://github.com/mastra-ai/mastra)** — Observational memory architecture (3-agent background compression). Their public refusal to publish LoCoMo numbers (citing the metric ambiguity we later hit ourselves) shaped our insistence on reporting *definitions* alongside scores.
+- **[Zep / Graphiti](https://github.com/getzep/graphiti)** — Three-tier subgraph pattern informed our temporal knowledge graph with `valid_from` / `valid_until` windows in `src/memory/knowledge.ts`.
+- **Tinkerclaw** — Identity model + Instant Recall 4-component score (entity_density + decision + engagement + recency). Lotl's `entityDensity` + `hasDecisionSignal` in `src/memory/extractor.ts` are direct ports (minus the engagement component, which duplicated our length heuristic).
+- **[snap-research/locomo](https://github.com/snap-research/locomo)** — Canonical LoCoMo scoring (stemmed F1, adversarial special-casing) reimplemented in `evaluate/locomo/eval.mts`.
+
+### Infrastructure
+
+- **[`@huggingface/transformers`](https://github.com/huggingface/transformers.js)** (the JS port). Every local embed + rerank path goes through this; the direct-ORT backend's tokenizer (`AutoTokenizer`) lives here.
+- **[sqlite-vec](https://github.com/asg017/sqlite-vec)** by Alex Garcia. Partition-key vector virtual table made scope-aware KNN possible in a single SQLite file.
+- **[better-sqlite3](https://github.com/WiseLibs/better-sqlite3)**. Synchronous SQLite binding; the foundation everything else sits on.
+- **[OpenClaw](https://openclaw.io/)**. Plugin SDK we integrate with via the `tanarchy-lotl` plugin manifest.
+- **[ZeroEntropy](https://zeroentropy.dev/)**, **[SiliconFlow](https://siliconflow.com/)**, **[Nebius Studio](https://studio.nebius.ai/)**. Remote embed/rerank providers that provide the production cost/quality tradeoff qmd/Lotl has always been tuned against.
+
+If you'd like an attribution added or corrected, please open an issue.
 
 ## License
 

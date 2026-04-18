@@ -2,7 +2,7 @@
  * QMD MCP Server - Model Context Protocol server for QMD
  *
  * Exposes QMD search and document retrieval as MCP tools and resources.
- * Documents are accessible via qmd:// URIs.
+ * Documents are accessible via lotl:// URIs.
  *
  * Follows MCP spec 2025-06-18 for proper response types.
  */
@@ -37,7 +37,7 @@ import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections
 
 // SDK consumers importing this module directly (without going through qmd.ts)
 // would otherwise hit the production-mode guard on getDefaultDbPath. CLI users
-// already get this via src/cli/qmd.ts:110 — calling here is a noop for them
+// already get this via src/cli/lotl.ts:110 — calling here is a noop for them
 // and a critical safety net for everyone else. Upstream tobi/qmd 9dd8a73.
 enableProductionMode();
 import { memoryStore, memoryStoreBatch, memoryRecall, memoryRecallTiered, memoryPushPack, memoryForget, memoryUpdate, memoryStats, runDecayPass, runCleanupPass, runReflectionPass, memoryReflect, extractAndStore, ensureScopePartitions, knowledgeStore, knowledgeQuery, knowledgeInvalidate, knowledgeEntities, knowledgeTimeline, knowledgeStats, MEMORY_CATEGORIES } from "../memory/index.js";
@@ -73,7 +73,7 @@ type StatusResult = {
 // =============================================================================
 
 /**
- * Encode a path for use in qmd:// URIs.
+ * Encode a path for use in lotl:// URIs.
  * Encodes special characters but preserves forward slashes for readability.
  */
 function encodeQmdPath(path: string): string {
@@ -199,7 +199,7 @@ async function buildInstructions(store: QMDStore): Promise<string> {
  */
 async function createMcpServer(store: QMDStore): Promise<McpServer> {
   const server = new McpServer(
-    { name: "qmd", version: getPackageVersion() },
+    { name: "lotl", version: getPackageVersion() },
     { instructions: await buildInstructions(store) },
   );
 
@@ -208,13 +208,13 @@ async function createMcpServer(store: QMDStore): Promise<McpServer> {
 
 
   // ---------------------------------------------------------------------------
-  // Resource: qmd://{path} - read-only access to documents by path
+  // Resource: lotl://{path} - read-only access to documents by path
   // Note: No list() - documents are discovered via search tools
   // ---------------------------------------------------------------------------
 
   server.registerResource(
     "document",
-    new ResourceTemplate("qmd://{+path}", { list: undefined }),
+    new ResourceTemplate("lotl://{+path}", { list: undefined }),
     {
       title: "QMD Document",
       description: "A markdown document from your QMD knowledge base. Use search tools to discover documents.",
@@ -441,7 +441,7 @@ Intent-aware lex (C++ performance, not sports):
         content: [{
           type: "resource",
           resource: {
-            uri: `qmd://${encodeQmdPath(result.displayPath)}`,
+            uri: `lotl://${encodeQmdPath(result.displayPath)}`,
             name: result.displayPath,
             title: result.title,
             mimeType: "text/markdown",
@@ -512,7 +512,7 @@ Intent-aware lex (C++ performance, not sports):
         content.push({
           type: "resource",
           resource: {
-            uri: `qmd://${encodeQmdPath(result.doc.displayPath)}`,
+            uri: `lotl://${encodeQmdPath(result.doc.displayPath)}`,
             name: result.doc.displayPath,
             title: result.doc.title,
             mimeType: "text/markdown",

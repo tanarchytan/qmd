@@ -15,9 +15,9 @@ import { mkdtemp, writeFile, readdir, unlink, rmdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import YAML from "yaml";
-import type { CollectionConfig } from "../src/collections";
-import { setConfigIndexName } from "../src/collections";
-import { syncConfigToDb } from "../src/store";
+import type { CollectionConfig } from "../src/collections.js";
+import { setConfigIndexName } from "../src/collections.js";
+import { syncConfigToDb } from "../src/store.js";
 
 // =============================================================================
 // Test Database Setup
@@ -209,8 +209,8 @@ import {
   DEFAULT_RERANK_MODEL,
   DEFAULT_MULTI_GET_MAX_BYTES,
   createStore,
-} from "../src/store";
-import type { RankedResult } from "../src/store";
+} from "../src/store.js";
+import type { RankedResult } from "../src/store.js";
 // Note: searchResultsToMcpCsv no longer used in MCP - using structuredContent instead
 
 // =============================================================================
@@ -225,7 +225,7 @@ describe("MCP Server", () => {
     // Set up test config directory
     const configPrefix = join(tmpdir(), `qmd-mcp-config-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     testConfigDir = await mkdtemp(configPrefix);
-    process.env.QMD_CONFIG_DIR = testConfigDir;
+    process.env.LOTL_CONFIG_DIR = testConfigDir;
 
     // Create YAML config with test collection
     const testConfig: CollectionConfig = {
@@ -265,7 +265,7 @@ describe("MCP Server", () => {
       await rmdir(testConfigDir);
     } catch {}
 
-    delete process.env.QMD_CONFIG_DIR;
+    delete process.env.LOTL_CONFIG_DIR;
   });
 
   // ===========================================================================
@@ -323,7 +323,13 @@ describe("MCP Server", () => {
   // hybridQuery (query expansion + reranking)
   // ===========================================================================
 
-  describe.skipIf(!!process.env.CI)("hybridQuery (expansion + reranking)", () => {
+  // Skip when CI (no LLM keys) OR when no query-expansion / rerank provider is configured.
+  // These tests need a live LLM; otherwise expandQuery/rerank return empty/zero and the
+  // assertions fail spuriously. Set LOTL_QUERY_EXPANSION_PROVIDER + LOTL_RERANK_PROVIDER
+  // in your local .env to opt in.
+  const hasQueryLLM = !!process.env.LOTL_QUERY_EXPANSION_PROVIDER || !!process.env.LOTL_QUERY_EXPANSION_URL;
+  const hasRerankLLM = !!process.env.LOTL_RERANK_PROVIDER || !!process.env.LOTL_RERANK_URL;
+  describe.skipIf(!!process.env.CI || !hasQueryLLM || !hasRerankLLM)("hybridQuery (expansion + reranking)", () => {
     test("expands query with typed variations", async () => {
       const expanded = await expandQuery("api documentation", DEFAULT_QUERY_MODEL, testDb);
       // Returns ExpandedQuery[] — typed expansions, original excluded
@@ -574,10 +580,10 @@ describe("MCP Server", () => {
   });
 
   // ===========================================================================
-  // Resource: qmd://{path}
+  // Resource: lotl://{path}
   // ===========================================================================
 
-  describe("qmd:// resource", () => {
+  describe("lotl:// resource", () => {
     test("lists all documents", () => {
       const docs = testDb.prepare(`
         SELECT path as display_path, title
@@ -594,7 +600,7 @@ describe("MCP Server", () => {
     test("reads document by display_path", () => {
       const path = "readme.md";
       const doc = testDb.prepare(`
-        SELECT 'qmd://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
+        SELECT 'lotl://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
         FROM documents d
         JOIN content ON content.hash = d.hash
         WHERE d.path = ? AND d.active = 1
@@ -610,7 +616,7 @@ describe("MCP Server", () => {
       const decodedPath = decodeURIComponent(encodedPath);
 
       const doc = testDb.prepare(`
-        SELECT 'qmd://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
+        SELECT 'lotl://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
         FROM documents d
         JOIN content ON content.hash = d.hash
         WHERE d.path = ? AND d.active = 1
@@ -623,7 +629,7 @@ describe("MCP Server", () => {
     test("reads document by suffix match", () => {
       const path = "meeting-2024-01.md"; // without meetings/ prefix
       let doc = testDb.prepare(`
-        SELECT 'qmd://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
+        SELECT 'lotl://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
         FROM documents d
         JOIN content ON content.hash = d.hash
         WHERE d.path = ? AND d.active = 1
@@ -631,7 +637,7 @@ describe("MCP Server", () => {
 
       if (!doc) {
         doc = testDb.prepare(`
-          SELECT 'qmd://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
+          SELECT 'lotl://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
           FROM documents d
           JOIN content ON content.hash = d.hash
           WHERE d.path LIKE ? AND d.active = 1
@@ -646,7 +652,7 @@ describe("MCP Server", () => {
     test("returns not found for missing document", () => {
       const path = "nonexistent.md";
       const doc = testDb.prepare(`
-        SELECT 'qmd://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
+        SELECT 'lotl://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
         FROM documents d
         JOIN content ON content.hash = d.hash
         WHERE d.path = ? AND d.active = 1
@@ -658,7 +664,7 @@ describe("MCP Server", () => {
     test("includes context in document body", () => {
       const path = "meetings/meeting-2024-01.md";
       const doc = testDb.prepare(`
-        SELECT 'qmd://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
+        SELECT 'lotl://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
         FROM documents d
         JOIN content ON content.hash = d.hash
         WHERE d.path = ? AND d.active = 1
@@ -725,7 +731,7 @@ describe("MCP Server", () => {
       expect(decodedPath).toBe("External Podcast/2023 April - Interview.md");
 
       const doc = testDb.prepare(`
-        SELECT 'qmd://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
+        SELECT 'lotl://' || d.collection || '/' || d.path as filepath, d.path as display_path, content.doc as body
         FROM documents d
         JOIN content ON content.hash = d.hash
         WHERE d.path = ? AND d.active = 1
@@ -835,7 +841,7 @@ describe("MCP Server", () => {
       if ("error" in meta) return;
       const body = getDocumentBody(testDb, meta) ?? "";
       const resource = {
-        uri: `qmd://${meta.displayPath}`,
+        uri: `lotl://${meta.displayPath}`,
         name: meta.displayPath,
         title: meta.title,
         mimeType: "text/markdown",
@@ -868,15 +874,15 @@ describe("MCP Server", () => {
 // HTTP Transport Tests
 // =============================================================================
 
-import { startMcpHttpServer, type HttpServerHandle } from "../src/mcp/server";
-import { enableProductionMode } from "../src/store";
+import { startMcpHttpServer, type HttpServerHandle } from "../src/mcp/server.js";
+import { enableProductionMode } from "../src/store.js";
 
 // CI gate removed 2026-04-14: original gate was added in commit 55f1646
 // (2026-03-10) with reason "Skip MCP HTTP Transport tests in CI (they
 // instantiate a real LlamaCpp)". LlamaCpp was removed in the 2026-04-13
 // cleanup. These tests no longer touch any LLM — memory_store hits FTS5
 // and SQLite, memory_recall falls back to FTS5 when no embed backend is
-// configured (CI does not set QMD_EMBED_BACKEND=transformers). Re-enabled
+// configured (CI does not set LOTL_EMBED_BACKEND=transformers). Re-enabled
 // to catch HTTP transport regressions like the bin/qmd exec-bit and
 // metadata round-trip bugs found in the AMB cross-bench smoke test.
 describe("MCP HTTP Transport", () => {
@@ -886,7 +892,7 @@ describe("MCP HTTP Transport", () => {
   let httpTestConfigDir: string;
   // Stash original env to restore after tests
   const origIndexPath = process.env.INDEX_PATH;
-  const origConfigDir = process.env.QMD_CONFIG_DIR;
+  const origConfigDir = process.env.LOTL_CONFIG_DIR;
 
   beforeAll(async () => {
     // Create isolated test database with seeded data
@@ -914,7 +920,7 @@ describe("MCP HTTP Transport", () => {
 
     // Point createStore() at our test DB
     process.env.INDEX_PATH = httpTestDbPath;
-    process.env.QMD_CONFIG_DIR = httpTestConfigDir;
+    process.env.LOTL_CONFIG_DIR = httpTestConfigDir;
 
     handle = await startMcpHttpServer(0, { quiet: true }); // OS-assigned ephemeral port
     baseUrl = `http://localhost:${handle.port}`;
@@ -926,8 +932,8 @@ describe("MCP HTTP Transport", () => {
     // Restore env
     if (origIndexPath !== undefined) process.env.INDEX_PATH = origIndexPath;
     else delete process.env.INDEX_PATH;
-    if (origConfigDir !== undefined) process.env.QMD_CONFIG_DIR = origConfigDir;
-    else delete process.env.QMD_CONFIG_DIR;
+    if (origConfigDir !== undefined) process.env.LOTL_CONFIG_DIR = origConfigDir;
+    else delete process.env.LOTL_CONFIG_DIR;
 
     // Clean up test files
     try { unlinkSync(httpTestDbPath); } catch {}
@@ -1001,7 +1007,7 @@ describe("MCP HTTP Transport", () => {
     expect(contentType).toContain("application/json");
     expect(json.jsonrpc).toBe("2.0");
     expect(json.id).toBe(1);
-    expect(json.result.serverInfo.name).toBe("qmd");
+    expect(json.result.serverInfo.name).toBe("lotl");
   });
 
   test("POST /mcp tools/list returns registered tools", async () => {
@@ -1068,7 +1074,13 @@ describe("MCP HTTP Transport", () => {
   // contract, sr5-style scoring against gold IDs is impossible.
   // ---------------------------------------------------------------------------
 
-  test("POST /mcp tools/call memory_add + memory_search round-trips metadata.doc_id", async () => {
+  // Needs a live embed backend (memory_search requires embeddings). Skipped when
+  // no local transformers backend is configured and no remote embed provider set.
+  const hasEmbedBackend =
+    process.env.LOTL_EMBED_BACKEND === "transformers" ||
+    !!process.env.LOTL_EMBED_PROVIDER ||
+    !!process.env.LOTL_EMBED_URL;
+  test.skipIf(!hasEmbedBackend)("POST /mcp tools/call memory_add + memory_search round-trips metadata.doc_id", async () => {
     // Initialize
     await mcpRequest({
       jsonrpc: "2.0", id: 1, method: "initialize",

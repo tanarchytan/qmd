@@ -4,7 +4,7 @@ How qmd's memory framework actually works, end-to-end. Covers ingest,
 recall, reranking, decay/dream consolidation, knowledge graph, and the
 tiered storage model. Source-file references at the end of each section.
 
-> **On benchmark metrics:** see `docs/notes/metrics.md` for the full
+> **On benchmark metrics:** see `devnotes/metrics/metric-discipline.md` for the full
 > walkthrough of `recall_any@K` (binary, what
 > agentmemory/mem0/MemPalace publish as "R@K") vs `R@K` (fractional,
 > LongMemEval paper definition) vs `Cov@K` (qmd-specific token-overlap
@@ -122,7 +122,7 @@ input item(s)
 │   embedTextBatch() routes through getFastEmbedBackend()     │
 │   - local: TransformersEmbedBackend (mxbai-xs q8 default)   │
 │   - remote: OpenAI/ZeroEntropy/SiliconFlow/Gemini/Nebius    │
-│   Inside: split into micro-batches of QMD_EMBED_MICROBATCH  │
+│   Inside: split into micro-batches of LOTL_EMBED_MICROBATCH  │
 │   (default 32) to bound transformers.js WASM heap           │
 └─────────────────────────────────────────────────────────────┘
    │
@@ -138,9 +138,9 @@ input item(s)
    ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Phase 5 — opt-in side effects (eval/plugin only, gated)     │
-│   QMD_INGEST_EXTRACTION   → extractAndStore (LLM facts)     │
-│   QMD_INGEST_REFLECTIONS  → extractReflections              │
-│   QMD_INGEST_SYNTHESIS    → consolidateEntityFacts          │
+│   LOTL_INGEST_EXTRACTION   → extractAndStore (LLM facts)     │
+│   LOTL_INGEST_REFLECTIONS  → extractReflections              │
+│   LOTL_INGEST_SYNTHESIS    → consolidateEntityFacts          │
 │   All three off by default for benchmark fairness           │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -152,7 +152,7 @@ input item(s)
 
 ### Knowledge graph extraction (optional, off by default)
 
-When `QMD_INGEST_EXTRACTION` is on, `extractAndStore` uses either the
+When `LOTL_INGEST_EXTRACTION` is on, `extractAndStore` uses either the
 configured remote LLM or a heuristic fallback to pull subject-predicate-
 object triples out of the text. Each triple becomes a row in `knowledge`
 with `valid_from = now`. If a new triple contradicts an existing one
@@ -167,7 +167,7 @@ graph** without a separate graph store.
 ## Phase 2 — Recall (the hot path)
 
 Single entry point: `memoryRecall(db, options)`. Returns a ranked array
-of `MemoryRecallResult`. Optional profiling via `QMD_RECALL_PROFILE=on`
+of `MemoryRecallResult`. Optional profiling via `LOTL_RECALL_PROFILE=on`
 emits per-stage timing as JSON to stderr.
 
 ### Recall pipeline (restructured 2026-04-16)
@@ -182,7 +182,7 @@ query string + scope + category + tier + limit
 ┌─────────────────────────────────────────────────────────────┐
 │ STAGE A — Independent retrieval (parallel)                   │
 │                                                             │
-│  A0. Query expansion (optional, QMD_MEMORY_EXPAND)          │
+│  A0. Query expansion (optional, LOTL_MEMORY_EXPAND)          │
 │      entities → proper-noun fan-out                         │
 │      keywords → top-N keyword group fan-out                 │
 │      Q0 (original) always included; max 3 sub-queries       │
@@ -231,11 +231,11 @@ query string + scope + category + tier + limit
    │
    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ STAGE E — Rerank (optional, QMD_MEMORY_RERANK=on)            │
-│   Backend: QMD_RERANK_BACKEND=transformers (local ONNX       │
+│ STAGE E — Rerank (optional, LOTL_MEMORY_RERANK=on)            │
+│   Backend: LOTL_RERANK_BACKEND=transformers (local ONNX       │
 │     cross-encoder ms-marco-MiniLM-L6) or remote              │
 │   Strong-signal skip OFF by default (opt-in via              │
-│     QMD_RERANK_STRONG_SIGNAL_SKIP=on)                        │
+│     LOTL_RERANK_STRONG_SIGNAL_SKIP=on)                        │
 │   Min-max normalize logits → blend 10% RRF + 90% rerank     │
 │   (0.1/0.9 validated at n=500: MRR 0.937 vs 0.920 baseline) │
 └─────────────────────────────────────────────────────────────┘
@@ -243,10 +243,10 @@ query string + scope + category + tier + limit
    ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ STAGE F — Post-rerank                                        │
-│   F1. KG injection (QMD_MEMORY_KG=on)                       │
+│   F1. KG injection (LOTL_MEMORY_KG=on)                       │
 │       Gates: opt-in + proper-noun entity + weak top score    │
 │       Injects up to 5 facts at median(current_scores)        │
-│   F2. Dialog diversity (QMD_MEMORY_MMR=session)              │
+│   F2. Dialog diversity (LOTL_MEMORY_MMR=session)              │
 │       MMR-lite reshuffle preferring unseen sessions          │
 │   F3. Touch access counts (batched transaction)             │
 └─────────────────────────────────────────────────────────────┘
@@ -372,7 +372,7 @@ both hit. Mirrors the "dream" pattern from informal community plugins
 
 **Files:** `src/memory/decay.ts` (`runCleanupPass`), `src/memory/index.ts`
 (`runReflectionPass`), `src/openclaw/plugin.ts` (`agent_end` hook),
-`src/cli/qmd.ts` (`qmd dream` command).
+`src/cli/lotl.ts` (`qmd dream` command).
 
 ---
 
@@ -388,8 +388,8 @@ object` with `valid_from` and optional `valid_until`. Three operations:
   for temporal point-in-time queries
 - **`knowledgeInvalidate(db, id)`** — explicit invalidation
 
-The KG can also be **injected into recall results** via `QMD_MEMORY_KG=on`
-(back-compat: `QMD_RECALL_KG_RAW=on` and `QMD_RECALL_KG=on` still work).
+The KG can also be **injected into recall results** via `LOTL_MEMORY_KG=on`
+(back-compat: `LOTL_RECALL_KG_RAW=on` and `LOTL_RECALL_KG=on` still work).
 Three conditions must all be true to fire:
 1. Opt-in via env
 2. Query contains ≥ 1 proper-noun entity
@@ -468,9 +468,9 @@ mix from all three tiers in one call (e.g. 5 from core + 10 from working
 │       ├─ C   post-fusion boosts (gated by !RAW)    │
 │       │        keyword / phrase / decay / temporal  │
 │       ├─ D   sort                                  │
-│       ├─ E   rerank (QMD_MEMORY_RERANK=on)         │
+│       ├─ E   rerank (LOTL_MEMORY_RERANK=on)         │
 │       │        10% RRF + 90% cross-encoder blend   │
-│       ├─ F1  KG injection (QMD_MEMORY_KG=on)       │
+│       ├─ F1  KG injection (LOTL_MEMORY_KG=on)       │
 │       ├─ F2  dialog diversity (MMR-lite)           │
 │       └─ F3  touch access counts (batched)         │
 │                                                    │
@@ -540,8 +540,8 @@ src/
 │   ├── transformers-rerank.ts  ← ms-marco-MiniLM-L6 cross-encoder
 │   ├── remote.ts               ← OpenAI/ZE/SF/Gemini/Poe providers
 │   ├── cache.ts                ← LLM response cache
-│   ├── gpu-probe.ts            ← OS-level VRAM/driver/NPU detector
-│   └── embed-sizer.ts          ← device + microbatch + worker budgeter (QMD_TRANSFORMERS_DEVICE=auto)
+│   ├── gpu-probe.ts            ← OS-level VRAM + driver detector
+│   └── embed-sizer.ts          ← device + microbatch + worker budgeter (LOTL_TRANSFORMERS_DEVICE=auto)
 ├── mcp/server.ts          ← canonical CRUD MCP tool surface (26 tools)
 ├── openclaw/plugin.ts     ← OpenClaw integration + dream gate
 └── cli/                   ← CLI split across focused modules (2026-04-18 refactor)
@@ -576,7 +576,7 @@ With rank-based RRF + keyword expansion + synonym expansion (all default):
 
 Wall: ~15 min (workers=2, microbatch=64, Windows native).
 
-### With rerank (QMD_MEMORY_RERANK=on, normalized 0.7/0.3 blend)
+### With rerank (LOTL_MEMORY_RERANK=on, normalized 0.7/0.3 blend)
 
 | Metric | No rerank | With rerank | Delta |
 |---|---|---|---|
@@ -614,7 +614,7 @@ broken first stage. Ship rerank as opt-in; default off.
 | 2026-04-16 | 98.0% | 93.6% | 0.920 | 0.920 | ftsOverfetch 20→10 sweep |
 | **2026-04-17** | **98.4%** | **93.7%** | **0.917** | **0.913** | RRF + keyword + synonym expansion |
 
-### Per-stage latency (QMD_RECALL_PROFILE=on)
+### Per-stage latency (LOTL_RECALL_PROFILE=on)
 
 - FTS5: 1-15 ms (uniformly cheap)
 - embed_wait: 5-2400 ms (variable — WASM thread contention with workers)
@@ -720,7 +720,7 @@ qmd adds the orchestration, scoring, and lifecycle.
 ┌─────────────────────────────────────────────────────────────┐
 │  SQLite core  (better-sqlite3 + sqlite-vec extension)        │
 │                                                              │
-│  Tables in `~/.cache/qmd/index.sqlite`:                      │
+│  Tables in `~/.cache/lotl/index.sqlite`:                      │
 │                                                              │
 │  ┌────────────────────┐  ┌───────────────────────────────┐   │
 │  │ memories           │  │ memories_fts  (FTS5 virtual)  │   │
@@ -785,7 +785,7 @@ lives in `src/memory/`.
 ### Why one db file
 
 - **Embedded** — no server, no install, no infra. The whole memory
-  layer is `~/.cache/qmd/index.sqlite` plus the model cache.
+  layer is `~/.cache/lotl/index.sqlite` plus the model cache.
 - **Atomic** — backups, snapshots, and migration are all `cp index.sqlite`
 - **Single source of truth** — text, vectors, FTS index, knowledge graph,
   audit log, history all in one transactional store

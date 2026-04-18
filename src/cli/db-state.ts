@@ -1,5 +1,5 @@
 /**
- * cli/db-state.ts — Store/DB singleton and lifecycle, extracted from cli/qmd.ts.
+ * cli/db-state.ts — Store/DB singleton and lifecycle, extracted from cli/lotl.ts.
  *
  * Owns the CLI's Store handle and DB path override. Entire CLI uses a single
  * open DB for the process's lifetime; this module is where that invariant
@@ -63,7 +63,7 @@ export function closeDb(): void {
 }
 
 /** Resolved DB path — the override if setIndexName was called, otherwise the
- *  active Store's path, otherwise the default `~/.cache/qmd/index.sqlite`. */
+ *  active Store's path, otherwise the default `~/.cache/lotl/index.sqlite`. */
 export function getDbPath(): string {
   return store?.dbPath ?? storeDbPathOverride ?? getDefaultDbPath();
 }

@@ -1,5 +1,5 @@
 /**
- * cli/terminal.ts — terminal styling and control, extracted from cli/qmd.ts.
+ * cli/terminal.ts — terminal styling and control, extracted from cli/lotl.ts.
  *
  * Three surfaces:
  *   - `c` — ANSI color codes that auto-disable when stdout isn't a TTY or

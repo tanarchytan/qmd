@@ -7,12 +7,12 @@
 
 /**
  * Normalize a file path for comparison.
- * Strips qmd:// prefix, lowercases, removes leading/trailing slashes.
+ * Strips lotl:// prefix, lowercases, removes leading/trailing slashes.
  */
 export function normalizePath(p: string): string {
-  if (p.startsWith("qmd://")) {
-    // qmd://collection/path/to/file → path/to/file
-    const withoutScheme = p.slice("qmd://".length);
+  if (p.startsWith("lotl://")) {
+    // lotl://collection/path/to/file → path/to/file
+    const withoutScheme = p.slice("lotl://".length);
     const slashIdx = withoutScheme.indexOf("/");
     p = slashIdx >= 0 ? withoutScheme.slice(slashIdx + 1) : withoutScheme;
   }

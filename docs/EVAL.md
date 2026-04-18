@@ -1,15 +1,15 @@
 # Evaluation Guide
 
-How QMD benchmarks itself, the metrics that matter, and the cost discipline we follow.
+How Lotl benchmarks itself, the metrics that matter, and the cost discipline we follow.
 
 ---
 
 ## How we benchmark — TL;DR
 
-QMD runs against two long-term memory benchmarks (LongMemEval and LoCoMo) using a **local-first iteration loop** that costs nothing per run. We use remote LLMs (Gemini) for **one final answer-quality validation** at the end of a tuning cycle, never during retrieval iteration. The methodology has three rules:
+Lotl runs against two long-term memory benchmarks (LongMemEval and LoCoMo) using a **local-first iteration loop** that costs nothing per run. We use remote LLMs (Gemini) for **one final answer-quality validation** at the end of a tuning cycle, never during retrieval iteration. The methodology has three rules:
 
 1. **Iterate locally with `transformers` + `--no-llm`.** Zero API keys, zero network calls, deterministic. `recall_any@K` / `R@K` (fractional) / MRR / NDCG@10 are all accurate without an LLM in the loop. F1 / EM / SH become noisy but stay comparable across runs.
-2. **Lead reports with `recall_any@K` + `R@K` (fractional) + MRR + NDCG@10.** Content-coverage (`Cov@K`) is a qmd-internal secondary metric — NOT comparable to external benchmarks. See `docs/notes/metrics.md` for the full metric space walkthrough.
+2. **Lead reports with `recall_any@K` + `R@K` (fractional) + MRR + NDCG@10.** Content-coverage (`Cov@K`) is a qmd-internal secondary metric — NOT comparable to external benchmarks. See `devnotes/metrics/metric-discipline.md` for the full metric space walkthrough.
 3. **Match MemPalace's ground truth, not their numbers.** For every comparison we run their actual `benchmarks/locomo_bench.py` and `benchmarks/longmemeval_bench.py` on the same data — published headline numbers are not a substitute. Where MemPalace makes choices that hurt production quality (e.g. no cosine threshold), we don't copy them; we ship features that adapt across both regimes.
 
 Cost ceiling for a typical iteration cycle: **$0**. Cost ceiling for a final answer-quality validation: ~$0.30 / 500-question Gemini run.
@@ -24,7 +24,7 @@ Cost ceiling for a typical iteration cycle: **$0**. Cost ceiling for a final ans
 | **LongMemEval oracle** | `evaluate/longmemeval/` | 500Q oracle (filtered haystack) | Answer-quality with retrieval skipped (the "easy" mode) |
 | **LongMemEval _s_cleaned** | `evaluate/longmemeval/` | 500Q × ~50 distractor sessions | Full retrieval test — MemPalace's published 96.6% headline is on this dataset |
 
-Both share the same QMD memory pipeline. They test different things and complement each other — LoCoMo is dialogue-style; LME is more institutional knowledge.
+Both share the same Lotl memory pipeline. They test different things and complement each other — LoCoMo is dialogue-style; LME is more institutional knowledge.
 
 ---
 
@@ -41,17 +41,17 @@ curl -L -o evaluate/longmemeval/longmemeval_s_cleaned.json \
   https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json
 
 # Full n=500 run (~15 min, zero API cost)
-QMD_EMBED_BACKEND=transformers \
-QMD_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
-QMD_TRANSFORMERS_DTYPE=q8 \
-QMD_VEC_MIN_SIM=0.1 \
-QMD_TRANSFORMERS_QUIET=on \
-QMD_INGEST_EXTRACTION=off \
-QMD_INGEST_REFLECTIONS=off \
-QMD_INGEST_SYNTHESIS=off \
-QMD_INGEST_PER_TURN=off \
-QMD_RECALL_RAW=on \
-QMD_EMBED_MICROBATCH=64 \
+LOTL_EMBED_BACKEND=transformers \
+LOTL_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
+LOTL_TRANSFORMERS_DTYPE=q8 \
+LOTL_VEC_MIN_SIM=0.1 \
+LOTL_TRANSFORMERS_QUIET=on \
+LOTL_INGEST_EXTRACTION=off \
+LOTL_INGEST_REFLECTIONS=off \
+LOTL_INGEST_SYNTHESIS=off \
+LOTL_INGEST_PER_TURN=off \
+LOTL_RECALL_RAW=on \
+LOTL_EMBED_MICROBATCH=64 \
   npx tsx evaluate/longmemeval/eval.mts --ds s --limit 500 --no-llm \
   --workers 2 --tag baseline
 
@@ -59,16 +59,16 @@ QMD_EMBED_MICROBATCH=64 \
 # Same env vars, add --limit 100
 
 # With cross-encoder rerank (~20 min, +1.7pp MRR):
-# Add QMD_MEMORY_RERANK=on to the env vars above
+# Add LOTL_MEMORY_RERANK=on to the env vars above
 ```
 
 ### LoCoMo
 
 ```sh
-QMD_EMBED_BACKEND=transformers \
-QMD_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
-QMD_TRANSFORMERS_DTYPE=q8 QMD_RECALL_RAW=on \
-QMD_INGEST_EXTRACTION=off QMD_INGEST_SYNTHESIS=off \
+LOTL_EMBED_BACKEND=transformers \
+LOTL_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
+LOTL_TRANSFORMERS_DTYPE=q8 LOTL_RECALL_RAW=on \
+LOTL_INGEST_EXTRACTION=off LOTL_INGEST_SYNTHESIS=off \
   npx tsx evaluate/locomo/eval.mts --conv conv-30 --no-llm
 
 # Ingest is cached — subsequent runs against the same DB are seconds
@@ -80,9 +80,9 @@ QMD_INGEST_EXTRACTION=off QMD_INGEST_SYNTHESIS=off \
 curl -L -o evaluate/longmemeval/longmemeval_oracle.json \
   https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_oracle.json
 
-QMD_EMBED_BACKEND=transformers \
-QMD_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
-QMD_TRANSFORMERS_DTYPE=q8 QMD_RECALL_RAW=on \
+LOTL_EMBED_BACKEND=transformers \
+LOTL_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
+LOTL_TRANSFORMERS_DTYPE=q8 LOTL_RECALL_RAW=on \
   npx tsx evaluate/longmemeval/eval.mts --ds oracle --limit 200 --no-llm
 ```
 
@@ -92,9 +92,9 @@ Once retrieval is at parity, run **one** Gemini pass to score F1/EM/SH:
 
 ```sh
 GOOGLE_API_KEY=... \
-QMD_EMBED_BACKEND=transformers \
-QMD_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
-QMD_TRANSFORMERS_DTYPE=q8 QMD_RECALL_RAW=on \
+LOTL_EMBED_BACKEND=transformers \
+LOTL_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
+LOTL_TRANSFORMERS_DTYPE=q8 LOTL_RECALL_RAW=on \
   npx tsx evaluate/longmemeval/eval.mts --ds s --limit 500 \
   --llm gemini --answer-model gemini-2.5-flash --workers 2
 ```
@@ -105,7 +105,7 @@ QMD_TRANSFORMERS_DTYPE=q8 QMD_RECALL_RAW=on \
 
 The single biggest lesson of the v15-v16 cycle: **never spend on Gemini during retrieval iteration**. A naive eval run on LME _s n=500 with our default v15.1 stack burns ~$0.20 per pass, and we typically need 5-10 passes to validate any change. That's $1-2 per A/B. Multiplied across categories (embed model, granularity, threshold, diversity, KG) it's easily $30+ per session.
 
-By staying on `--no-llm` + `QMD_EMBED_BACKEND=transformers`, the same matrix runs at $0. The trade-off:
+By staying on `--no-llm` + `LOTL_EMBED_BACKEND=transformers`, the same matrix runs at $0. The trade-off:
 
 | Metric | Available with `--no-llm`? |
 |---|---|
@@ -115,7 +115,7 @@ By staying on `--no-llm` + `QMD_EMBED_BACKEND=transformers`, the same matrix run
 | Cov@K (content-overlap) | ✅ Accurate — qmd-internal, NOT comparable externally |
 | F1 / EM / SH | ⚠️ Noisy — `prediction` falls back to "top memories joined and truncated" instead of an LLM answer |
 
-For retrieval iteration, `recall_any@K`, `R@K` (fractional), MRR, and NDCG@10 are the discriminating signals. See `docs/notes/metrics.md` for full metric definitions and which competitor publishes what.
+For retrieval iteration, `recall_any@K`, `R@K` (fractional), MRR, and NDCG@10 are the discriminating signals. See `devnotes/metrics/metric-discipline.md` for full metric definitions and which competitor publishes what.
 
 ---
 
@@ -152,26 +152,26 @@ All toggles default to the v15-final configuration. Override to ablate.
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `QMD_INGEST_EXTRACTION` | on | Run LLM-based atomic fact extraction (extractAndStore) |
-| `QMD_INGEST_REFLECTIONS` | off | Standalone reflection extraction (now no-op; merged into extractAndStore) |
-| `QMD_INGEST_SYNTHESIS` | on | Run consolidateEntityFacts (entity profiles + timelines) per scope |
-| `QMD_INGEST_BATCH_EXTRACT` | on (LME only) | Single extraction call per question instead of per session |
-| `QMD_INGEST_PER_TURN` | on | Store each conversation turn as its own memory |
-| `QMD_INGEST_SESSION_AS_MEMORY` | on | Also store full session as one memory (larger context) |
+| `LOTL_INGEST_EXTRACTION` | on | Run LLM-based atomic fact extraction (extractAndStore) |
+| `LOTL_INGEST_REFLECTIONS` | off | Standalone reflection extraction (now no-op; merged into extractAndStore) |
+| `LOTL_INGEST_SYNTHESIS` | on | Run consolidateEntityFacts (entity profiles + timelines) per scope |
+| `LOTL_INGEST_BATCH_EXTRACT` | on (LME only) | Single extraction call per question instead of per session |
+| `LOTL_INGEST_PER_TURN` | on | Store each conversation turn as its own memory |
+| `LOTL_INGEST_SESSION_AS_MEMORY` | on | Also store full session as one memory (larger context) |
 
 ### Recall-side (memory/index.ts)
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `QMD_RECALL_RAW` | off | Disable ALL post-RRF logic — no keyword/quoted/temporal boost, no decay weighting, no query expansion, no rerank. Pure BM25 + vector RRF. Used for apples-to-apples baseline comparisons (e.g. matching MemPalace's raw ChromaDB recipe). |
+| `LOTL_RECALL_RAW` | off | Disable ALL post-RRF logic — no keyword/quoted/temporal boost, no decay weighting, no query expansion, no rerank. Pure BM25 + vector RRF. Used for apples-to-apples baseline comparisons (e.g. matching MemPalace's raw ChromaDB recipe). |
 
 ### Answer-prompt
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `QMD_PROMPT_RULES` | v11 | `v10` minimal rules · `v11` full rules (multi-item, yes/no, synthesis, undefined) · `v11.1` adds ORDERING / DURATION / COUNTING rules · `v12` chain-of-thought + structured `Answer:`/`Cited:` output (paper-style, over-engineered in practice) · **`v13` minimal LongMemEval-paper-aligned** (memories + question only, recommended for LLM-judge runs) |
-| `QMD_ANSWER_TOP_K` | 5 | How many retrieved memories are fed into the answer prompt. Retrieval still returns 50 for metric computation (MRR@50, R@50); answer prompt uses only the top-K. |
-| `QMD_ANSWER_MAX_CHARS` | 6000 | Per-memory character cap before the memory enters the answer prompt. LongMemEval sessions average 8,283 chars — the 2026-04-17 jump from 800→6000 is what unblocked Phase 7.1 accuracy. Lower if you need to fit a small-context model. |
+| `LOTL_PROMPT_RULES` | v11 | `v10` minimal rules · `v11` full rules (multi-item, yes/no, synthesis, undefined) · `v11.1` adds ORDERING / DURATION / COUNTING rules · `v12` chain-of-thought + structured `Answer:`/`Cited:` output (paper-style, over-engineered in practice) · **`v13` minimal LongMemEval-paper-aligned** (memories + question only, recommended for LLM-judge runs) |
+| `LOTL_ANSWER_TOP_K` | 5 | How many retrieved memories are fed into the answer prompt. Retrieval still returns 50 for metric computation (MRR@50, R@50); answer prompt uses only the top-K. |
+| `LOTL_ANSWER_MAX_CHARS` | 6000 | Per-memory character cap before the memory enters the answer prompt. LongMemEval sessions average 8,283 chars — the 2026-04-17 jump from 800→6000 is what unblocked Phase 7.1 accuracy. Lower if you need to fit a small-context model. |
 
 ### LLM-judge (`--judge <provider>` CLI flag)
 
@@ -181,19 +181,19 @@ qmd implements LongMemEval's *evaluate_qa.py* pattern: retrieve → generator LL
 |-----|--------|
 | `--llm <provider>` | `gemini` (default), `minimax`, `poe` — generator model |
 | `--judge <provider>` | When set, runs LLM-judge after each prediction. Accepts same provider names. |
-| `--judge-model <model-id>` | Override the judge model (e.g. `--judge poe --judge-model gpt-4o` while `--llm poe QMD_POE_MODEL=gpt-4o-mini` — cheap gen + strong judge). |
+| `--judge-model <model-id>` | Override the judge model (e.g. `--judge poe --judge-model gpt-4o` while `--llm poe LOTL_POE_MODEL=gpt-4o-mini` — cheap gen + strong judge). |
 | `--reflect` | Enable `memoryReflect` pre-pass: distil top-K memories into ≤8 facts via the generator LLM before the answer call. Adds 1 extra LLM call/question. |
-| `QMD_POE_MODEL` | default `gpt-4o` — override the Poe model used for generation |
+| `LOTL_POE_MODEL` | default `gpt-4o` — override the Poe model used for generation |
 | `POE_API_KEY` | Required when `--llm poe` or `--judge poe`. Needs an active Poe subscription for API access. |
-| `QMD_SKIP_PREFLIGHT` | `on` to skip the pre-flight quota probe (Poe `max_tokens=16` ping before ingest; catches 402-insufficient-quota before the run starts). |
+| `LOTL_SKIP_PREFLIGHT` | `on` to skip the pre-flight quota probe (Poe `max_tokens=16` ping before ingest; catches 402-insufficient-quota before the run starts). |
 
 ### Reproducibility
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `QMD_LLM_CACHE` | on | File-based response cache for reproducible re-runs |
-| `QMD_LLM_CACHE_PATH` | auto | Override cache path (used internally; eval scripts auto-set) |
-| `QMD_ZE_COLLECTIONS` | off | ZeroEntropy collections backend (rolled back, kept for legacy) |
+| `LOTL_LLM_CACHE` | on | File-based response cache for reproducible re-runs |
+| `LOTL_LLM_CACHE_PATH` | auto | Override cache path (used internally; eval scripts auto-set) |
+| `LOTL_ZE_COLLECTIONS` | off | ZeroEntropy collections backend (rolled back, kept for legacy) |
 
 ---
 
@@ -210,13 +210,13 @@ cd evaluate/locomo/dbs
 for v in v15a v15b v15c v15d; do cp conv-30.sqlite conv-30-$v.sqlite; done
 
 # 3. Run variants in parallel
-QMD_RECALL_DUAL_PASS=on \
+LOTL_RECALL_DUAL_PASS=on \
   npx tsx evaluate/locomo/eval.mts --conv conv-30 --db-suffix v15a --tag dualpass &
-QMD_RECALL_LOG_MOD=on \
+LOTL_RECALL_LOG_MOD=on \
   npx tsx evaluate/locomo/eval.mts --conv conv-30 --db-suffix v15b --tag logmod &
-QMD_RECALL_MMR=on \
+LOTL_RECALL_MMR=on \
   npx tsx evaluate/locomo/eval.mts --conv conv-30 --db-suffix v15c --tag mmr &
-QMD_PROMPT_RULES=v10 \
+LOTL_PROMPT_RULES=v10 \
   npx tsx evaluate/locomo/eval.mts --conv conv-30 --db-suffix v15d --tag promptv10 &
 wait
 ```
@@ -253,15 +253,15 @@ done
 
 ## The transformers.js local backend
 
-QMD uses `@huggingface/transformers` for local ONNX embedding and
+Lotl uses `@huggingface/transformers` for local ONNX embedding and
 cross-encoder reranking. No API keys, deterministic, no rate limits.
 
 ### Activation
 
 ```sh
-QMD_EMBED_BACKEND=transformers
-QMD_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1  # production default
-QMD_TRANSFORMERS_DTYPE=q8                                    # int8 quantized
+LOTL_EMBED_BACKEND=transformers
+LOTL_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1  # production default
+LOTL_TRANSFORMERS_DTYPE=q8                                    # int8 quantized
 ```
 
 ### Production embed model
@@ -276,7 +276,7 @@ list of tested + failed models (F2LLM, harrier, gemma, nomic, jina, me5).
 
 ### Cross-encoder reranker
 
-Enabled via `QMD_MEMORY_RERANK=on`. Default model:
+Enabled via `LOTL_MEMORY_RERANK=on`. Default model:
 `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params, q8, ~5-10ms/pair).
 
 Adds +1.7pp MRR at 0.1/0.9 blend (10% original + 90% cross-encoder).
@@ -305,7 +305,7 @@ The legacy 0.3 fixed cosine cutoff is replaced (as of 2026-04-13) by an adaptive
 **Focused haystack** (LME _s, oracle, LoCoMo — every candidate session pre-filtered to one conversation):
 - Top-1 vector match typically scores 0.20-0.35 cosine
 - Everything in the haystack is on-topic, so even the right answer might score 0.18
-- A 0.3 threshold drops legitimate matches → the gap that took LME _s multi-session R@5 from 100% (MemPalace) to 80% (QMD pre-fix)
+- A 0.3 threshold drops legitimate matches → the gap that took LME _s multi-session R@5 from 100% (MemPalace) to 80% (Lotl pre-fix)
 
 ### The algorithm
 
@@ -324,9 +324,9 @@ also keep at least minKeep=5 results regardless of similarity (safety net)
 ### Override
 
 ```sh
-QMD_VEC_MIN_SIM=adaptive    # default
-QMD_VEC_MIN_SIM=0           # take everything (most permissive — matches MemPalace)
-QMD_VEC_MIN_SIM=0.3         # legacy fixed-threshold behaviour
+LOTL_VEC_MIN_SIM=adaptive    # default
+LOTL_VEC_MIN_SIM=0           # take everything (most permissive — matches MemPalace)
+LOTL_VEC_MIN_SIM=0.3         # legacy fixed-threshold behaviour
 ```
 
 7 unit tests in `test/pick-vector-matches.test.ts` lock the algorithm down across all three regimes plus edge cases (empty input, sort order, fixed override).
@@ -394,7 +394,7 @@ Per-category gaps usually point at one specific failure mode. Examples from the 
 
 ## Metric hierarchy
 
-QMD's evals now report six primary metrics and four MemPalace-compat reference metrics:
+Lotl's evals now report six primary metrics and four MemPalace-compat reference metrics:
 
 ### Primary (lead with these)
 
@@ -407,7 +407,7 @@ QMD's evals now report six primary metrics and four MemPalace-compat reference m
 | **EM** | Answer quality (strict) | Exact tokenized match |
 | **SH** | Answer quality (substring) | Normalized truth ⊂ normalized prediction. Catches "27" vs "27 years old" false negatives that F1 scores 0 |
 
-### Metric families (updated 2026-04-16 — see `docs/notes/metrics.md`)
+### Metric families (updated 2026-04-16 — see `devnotes/metrics/metric-discipline.md`)
 
 | Family | What it computes | Who uses it | eval.mts field |
 |---|---|---|---|
@@ -420,15 +420,15 @@ QMD's evals now report six primary metrics and four MemPalace-compat reference m
 
 **Never compare across families.** The 2026-04-15 "82% multi-session
 ceiling" was caused by comparing qmd's Cov@5 to agentmemory's recall_any@5.
-Six hours wasted. See `docs/notes/metrics.md` for the full walkthrough.
+Six hours wasted. See `devnotes/metrics/metric-discipline.md` for the full walkthrough.
 
 ## SOTA Reference (LongMemEval published scores)
 
-All published LongMemEval scores below are on `longmemeval_s_cleaned` (the large unfiltered haystack), **not** the `oracle` dataset QMD's day-to-day benchmarks use. Comparing QMD numbers to these figures requires running on `_s`.
+All published LongMemEval scores below are on `longmemeval_s_cleaned` (the large unfiltered haystack), **not** the `oracle` dataset Lotl's day-to-day benchmarks use. Comparing Lotl numbers to these figures requires running on `_s`.
 
 | System | recall_any@5 | R@5 (frac) | MRR | NDCG@10 | Metric type |
 |--------|---|---|---|---|---|
-| **QMD (2026-04-16 best, n=500)** | **98.0%** | **93.6%** | **0.920** | **0.920** | retrieval |
+| **Lotl (2026-04-16 best, n=500)** | **98.0%** | **93.6%** | **0.920** | **0.920** | retrieval |
 | agentmemory hybrid (live, n=500) | 95.2% | — | 0.882 | 0.879 | retrieval |
 | MemPalace raw (live-reproduced) | 96.6% | — | — | — | retrieval (recall_any) |
 | Hindsight (Gemini-3) | — | — | — | — | **QA accuracy 91.4%** |
@@ -438,7 +438,7 @@ All published LongMemEval scores below are on `longmemeval_s_cleaned` (the large
 
 Hindsight/SuperMemory/Zep/Mem0 publish LLM-judge QA accuracy, NOT retrieval
 recall. Direct comparison requires implementing `evaluate_qa.py` (deferred).
-See `docs/notes/metrics.md` for why these numbers are not comparable.
+See `devnotes/metrics/metric-discipline.md` for why these numbers are not comparable.
 
 ### Head-to-head comparisons (live-reproduced, same dataset)
 
@@ -446,7 +446,7 @@ We don't trust published numbers. Every comparison row was live-reproduced
 on the same `longmemeval_s_cleaned.json` dataset (verified SHA-256 match
 with HuggingFace `xiaowu0162/longmemeval-cleaned`).
 
-**QMD vs agentmemory (2026-04-16, per-bucket):**
+**Lotl vs agentmemory (2026-04-16, per-bucket):**
 
 | Bucket | qmd rAny@5 | AM rAny@5 | qmd MRR | AM MRR |
 |---|---|---|---|---|
@@ -458,18 +458,18 @@ with HuggingFace `xiaowu0162/longmemeval-cleaned`).
 | temporal-reasoning | 95% | **95.5%** | 0.875 | **0.884** |
 | **OVERALL** | **98.0%** | 95.2% | **0.920** | 0.882 |
 
-**QMD vs MemPalace (2026-04-14, live-reproduced):**
+**Lotl vs MemPalace (2026-04-14, live-reproduced):**
 
 | System | LME _s n=500 recall_any@5 |
 |---|---|
-| **QMD (no rerank)** | **98.0%** |
+| **Lotl (no rerank)** | **98.0%** |
 | MemPalace raw | 96.6% |
 
 **LoCoMo (2026-04-13):**
 
 | System | DR@50 | Session recall |
 |---|---|---|
-| QMD v15.1 | 74.9% | — |
+| Lotl v15.1 | 74.9% | — |
 | MemPalace own run | 74.8% | 100% (ceilinged) |
 
 **Running MemPalace on our data** (reproduces both rows above):

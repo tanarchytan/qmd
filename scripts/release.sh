@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# QMD Release Script
+# Lotl Release Script
 #
 # Renames the [Unreleased] section in CHANGELOG.md to the new version,
 # bumps package.json, commits, and creates a tag. The actual publish
@@ -29,13 +29,13 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
-# Verify bun.lock is in sync with package.json
-if ! bun install --frozen-lockfile &>/dev/null; then
-  echo "Error: bun.lock is out of sync with package.json" >&2
-  echo "Run 'bun install' and commit the updated lockfile." >&2
+# Verify package-lock.json is in sync with package.json
+if ! npm ci --ignore-scripts --silent &>/dev/null; then
+  echo "Error: package-lock.json is out of sync with package.json" >&2
+  echo "Run 'npm install' and commit the updated lockfile." >&2
   exit 1
 fi
-echo "bun.lock: in sync ✓"
+echo "package-lock.json: in sync ✓"
 
 # Read current version
 CURRENT=$(jq -r .version package.json)

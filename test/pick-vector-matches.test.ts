@@ -69,7 +69,7 @@ describe("pickVectorMatches", () => {
     expect(out.map(r => r.id)).toEqual(["a", "b", "c", "d", "e"]);
   });
 
-  test("legacy fixed floor: respects QMD_VEC_MIN_SIM=0.3", () => {
+  test("legacy fixed floor: respects LOTL_VEC_MIN_SIM=0.3", () => {
     const inputs: R[] = [
       result("a", 0.50),
       result("b", 0.35),
@@ -83,7 +83,7 @@ describe("pickVectorMatches", () => {
     expect(out.length).toBe(4); // minKeep = 5, fewer than 5 inputs → all
   });
 
-  test("permissive mode: QMD_VEC_MIN_SIM=0 keeps everything", () => {
+  test("permissive mode: LOTL_VEC_MIN_SIM=0 keeps everything", () => {
     const inputs: R[] = [
       result("a", 0.50),
       result("b", 0.30),

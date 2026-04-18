@@ -1,9 +1,11 @@
 {
-  "id": "tanarchy-qmd",
-  "name": "Tanarchy QMD",
-  "description": "Search + memory + knowledge graph for AI agents. BM25, vector, RRF fusion, LLM reranking, Weibull decay, temporal knowledge.",
-  "version": "2.1.0-dev.23",
-  "skills": ["skills/qmd"],
+  "id": "tanarchy-lotl",
+  "name": "Lotl",
+  "description": "Lotl — Living-off-the-Land memory for AI agents. BM25 + vector RRF fusion, LLM reranking, Weibull decay, temporal knowledge graph. On SQLite + local ONNX — no new infra.",
+  "version": "1.0.0",
+  "skills": [
+    "skills/lotl"
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -26,35 +28,67 @@
       },
       "dbPath": {
         "type": "string",
-        "description": "Override path to the QMD SQLite database"
+        "description": "Override path to the Lotl SQLite database"
       },
       "embed": {
         "type": "object",
         "properties": {
-          "provider": { "type": "string", "description": "api | url | siliconflow | openai | zeroentropy" },
-          "apiKey": { "type": "string" },
-          "url": { "type": "string" },
-          "model": { "type": "string" },
-          "dimensions": { "type": "number" }
+          "provider": {
+            "type": "string",
+            "description": "api | url | siliconflow | openai | zeroentropy"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "number"
+          }
         }
       },
       "rerank": {
         "type": "object",
         "properties": {
-          "provider": { "type": "string", "description": "api | url | siliconflow | openai | zeroentropy | dashscope | gemini" },
-          "apiKey": { "type": "string" },
-          "url": { "type": "string" },
-          "model": { "type": "string" },
-          "mode": { "type": "string", "description": "rerank | llm" }
+          "provider": {
+            "type": "string",
+            "description": "api | url | siliconflow | openai | zeroentropy | dashscope | gemini"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "description": "rerank | llm"
+          }
         }
       },
       "queryExpansion": {
         "type": "object",
         "properties": {
-          "provider": { "type": "string", "description": "api | url | siliconflow | openai | gemini" },
-          "apiKey": { "type": "string" },
-          "url": { "type": "string" },
-          "model": { "type": "string" }
+          "provider": {
+            "type": "string",
+            "description": "api | url | siliconflow | openai | gemini"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
         }
       }
     }

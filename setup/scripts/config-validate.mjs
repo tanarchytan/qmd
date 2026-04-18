@@ -2,7 +2,7 @@
 /**
  * config-validate.mjs — Validate QMD configuration.
  *
- * Checks ~/.config/qmd/.env and optionally openclaw.json for common issues.
+ * Checks ~/.config/lotl/.env and optionally openclaw.json for common issues.
  *
  * Usage:
  *   node setup/scripts/config-validate.mjs
@@ -20,9 +20,9 @@ const warnings = [];
 // Check .env file
 // =============================================================================
 
-const configDir = process.env.QMD_CONFIG_DIR ||
-  (process.env.XDG_CONFIG_HOME ? join(process.env.XDG_CONFIG_HOME, "qmd") : null) ||
-  join(homedir(), ".config", "qmd");
+const configDir = process.env.LOTL_CONFIG_DIR ||
+  (process.env.XDG_CONFIG_HOME ? join(process.env.XDG_CONFIG_HOME, "lotl") : null) ||
+  join(homedir(), ".config", "lotl");
 const envPath = join(configDir, ".env");
 
 if (existsSync(envPath)) {
@@ -55,32 +55,32 @@ if (existsSync(envPath)) {
   }
 
   // Check dimensions
-  const dim = vars.QMD_EMBED_DIMENSIONS;
+  const dim = vars.LOTL_EMBED_DIMENSIONS;
   if (dim) {
     const n = parseInt(dim);
     if (isNaN(n) || n < 64 || n > 8192) {
-      errors.push(`QMD_EMBED_DIMENSIONS=${dim} — must be 64-8192`);
+      errors.push(`LOTL_EMBED_DIMENSIONS=${dim} — must be 64-8192`);
     }
   }
 
   // Check provider requires API key
   for (const op of ["EMBED", "RERANK", "QUERY_EXPANSION"]) {
-    const provider = vars[`QMD_${op}_PROVIDER`];
+    const provider = vars[`LOTL_${op}_PROVIDER`];
     if (provider && provider !== "local") {
-      if (!vars[`QMD_${op}_API_KEY`]) {
-        errors.push(`QMD_${op}_PROVIDER=${provider} but QMD_${op}_API_KEY is not set`);
+      if (!vars[`LOTL_${op}_API_KEY`]) {
+        errors.push(`LOTL_${op}_PROVIDER=${provider} but LOTL_${op}_API_KEY is not set`);
       }
     }
   }
 
-  if (!vars.QMD_EMBED_PROVIDER && vars.QMD_EMBED_BACKEND !== "transformers") {
-    warnings.push("No QMD_EMBED_PROVIDER set and QMD_EMBED_BACKEND!=transformers — embeddings will fail");
+  if (!vars.LOTL_EMBED_PROVIDER && vars.LOTL_EMBED_BACKEND !== "transformers") {
+    warnings.push("No LOTL_EMBED_PROVIDER set and LOTL_EMBED_BACKEND!=transformers — embeddings will fail");
   }
 
   // Check rerank mode
-  const rerankMode = vars.QMD_RERANK_MODE;
+  const rerankMode = vars.LOTL_RERANK_MODE;
   if (rerankMode && !["rerank", "llm"].includes(rerankMode)) {
-    errors.push(`QMD_RERANK_MODE=${rerankMode} — must be "rerank" or "llm"`);
+    errors.push(`LOTL_RERANK_MODE=${rerankMode} — must be "rerank" or "llm"`);
   }
 
 } else {
@@ -100,16 +100,16 @@ if (existsSync(openclawJson)) {
     const plugins = config?.plugins;
 
     if (plugins) {
-      const entry = plugins?.entries?.["tanarchy-qmd"];
+      const entry = plugins?.entries?.["tanarchy-lotl"];
       if (entry) {
         if (!entry.enabled) {
-          warnings.push("tanarchy-qmd plugin entry exists but enabled is not true");
+          warnings.push("tanarchy-lotl plugin entry exists but enabled is not true");
         }
 
         // Check allow list
         const allow = plugins.allow || [];
-        if (!allow.includes("tanarchy-qmd")) {
-          errors.push('tanarchy-qmd not in plugins.allow — add "tanarchy-qmd" to the allow array');
+        if (!allow.includes("tanarchy-lotl")) {
+          errors.push('tanarchy-lotl not in plugins.allow — add "tanarchy-lotl" to the allow array');
         }
 
         // Check config
@@ -129,7 +129,7 @@ if (existsSync(openclawJson)) {
           }
         }
       } else {
-        warnings.push("No tanarchy-qmd entry in plugins.entries");
+        warnings.push("No tanarchy-lotl entry in plugins.entries");
       }
     }
   } catch (err) {
@@ -144,9 +144,9 @@ if (existsSync(openclawJson)) {
 // =============================================================================
 
 const cacheHome = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
-const dbPath = join(cacheHome, "qmd", "index.sqlite");
+const dbPath = join(cacheHome, "lotl", "index.sqlite");
 if (!existsSync(dbPath)) {
-  warnings.push(`No QMD database found at ${dbPath} — run 'qmd collection add' first`);
+  warnings.push(`No Lotl database found at ${dbPath} — run 'lotl collection add' first`);
 }
 
 // =============================================================================
@@ -158,7 +158,7 @@ const jsonOutput = process.argv.includes("--json");
 if (jsonOutput) {
   console.log(JSON.stringify({ errors, warnings, valid: errors.length === 0 }, null, 2));
 } else {
-  console.log("\nQMD Config Validation\n");
+  console.log("\nLotl Config Validation\n");
 
   if (errors.length === 0 && warnings.length === 0) {
     console.log("  All checks passed ✓\n");

@@ -9,7 +9,8 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Database } from "../db.js";
 import { getRemoteConfig, getRemoteLLM } from "../remote-config.js";
 // LlamaCpp removed in 2026-04-13 cleanup — local embed is now via
-// TransformersEmbedBackend (loaded via getFastEmbedBackend below).
+// TransformersEmbedBackend (loaded via getLocalEmbedBackend below — named for
+// the LOCAL embed backend, post-2026-04-13 fastembed removal).
 import { getDecayScore } from "./decay.js";
 import { classifyMemory } from "./patterns.js";
 import { knowledgeQuery, type KnowledgeEntry } from "./knowledge.js";
@@ -128,7 +129,7 @@ export type MemoryStoreOptions = {
    * Pairs with `userOnly` to implement Schift's L1 cache hierarchy pattern:
    * strip assistant turns before embedding so the user's preference signal
    * dominates the centroid instead of being drowned in verbose assistant
-   * replies. See TODO §1.
+   * replies.
    */
   turns?: Array<{ role: string; content: string }>;
   /**
@@ -295,13 +296,13 @@ function parseTimeReference(query: string): TimeReference | null {
 
 // =============================================================================
 // Embed helper — opt-in transformers.js ONNX backend, else remote, else null.
-// Gated by QMD_EMBED_BACKEND=transformers to avoid loading the native
+// Gated by LOTL_EMBED_BACKEND=transformers to avoid loading the native
 // onnxruntime-node binding (and its sharp dep) for callers that only want
 // FTS + remote. The native binding can crash on some Windows test envs.
 // =============================================================================
 let _onnxBackend: any = null;
-async function getFastEmbedBackend(): Promise<any> {
-  if (process.env.QMD_EMBED_BACKEND !== "transformers") return null;
+async function getLocalEmbedBackend(): Promise<any> {
+  if (process.env.LOTL_EMBED_BACKEND !== "transformers") return null;
   if (_onnxBackend) return _onnxBackend;
   try {
     const mod = await import("../llm/transformers-embed.js");
@@ -317,7 +318,7 @@ async function embedText(text: string): Promise<number[] | null> {
   const cached = getCachedEmbedding(text);
   if (cached) return cached;
 
-  const fe = await getFastEmbedBackend();
+  const fe = await getLocalEmbedBackend();
   if (fe) {
     try {
       const result = await fe.embed(text, { isQuery: false });
@@ -355,11 +356,11 @@ async function embedText(text: string): Promise<number[] | null> {
 // input tensor in a single forward pass, so an unbounded call at N=640
 // chunks × 512 tokens blows past WASM heap and OOMs. Historical safe
 // value is 32, matching the native LME path that worked. Override with
-// QMD_EMBED_MICROBATCH for remote providers that handle larger batches
+// LOTL_EMBED_MICROBATCH for remote providers that handle larger batches
 // efficiently. Applies to local AND remote provider calls so a rogue
 // caller can't saturate either path.
 const EMBED_MICROBATCH_SIZE = (() => {
-  const raw = process.env.QMD_EMBED_MICROBATCH;
+  const raw = process.env.LOTL_EMBED_MICROBATCH;
   const parsed = raw ? parseInt(raw, 10) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 32;
 })();
@@ -390,7 +391,7 @@ async function embedTextBatch(texts: string[]): Promise<(number[] | null)[]> {
   }
   if (missingTexts.length === 0) return out;
 
-  const fe = await getFastEmbedBackend();
+  const fe = await getLocalEmbedBackend();
   if (fe) {
     try {
       const embeds = await embedInMicroBatches(missingTexts, (slice) => fe.embedBatch(slice, { isQuery: false }));
@@ -431,7 +432,7 @@ async function embedQuery(text: string): Promise<number[] | null> {
   const cached = getCachedEmbedding(text);
   if (cached) return cached;
 
-  const fe = await getFastEmbedBackend();
+  const fe = await getLocalEmbedBackend();
   if (fe) {
     try {
       const result = await fe.embed(text, { isQuery: true });
@@ -893,7 +894,7 @@ export async function memoryStoreBatch(
  *      floor we still keep up to `minKeep` results so a low-signal query
  *      doesn't end up with an empty vector pool (BM25 then fills the gap).
  *
- * QMD_VEC_MIN_SIM:
+ * LOTL_VEC_MIN_SIM:
  *   unset / "adaptive" → adaptive (default)
  *   "0"               → take everything (most permissive)
  *   "<number>"        → legacy fixed-threshold behaviour
@@ -912,7 +913,7 @@ export function pickVectorMatches<T extends { similarity: number }>(
   const ABS_FLOOR = options.absFloor ?? 0.05;
   const REL_RATIO = options.relRatio ?? 0.5;
   const MIN_KEEP = options.minKeep ?? 5;
-  const envValue = options.fixedFloorEnv ?? process.env.QMD_VEC_MIN_SIM;
+  const envValue = options.fixedFloorEnv ?? process.env.LOTL_VEC_MIN_SIM;
 
   const sorted = [...results].sort((a, b) => b.similarity - a.similarity);
 
@@ -1051,12 +1052,12 @@ export async function memoryRecall(
   db: Database,
   options: MemoryRecallOptions
 ): Promise<MemoryRecallResult[]> {
-  // Per-stage profiling under QMD_RECALL_PROFILE=on. Emits one JSON line
+  // Per-stage profiling under LOTL_RECALL_PROFILE=on. Emits one JSON line
   // to stderr after the call finishes. Stages: fts, vec, rerank, kg,
   // diversify, total. Use to identify hot-path optimization candidates
   // when wall spikes (today's high-tier sweep saw 10s search latency on
   // a handful of questions — profiling tells us which stage owned it).
-  const PROFILE = process.env.QMD_RECALL_PROFILE === "on";
+  const PROFILE = process.env.LOTL_RECALL_PROFILE === "on";
   const profile: Record<string, number> = {};
   const profileStart = PROFILE ? performance.now() : 0;
   const profileMark = (stage: string, start: number) => {
@@ -1080,7 +1081,7 @@ export async function memoryRecall(
 
   // Raw mode disables post-fusion boosts (keyword, phrase, decay, temporal)
   // so we can fairly benchmark. RRF fusion itself always runs.
-  const RAW = process.env.QMD_RECALL_RAW === "on";
+  const RAW = process.env.LOTL_RECALL_RAW === "on";
 
   // ── STAGE A: Independent retrieval into rank maps ──
   // Each retrieval path produces a Map<id, 1-indexed rank position>.
@@ -1097,7 +1098,7 @@ export async function memoryRecall(
     return true;
   };
 
-  // Zero-LLM multi-query expansion (gated by QMD_MEMORY_EXPAND).
+  // Zero-LLM multi-query expansion (gated by LOTL_MEMORY_EXPAND).
   //
   // entities — builds sub-queries from proper-noun entities + keywords.
   //   Works on workloads with rich named-entity density (e.g. knowledge
@@ -1113,8 +1114,8 @@ export async function memoryRecall(
   // some noise instead of replacing signal.
   // Default: keywords expansion. Swept at n=500 LME (2026-04-16):
   // +0.6pp rAny@5, +4pp preference rAny5 (93→97%). Opt out via
-  // QMD_MEMORY_EXPAND=off.
-  const EXPAND_MODE = process.env.QMD_MEMORY_EXPAND ?? "keywords";
+  // LOTL_MEMORY_EXPAND=off.
+  const EXPAND_MODE = process.env.LOTL_MEMORY_EXPAND ?? "keywords";
   const subQueries: string[] = [query];
   if (EXPAND_MODE === "entities") {
     const expandEntities = extractQueryEntities(query);
@@ -1160,8 +1161,8 @@ export async function memoryRecall(
     // 5× loses recall. 10× is the validated sweet spot.
     //
     // Synonym expansion: each term expands to OR-joined synonyms from
-    // MEMORY_SYNONYMS. Opt out via QMD_MEMORY_SYNONYMS=off.
-    const synonymsEnabled = process.env.QMD_MEMORY_SYNONYMS !== "off";
+    // MEMORY_SYNONYMS. Opt out via LOTL_MEMORY_SYNONYMS=off.
+    const synonymsEnabled = process.env.LOTL_MEMORY_SYNONYMS !== "off";
     const expandTerm = (t: string): string => {
       if (!synonymsEnabled) return `"${t}"*`;
       const syns = MEMORY_SYNONYMS[t];
@@ -1309,7 +1310,7 @@ export async function memoryRecall(
         }
       }
 
-      // ── Scope-normalized scoring (gated by QMD_MEMORY_SCOPE_NORM=rank) ──
+      // ── Scope-normalized scoring (gated by LOTL_MEMORY_SCOPE_NORM=rank) ──
       //
       // Rank-normalize similarities within each scope so cross-scope
       // cosine magnitude drift doesn't wash out the right answer. Noop
@@ -1318,7 +1319,7 @@ export async function memoryRecall(
       // project qmd workloads where one recall query spans several
       // partitioned scopes via the "global" union path.
       let withSim: Array<{ id: string; similarity: number }>;
-      const SCOPE_NORM = process.env.QMD_MEMORY_SCOPE_NORM === "rank";
+      const SCOPE_NORM = process.env.LOTL_MEMORY_SCOPE_NORM === "rank";
       if (SCOPE_NORM && mergedHits.size > 1) {
         // Fetch scope per id via a single IN() query; avoid N round-trips.
         const ids = Array.from(mergedHits.keys());
@@ -1470,9 +1471,9 @@ export async function memoryRecall(
   // ── STAGE C2: L# blend (Schift cache hierarchy) ──
   // When ingest produced 3 variants per session (L0 full / L1 user-only /
   // L2 first-N user turns), collapse them to unique sessions with a
-  // weighted score. Default OFF — only fires when QMD_MEMORY_LHASH=on
+  // weighted score. Default OFF — only fires when LOTL_MEMORY_LHASH=on
   // AND memories carry ingest_level metadata.
-  const lHashEnabled = process.env.QMD_MEMORY_LHASH === "on";
+  const lHashEnabled = process.env.LOTL_MEMORY_LHASH === "on";
   if (lHashEnabled && results.size > 0) {
     const levelWeight = (lvl: string | undefined): number => {
       if (lvl === "L1") return MEMORY_L1_WEIGHT;
@@ -1525,24 +1526,24 @@ export async function memoryRecall(
   // ── STAGE D: Sort ──
   let sorted = [...results.values()].sort((a, b) => b.score - a.score);
 
-  // 5b. Optional rerank. Enable with QMD_MEMORY_RERANK=on.
-  //   Backend selection mirrors embed: QMD_RERANK_BACKEND=transformers (local
-  //   ONNX cross-encoder, default) or QMD_RERANK_BACKEND=remote (API via
-  //   QMD_RERANK_PROVIDER/URL/API_KEY/MODEL). Fires regardless of RAW so
+  // 5b. Optional rerank. Enable with LOTL_MEMORY_RERANK=on.
+  //   Backend selection mirrors embed: LOTL_RERANK_BACKEND=transformers (local
+  //   ONNX cross-encoder, default) or LOTL_RERANK_BACKEND=remote (API via
+  //   LOTL_RERANK_PROVIDER/URL/API_KEY/MODEL). Fires regardless of RAW so
   //   eval harnesses can A/B rerank as a first-class lever.
   profileMark("vec", vecStart);
   const rerankStart = PROFILE ? performance.now() : 0;
-  const rerankEnabled = process.env.QMD_MEMORY_RERANK === "on"
+  const rerankEnabled = process.env.LOTL_MEMORY_RERANK === "on"
     // back-compat: old cross-encoder value still works
-    || process.env.QMD_MEMORY_RERANK === "cross-encoder";
-  const rerankBackend = process.env.QMD_RERANK_BACKEND || "transformers";
+    || process.env.LOTL_MEMORY_RERANK === "cross-encoder";
+  const rerankBackend = process.env.LOTL_RERANK_BACKEND || "transformers";
   // Strong-signal skip: when the top result is high-confidence with a
   // Strong-signal skip: off by default. Swept at n=500 LME (2026-04-16):
   // skip-off wins on all metrics (+0.4pp recall, +1.1pp R@5, +1.1pp pref MRR).
   // The gate was blocking rerank on borderline questions where it helps most.
-  // Opt in via QMD_RERANK_STRONG_SIGNAL_SKIP=on if wall time is critical.
+  // Opt in via LOTL_RERANK_STRONG_SIGNAL_SKIP=on if wall time is critical.
   let strongSignalSkip = false;
-  if (sorted.length > 1 && process.env.QMD_RERANK_STRONG_SIGNAL_SKIP === "on") {
+  if (sorted.length > 1 && process.env.LOTL_RERANK_STRONG_SIGNAL_SKIP === "on") {
     const sortedScores = sorted.map(r => r.score);
     const topScore = sortedScores[0] ?? 0;
     const secondScore = sortedScores[1] ?? 0;
@@ -1585,7 +1586,7 @@ export async function memoryRecall(
         }
         sorted = rerankCandidates.sort((a, b) => b.score - a.score);
       } else {
-        // remote backend — uses QMD_RERANK_PROVIDER/URL/API_KEY/MODEL
+        // remote backend — uses LOTL_RERANK_PROVIDER/URL/API_KEY/MODEL
         const remoteConfig = getRemoteConfig();
         if (remoteConfig?.rerank) {
           const remote = getRemoteLLM()!;
@@ -1608,14 +1609,14 @@ export async function memoryRecall(
 
   // 5b2. Smart KG-in-recall (v16). KG facts injected when the main
   // pipeline came up short. Gated by:
-  //   1. QMD_MEMORY_KG=on (default off)
+  //   1. LOTL_MEMORY_KG=on (default off)
   //   2. Query has proper-noun entities (lowercase/wh-questions skipped)
   //   3. Top score is weak (< 0.3)
   // KG facts capped at 5, inserted at score 0.25.
-  const kgEnabled = process.env.QMD_MEMORY_KG === "on"
+  const kgEnabled = process.env.LOTL_MEMORY_KG === "on"
     // back-compat: old env vars still work
-    || process.env.QMD_RECALL_KG_RAW === "on"
-    || (!RAW && process.env.QMD_RECALL_KG === "on");
+    || process.env.LOTL_RECALL_KG_RAW === "on"
+    || (!RAW && process.env.LOTL_RECALL_KG === "on");
   if (kgEnabled) {
     const entities = extractQueryEntities(query);
     const topScore = sorted[0]?.score ?? 0;
@@ -1658,9 +1659,9 @@ export async function memoryRecall(
   // 5c. Dialog-aware diversity (v16). Greedy MMR-lite reshuffles top-limit
   // to prefer unseen source_dialog_id / source_session_id, covering more
   // evidence dialogs in multi-evidence queries.
-  const diversifyEnabled = process.env.QMD_MEMORY_MMR === "session"
+  const diversifyEnabled = process.env.LOTL_MEMORY_MMR === "session"
     // back-compat
-    || (!RAW && process.env.QMD_RECALL_DIVERSIFY === "on");
+    || (!RAW && process.env.LOTL_RECALL_DIVERSIFY === "on");
   if (diversifyEnabled && sorted.length > 2) {
     sorted = applyDialogDiversity(sorted, limit);
   } else {
@@ -1706,7 +1707,7 @@ export async function memoryRecall(
  *   - the response can't be parsed
  *
  * Cost: one extra chatComplete call per question. Cache-friendly if
- * QMD_LLM_CACHE_PATH is set.
+ * LOTL_LLM_CACHE_PATH is set.
  */
 export async function memoryReflect(
   question: string,
@@ -1722,9 +1723,9 @@ export async function memoryReflect(
   // Defense-in-depth: cap the memories we send to the LLM. Callers often pass
   // the full top-50 retrieval result; without capping, the prompt explodes
   // (measured 91k input tokens on LME n=100 before this guard was added).
-  // Overridable via options or QMD_REFLECT_TOP_K / QMD_REFLECT_MAX_CHARS.
-  const topK = options.topK ?? Number(process.env.QMD_REFLECT_TOP_K ?? 10);
-  const maxChars = options.maxCharsPerMemory ?? Number(process.env.QMD_REFLECT_MAX_CHARS ?? 800);
+  // Overridable via options or LOTL_REFLECT_TOP_K / LOTL_REFLECT_MAX_CHARS.
+  const topK = options.topK ?? Number(process.env.LOTL_REFLECT_TOP_K ?? 10);
+  const maxChars = options.maxCharsPerMemory ?? Number(process.env.LOTL_REFLECT_MAX_CHARS ?? 800);
   const trimmed = memories
     .slice(0, Math.max(1, topK))
     .map(m => (m.text.length > maxChars ? m.text.slice(0, maxChars) + "…" : m.text));
@@ -1809,8 +1810,8 @@ export async function runReflectionPass(
 
   // Defense-in-depth: cap per-memory char length so a handful of very long
   // session chunks can't balloon the prompt into ≥80K-token territory (the
-  // eval.mts 91K-token incident). Override via QMD_REFLECT_MAX_CHARS.
-  const reflectMaxChars = Number(process.env.QMD_REFLECT_MAX_CHARS ?? 800);
+  // eval.mts 91K-token incident). Override via LOTL_REFLECT_MAX_CHARS.
+  const reflectMaxChars = Number(process.env.LOTL_REFLECT_MAX_CHARS ?? 800);
   const memoryBlock = rows
     .map((m, i) => {
       const t = m.text.length > reflectMaxChars ? m.text.slice(0, reflectMaxChars) + "…" : m.text;

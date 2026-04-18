@@ -75,11 +75,11 @@ export function getContextForFile(db: Database, filepath: string): string | null
   // Get all collections from DB
   const collections = getStoreCollections(db);
 
-  // Parse virtual path format: qmd://collection/path
+  // Parse virtual path format: lotl://collection/path
   let collectionName: string | null = null;
   let relativePath: string | null = null;
 
-  const parsedVirtual = filepath.startsWith('qmd://') ? parseVirtualPath(filepath) : null;
+  const parsedVirtual = filepath.startsWith('lotl://') ? parseVirtualPath(filepath) : null;
   if (parsedVirtual) {
     collectionName = parsedVirtual.collectionName;
     relativePath = parsedVirtual.path;

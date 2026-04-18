@@ -74,7 +74,7 @@ export function initializeDatabase(db: Database): void {
   `);
 
   // Documents table - file system layer mapping virtual paths to content hashes
-  // Collections are now managed in ~/.config/qmd/index.yml
+  // Collections are now managed in ~/.config/lotl/index.yml
   db.exec(`
     CREATE TABLE IF NOT EXISTS documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -294,16 +294,16 @@ export function ensureVecTableInternal(db: Database, dimensions: number): void {
     if (existingDims !== null && existingDims !== dimensions) {
       // Auto-reindex path: drop the old vec table + purge content_vectors so
       // subsequent queries silently fall back to BM25 until the next embed
-      // pass repopulates. Opt out via QMD_STRICT_DIM_MISMATCH=on for pipelines
+      // pass repopulates. Opt out via LOTL_STRICT_DIM_MISMATCH=on for pipelines
       // that want the old fail-loud behavior.
-      if (process.env.QMD_STRICT_DIM_MISMATCH === "on") {
+      if (process.env.LOTL_STRICT_DIM_MISMATCH === "on") {
         throw new Error(
           `Embedding dimension mismatch: existing vectors are ${existingDims}d but the current model produces ${dimensions}d. ` +
           `Run 'qmd embed -f' to re-embed with the new model.`
         );
       }
       process.stderr.write(
-        `qmd: embedding dimension changed (${existingDims}d → ${dimensions}d). ` +
+        `lotl: embedding dimension changed (${existingDims}d → ${dimensions}d). ` +
         `Dropping stale vectors; run 'qmd embed -f' to repopulate.\n`
       );
       db.exec("DROP TABLE IF EXISTS vectors_vec");

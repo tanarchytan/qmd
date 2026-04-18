@@ -13,7 +13,7 @@ import type { Store } from "./types.js";
 
 /**
  * Create a new store instance with the given database path.
- * If no path is provided, uses the default path (~/.cache/qmd/index.sqlite).
+ * If no path is provided, uses the default path (~/.cache/lotl/index.sqlite).
  */
 export function createStore(dbPath?: string): Store {
   const resolvedPath = dbPath || getDefaultDbPath();

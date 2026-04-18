@@ -79,7 +79,7 @@ Re-evaluate ONLY if we re-add the corresponding subsystem.
 | `cfd640e` | fix(test): resolve LLM test timeouts by disabling file parallelism | Test file we deleted with the LlamaCpp removal |
 | `e4990e4` | Harden embedding overflow handling | LlamaCpp `truncateToContextSize` hardening + `chunkDocumentByTokens` recursive guard. Both target surface we removed (no LlamaCpp class, no `llm.tokenize` in chunking — we use char heuristic). |
 | `f53ee26` | fix: detect non-GGUF model files | We removed node-llama-cpp; no GGUF loading path |
-| `1ecb5c9` | Fix QMD_LLAMA_GPU backend override handling | `QMD_LLAMA_*` env vars removed in cleanup |
+| `1ecb5c9` | Fix LOTL_LLAMA_GPU backend override handling | `LOTL_LLAMA_*` env vars removed in cleanup |
 | `26e3d0c` | fix(status): avoid build attempts during device probe | Device probe was LlamaCpp-specific, removed |
 | `fee576b` | fix: migrate legacy lowercase paths on reindex | Part of handelize chain (see below) |
 | `9fb9de4` | fix: preserve original case in handelize() | Part of handelize chain (see below) |
@@ -105,7 +105,7 @@ time to do them properly + add tests.
 
 | Upstream | Subject | Why deferred | Effort estimate |
 |---|---|---|---|
-| `8404cc3` | fix(uri): include index in custom qmd links | Adds index segment to `qmd://` URI parsing so CLI commands can switch indexes inline. Requires schema change to `VirtualPath` type (add optional `indexName` field) plus call sites in get/multi-get. | ~30-60 min code + tests |
+| `8404cc3` | fix(uri): include index in custom qmd links | Adds index segment to `lotl://` URI parsing so CLI commands can switch indexes inline. Requires schema change to `VirtualPath` type (add optional `indexName` field) plus call sites in get/multi-get. | ~30-60 min code + tests |
 | `3023ab3` | fix: bump transitive deps for security alerts | Need to cross-reference against our `package-lock.json` since dep set diverged after node-llama-cpp removal. May require updating multiple deps independently. | ~30 min audit + npm audit fix |
 
 ---
@@ -137,7 +137,7 @@ git show <hash> -- src/<file>
 **Skip rules** (reject without further analysis):
 - Anything touching `src/llm/local.ts`, `src/llm/loader.ts`, `src/llm/pull.ts`,
   `src/llm/fastembed.ts` — those files don't exist in our fork.
-- Anything fixing `QMD_LLAMA_*` env vars — we removed those.
+- Anything fixing `LOTL_LLAMA_*` env vars — we removed those.
 - Anything touching `LlamaCpp.getDeviceInfo()` or related GPU probe code.
 - Anything in `formatQueryForEmbedding` / `formatDocForEmbedding` Qwen3 branches —
   the Qwen3 conditional was removed 2026-04-14.

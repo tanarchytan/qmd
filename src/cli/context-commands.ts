@@ -1,10 +1,10 @@
 /**
  * cli/context-commands.ts — qmd context add/list/remove + path→collection helper.
  *
- * Extracted from cli/qmd.ts. Contexts are per-collection-path annotations
+ * Extracted from cli/lotl.ts. Contexts are per-collection-path annotations
  * surfaced to the retrieval pipeline. The CLI lets users manage them by
  * either filesystem path (auto-detected to the owning collection) or by
- * `qmd://collection/path` virtual path.
+ * `lotl://collection/path` virtual path.
  *
  * `detectCollectionFromPath` is exported because other CLI command handlers
  * (currently `getDocument` in qmd.ts) also need the same path→collection
@@ -77,8 +77,8 @@ export async function contextAdd(pathArg: string | undefined, contextText: strin
     resyncConfig();
 
     const displayPath = parsed.path
-      ? `qmd://${parsed.collectionName}/${parsed.path}`
-      : `qmd://${parsed.collectionName}/ (collection root)`;
+      ? `lotl://${parsed.collectionName}/${parsed.path}`
+      : `lotl://${parsed.collectionName}/ (collection root)`;
     console.log(success(`Added context for: ${displayPath}`));
     console.log(info(`Context: ${contextText}`));
     closeDb();
@@ -88,7 +88,7 @@ export async function contextAdd(pathArg: string | undefined, contextText: strin
   const detected = detectCollectionFromPath(db, fsPath);
   if (!detected) {
     console.error(warn(`Path is not in any indexed collection: ${fsPath}`));
-    console.error(info(`Run 'qmd status' to see indexed collections`));
+    console.error(info(`Run 'lotl status' to see indexed collections`));
     process.exit(1);
   }
 
@@ -96,8 +96,8 @@ export async function contextAdd(pathArg: string | undefined, contextText: strin
   resyncConfig();
 
   const displayPath = detected.relativePath
-    ? `qmd://${detected.collectionName}/${detected.relativePath}`
-    : `qmd://${detected.collectionName}/`;
+    ? `lotl://${detected.collectionName}/${detected.relativePath}`
+    : `lotl://${detected.collectionName}/`;
   console.log(success(`Added context for: ${displayPath}`));
   console.log(info(`Context: ${contextText}`));
   closeDb();
@@ -108,7 +108,7 @@ export function contextList(): void {
   const allContexts = listAllContexts();
 
   if (allContexts.length === 0) {
-    console.log(info("No contexts configured. Use 'qmd context add' to add one."));
+    console.log(info("No contexts configured. Use 'lotl context add' to add one."));
     closeDb();
     return;
   }
@@ -164,9 +164,9 @@ export function contextRemove(pathArg: string): void {
 
   const removed = yamlRemoveContext(detected.collectionName, detected.relativePath);
   if (!removed) {
-    console.error(warn(`No context found for: qmd://${detected.collectionName}/${detected.relativePath}`));
+    console.error(warn(`No context found for: lotl://${detected.collectionName}/${detected.relativePath}`));
     process.exit(1);
   }
 
-  console.log(success(`Removed context for: qmd://${detected.collectionName}/${detected.relativePath}`));
+  console.log(success(`Removed context for: lotl://${detected.collectionName}/${detected.relativePath}`));
 }

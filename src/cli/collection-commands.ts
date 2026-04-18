@@ -1,7 +1,7 @@
 /**
  * cli/collection-commands.ts — qmd collection list/remove/rename handlers.
  *
- * Extracted from cli/qmd.ts. Each function is a CLI command entry point:
+ * Extracted from cli/lotl.ts. Each function is a CLI command entry point:
  * parses its own DB, prints to stdout/stderr, closes the DB when done.
  *
  * Note: `qmd collection add` stays in qmd.ts for now because it's tightly
@@ -29,7 +29,7 @@ export function collectionList(): void {
   const collections = listCollections(db);
 
   if (collections.length === 0) {
-    console.log("No collections found. Run 'qmd collection add .' to create one.");
+    console.log("No collections found. Run 'lotl collection add .' to create one.");
     closeDb();
     return;
   }
@@ -44,7 +44,7 @@ export function collectionList(): void {
     const excluded = yamlColl?.includeByDefault === false;
     const excludeTag = excluded ? ` ${warn("[excluded]")}` : "";
 
-    console.log(`${c.cyan}${coll.name}${c.reset} ${info(`(qmd://${coll.name}/)`)}${excludeTag}`);
+    console.log(`${c.cyan}${coll.name}${c.reset} ${info(`(lotl://${coll.name}/)`)}${excludeTag}`);
     console.log(`  ${info("Pattern:")}  ${coll.glob_pattern}`);
     if (yamlColl?.ignore?.length) {
       console.log(`  ${info("Ignore:")}   ${yamlColl.ignore.join(", ")}`);
@@ -88,5 +88,5 @@ export function collectionRename(oldName: string, newName: string): void {
   closeDb();
 
   console.log(success(`Renamed collection '${oldName}' to '${newName}'`));
-  console.log(`  Virtual paths updated: ${c.cyan}qmd://${oldName}/${c.reset} → ${c.cyan}qmd://${newName}/${c.reset}`);
+  console.log(`  Virtual paths updated: ${c.cyan}lotl://${oldName}/${c.reset} → ${c.cyan}lotl://${newName}/${c.reset}`);
 }

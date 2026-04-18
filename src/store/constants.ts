@@ -11,11 +11,11 @@ export const DEFAULT_EMBED_MAX_DOCS_PER_BATCH = 64;
 export const DEFAULT_EMBED_MAX_BATCH_BYTES = 64 * 1024 * 1024; // 64MB
 
 // Chunking: 900 tokens per chunk with 15% overlap (env-configurable)
-export const CHUNK_SIZE_TOKENS = parseInt(process.env.QMD_CHUNK_SIZE_TOKENS ?? "900", 10);
+export const CHUNK_SIZE_TOKENS = parseInt(process.env.LOTL_CHUNK_SIZE_TOKENS ?? "900", 10);
 export const CHUNK_OVERLAP_TOKENS = Math.floor(CHUNK_SIZE_TOKENS * 0.15);
 export const CHUNK_SIZE_CHARS = CHUNK_SIZE_TOKENS * 4;
 export const CHUNK_OVERLAP_CHARS = CHUNK_OVERLAP_TOKENS * 4;
-export const CHUNK_WINDOW_TOKENS = parseInt(process.env.QMD_CHUNK_WINDOW_TOKENS ?? "200", 10);
+export const CHUNK_WINDOW_TOKENS = parseInt(process.env.LOTL_CHUNK_WINDOW_TOKENS ?? "200", 10);
 export const CHUNK_WINDOW_CHARS = CHUNK_WINDOW_TOKENS * 4;
 
 // Hybrid query: strong BM25 signal detection thresholds
@@ -54,7 +54,7 @@ export const MEMORY_RRF_W_TIME = 0.1;
 // L# cache hierarchy (Schift pattern): store same session at three detail
 // levels (L0 full, L1 user-only, L2 first 3 user turns), blend scores at
 // query time. Weights sum to 1.0. L1 strongest (user turn carries centroid
-// weight). Opt-in via QMD_MEMORY_LHASH=on. Schift reports +3pp R@1.
+// weight). Opt-in via LOTL_MEMORY_LHASH=on. Schift reports +3pp R@1.
 export const MEMORY_L0_WEIGHT = 0.2;
 export const MEMORY_L1_WEIGHT = 0.5;
 export const MEMORY_L2_WEIGHT = 0.3;
@@ -66,11 +66,12 @@ export const MEMORY_L2_FIRST_N_USER_TURNS = 3;
 // Cross-encoder logits are min-max normalized before blending.
 // Rerank blend on RRF pipeline: RRF scores (~0.01-0.03) are too small
 // relative to min-max normalized rerank scores (0-1). Any blend gives
-// rerank near-total dominance regardless of weight. Need score
-// normalization before blending — TODO for next session.
-// On old additive: 0.1/0.9 was optimal (MRR 0.937).
-// On RRF: rerank regresses at every blend tested. Ship without rerank
-// until score normalization is implemented.
+// rerank near-total dominance regardless of weight. Score normalization
+// before blending is unimplemented; current default ships without rerank.
+// On old additive pipeline: 0.1/0.9 was optimal (MRR 0.937).
+// On RRF pipeline: rerank regresses at every blend tested.
+// KNOWN LIMITATION: to re-enable rerank, implement min-max normalization
+// on BOTH sides before blending (tracked in docs/TODO.md Phase 8).
 export const MEMORY_RERANK_BLEND_ORIGINAL = 0.7;
 export const MEMORY_RERANK_BLEND_RERANK = 0.3;
 

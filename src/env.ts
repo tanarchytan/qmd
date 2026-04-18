@@ -1,8 +1,8 @@
 /**
- * env.ts - Load QMD config from ~/.config/qmd/.env
+ * env.ts - Load Lotl config from ~/.config/lotl/.env
  *
  * Two-tier precedence:
- *   QMD_* vars  → .env file always wins (overrides stale parent process vars)
+ *   LOTL_* vars  → .env file always wins (overrides stale parent process vars)
  *   all others  → inherited environment wins (standard dotenv behaviour)
  */
 
@@ -13,19 +13,19 @@ import { join } from "node:path";
 let _loaded = false;
 
 /**
- * Returns the QMD config directory:
- *   $QMD_CONFIG_DIR  →  $XDG_CONFIG_HOME/qmd  →  ~/.config/qmd
+ * Returns the Lotl config directory:
+ *   $LOTL_CONFIG_DIR  →  $XDG_CONFIG_HOME/lotl  →  ~/.config/lotl
  */
 export function getQmdConfigDir(): string {
   return (
-    process.env.QMD_CONFIG_DIR ||
-    (process.env.XDG_CONFIG_HOME ? join(process.env.XDG_CONFIG_HOME, "qmd") : null) ||
-    join(homedir(), ".config", "qmd")
+    process.env.LOTL_CONFIG_DIR ||
+    (process.env.XDG_CONFIG_HOME ? join(process.env.XDG_CONFIG_HOME, "lotl") : null) ||
+    join(homedir(), ".config", "lotl")
   );
 }
 
 /**
- * Load ~/.config/qmd/.env (or $QMD_CONFIG_DIR/.env) into process.env.
+ * Load ~/.config/lotl/.env (or $/.env) into process.env.
  * Idempotent — safe to call multiple times; only reads the file once.
  */
 export function loadQmdEnv(): void {
@@ -50,11 +50,11 @@ export function loadQmdEnv(): void {
     const key = trimmed.slice(0, eqIdx).trim();
     const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, "");
     if (!key) continue;
-    if (key.startsWith("QMD_")) {
-      // QMD's own config: .env is the source of truth, always override
+    if (key.startsWith("LOTL_")) {
+      // Lotl's own config: .env is the source of truth, always override
       process.env[key] = val;
     } else if (!process.env[key]) {
-      // Non-QMD vars: only set if not already present (standard dotenv)
+      // Non-Lotl vars: only set if not already present (standard dotenv)
       process.env[key] = val;
     }
   }

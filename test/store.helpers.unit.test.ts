@@ -18,7 +18,7 @@ import {
   handelize,
   cleanupOrphanedVectors,
   sanitizeFTS5Term,
-} from "../src/store";
+} from "../src/store.js";
 
 // =============================================================================
 // Path Utilities
@@ -221,17 +221,17 @@ describe("handelize", () => {
   });
 
   test("normalizes virtual paths", () => {
-    expect(normalizeVirtualPath("qmd://docs/readme.md")).toBe("qmd://docs/readme.md");
+    expect(normalizeVirtualPath("lotl://docs/readme.md")).toBe("lotl://docs/readme.md");
     expect(normalizeVirtualPath("docs/readme.md")).toBe("docs/readme.md");
   });
 
   test("detects virtual paths", () => {
-    expect(isVirtualPath("qmd://docs/readme.md")).toBe(true);
+    expect(isVirtualPath("lotl://docs/readme.md")).toBe(true);
     expect(isVirtualPath("/tmp/file.md")).toBe(false);
   });
 
   test("parses virtual paths", () => {
-    expect(parseVirtualPath("qmd://docs/readme.md")).toEqual({
+    expect(parseVirtualPath("lotl://docs/readme.md")).toEqual({
       collectionName: "docs",
       path: "readme.md",
     });

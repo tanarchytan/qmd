@@ -8,7 +8,7 @@
  *     (src/llm/transformers-embed.ts)
  *
  * node-llama-cpp (LlamaCpp) and fastembed-js were removed in the same cleanup —
- * neither was actually exercised in production (.env had QMD_LOCAL=no, embed
+ * neither was actually exercised in production (.env had LOTL_LOCAL=no, embed
  * went through fastembed which only loaded a fixed enum of 4 models, rerank +
  * generate always went through RemoteLLM). The transformers backend now covers
  * arbitrary HF ONNX embed models with a much smaller dep footprint and zero

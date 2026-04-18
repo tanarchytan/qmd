@@ -1,10 +1,9 @@
 /**
- * cli/format.ts — pure display-formatting helpers, extracted from cli/qmd.ts.
+ * cli/format.ts — pure display-formatting helpers, extracted from cli/lotl.ts.
  *
  * All functions are stateless: same input → same output, no closures over
- * module state or DB/config. This is the first slice of the cli/qmd.ts split
- * (backlog item in docs/TODO.md — 3,379 LOC monolith, cohesion 0.08 per
- * graphify). Keep this module free of DB / config / async / side-effects.
+ * module state or DB/config. Part of the cli/lotl.ts split (see docs/TODO.md
+ * backlog). Keep this module free of DB / config / async / side-effects.
  */
 
 /** "Xs" under 1 min, "Xm Ys" under 1 hour, "Xh Ym" otherwise. */

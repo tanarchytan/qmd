@@ -1,5 +1,5 @@
 /**
- * LoCoMo evaluation: QMD memory retrieval + MiniMax answering.
+ * LoCoMo evaluation: Lotl memory retrieval + MiniMax answering.
  *
  * Usage:
  *   npx tsx evaluate/locomo/eval.mts [--limit N] [--conv SAMPLE_ID] [--no-llm]
@@ -8,7 +8,7 @@
  *   MINIMAX_API_KEY  — MiniMax API key (required unless --no-llm)
  *
  * Flow per question:
- *   1. QMD memoryRecall → top 10 memories
+ *   1. Lotl memoryRecall → top 10 memories
  *   2. MiniMax reads memories → generates answer
  *   3. Score answer vs ground truth (F1 + exact match)
  */
@@ -23,22 +23,22 @@ import { openCache } from "../../src/llm/cache.js";
 const LLM_CACHE_PATH = join(process.cwd(), "evaluate/locomo/llm-cache.json");
 const llmCache = openCache(LLM_CACHE_PATH);
 // Tell extractAndStore (chatComplete in src/llm.ts) to use the same cache file
-process.env.QMD_LLM_CACHE_PATH = LLM_CACHE_PATH;
+process.env.LOTL_LLM_CACHE_PATH = LLM_CACHE_PATH;
 
 // ---------------------------------------------------------------------------
-// QMD imports
+// Lotl imports
 // ---------------------------------------------------------------------------
 
-const QMD_DIR = process.cwd();
+const LOTL_DIR = process.cwd();
 function toUrl(p: string) { return pathToFileURL(p).href; }
 
-const { loadQmdEnv } = await import(toUrl(join(QMD_DIR, "src/env.ts")));
+const { loadQmdEnv } = await import(toUrl(join(LOTL_DIR, "src/env.ts")));
 loadQmdEnv();
 
-const { openDatabase } = await import(toUrl(join(QMD_DIR, "src/db.ts")));
-const { initializeDatabase } = await import(toUrl(join(QMD_DIR, "src/store/db-init.ts")));
-const { memoryStore, memoryStoreBatch, memoryRecall, extractAndStore, extractReflections, consolidateEntityFacts, runDecayPass, memoryReflect } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
-const { knowledgeStore, knowledgeQuery, knowledgeAbout } = await import(toUrl(join(QMD_DIR, "src/memory/knowledge.ts")));
+const { openDatabase } = await import(toUrl(join(LOTL_DIR, "src/db.ts")));
+const { initializeDatabase } = await import(toUrl(join(LOTL_DIR, "src/store/db-init.ts")));
+const { memoryStore, memoryStoreBatch, memoryRecall, extractAndStore, extractReflections, consolidateEntityFacts, runDecayPass, memoryReflect } = await import(toUrl(join(LOTL_DIR, "src/memory/index.ts")));
+const { knowledgeStore, knowledgeQuery, knowledgeAbout } = await import(toUrl(join(LOTL_DIR, "src/memory/knowledge.ts")));
 
 type Database = ReturnType<typeof openDatabase>;
 
@@ -50,10 +50,9 @@ type Database = ReturnType<typeof openDatabase>;
 // LLM providers
 // ---------------------------------------------------------------------------
 
-type LLMProvider = "gemini" | "minimax";
+type LLMProvider = "gemini" | "minimax" | "poe";
 
-// Pinned model versions (quality fix B) — prevents silent rolling updates
-// gemini-2.5-flash → gemini-2.5-flash (Apr 2026 stable checkpoint)
+// Pinned model versions (quality fix B) — prevents silent rolling updates.
 const LLM_CONFIG: Record<LLMProvider, { url: string; model: string; keyEnv: string }> = {
   gemini: {
     url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
@@ -65,22 +64,106 @@ const LLM_CONFIG: Record<LLMProvider, { url: string; model: string; keyEnv: stri
     model: "MiniMax-M2.7",
     keyEnv: "MINIMAX_API_KEY",
   },
+  // Poe OpenAI-compatible endpoint — model override via LOTL_POE_MODEL (default gpt-4o-mini for generation).
+  poe: {
+    url: "https://api.poe.com/v1/chat/completions",
+    model: process.env.LOTL_POE_MODEL || "gpt-4o-mini",
+    keyEnv: "POE_API_KEY",
+  },
 };
 
-// Fixed seed (quality fix A) — Gemini supports best-effort seeded sampling
 const LLM_SEED = 42;
 
-let activeLLM: LLMProvider = "gemini"; // default
+let activeLLM: LLMProvider = "gemini";
+// Optional judge provider (--judge) + per-call model override (--judge-model).
+// Implements Mem0-style CORRECT/WRONG semantic grading (see HYBRID_HARNESS.md).
+let judgeProvider: LLMProvider | null = null;
+let judgeModelOverride: string | null = null;
 
-async function askLLM(prompt: string): Promise<string> {
-  const cfg = LLM_CONFIG[activeLLM];
+async function askLLM(
+  prompt: string,
+  provider: LLMProvider = activeLLM,
+  maxTokens: number = 256,
+  modelOverride?: string,
+): Promise<string> {
+  const cfg = LLM_CONFIG[provider];
   const apiKey = process.env[cfg.keyEnv];
   if (!apiKey) throw new Error(`${cfg.keyEnv} not set`);
+  const model = modelOverride || cfg.model;
+  if (provider === "gemini") return askGemini(prompt, apiKey);
+  if (provider === "minimax") return askMiniMax(prompt, apiKey);
+  if (provider === "poe") return askOpenAICompat(prompt, apiKey, cfg.url, model, maxTokens);
+  throw new Error(`LLM provider not supported: ${provider}`);
+}
 
-  if (activeLLM === "gemini") {
-    return askGemini(prompt, apiKey);
+async function askOpenAICompat(
+  prompt: string,
+  apiKey: string,
+  url: string,
+  model: string,
+  maxTokens: number = 256,
+): Promise<string> {
+  const cacheKey = { model, temperature: 0, seed: LLM_SEED, prompt };
+  const cached = llmCache.get(cacheKey);
+  if (cached != null) return cached;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0,
+      seed: LLM_SEED,
+      max_tokens: maxTokens,
+    }),
+  });
+  if (!resp.ok) throw new Error(`${model} ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+  const data = await resp.json() as any;
+  let text = (data.choices?.[0]?.message?.content || "").replace(/^["']|["']$/g, "").trim();
+  llmCache.set(cacheKey, text);
+  return text;
+}
+
+// LLM-as-judge (Mem0-style "generous on topic" grading, see HYBRID_HARNESS.md).
+// Returns 1 if CORRECT, 0 if WRONG, null if judge disabled or errored.
+const JUDGE_SYSTEM_PROMPT =
+  "You are a grader. You will be given a question, a gold answer, and a predicted answer.\n\n" +
+  "Judge whether the predicted answer is CORRECT or WRONG.\n\n" +
+  "Be generous: if the predicted answer touches the same topic/facts as the gold, mark CORRECT — " +
+  "even if phrasing, format, or length differ. Only mark WRONG if the predicted answer contradicts " +
+  "the gold, hallucinates, or fails to address the question.\n\n" +
+  "For adversarial questions (gold is a refusal like 'not mentioned' or 'no information available'), " +
+  "mark CORRECT only if the prediction also refuses / says insufficient information.\n\n" +
+  "Reply on one line with a JSON object: {\"correct\": true|false}";
+
+async function askJudge(question: string, predicted: string, gold: string): Promise<number | null> {
+  if (!judgeProvider) return null;
+  const userMsg =
+    `QUESTION: ${question.trim()}\n\n` +
+    `GOLD ANSWER: ${gold.trim()}\n\n` +
+    `PREDICTED ANSWER: ${predicted.trim()}\n\n` +
+    `Respond with the JSON object only.`;
+  const fullPrompt = `${JUDGE_SYSTEM_PROMPT}\n\n${userMsg}`;
+  try {
+    const raw = await askLLM(fullPrompt, judgeProvider, 96, judgeModelOverride ?? undefined);
+    // JSON path (preferred, Poe/gpt-4o).
+    const m = raw.match(/\{[\s\S]*?\}/);
+    if (m) {
+      try {
+        const obj = JSON.parse(m[0]);
+        if (typeof obj.correct === "boolean") return obj.correct ? 1 : 0;
+      } catch { /* fall through */ }
+    }
+    // Text fallback — Gemini-flash prose + CORRECT/WRONG.
+    const upper = raw.toUpperCase();
+    if (/\bINCORRECT\b|\bWRONG\b|"CORRECT":\s*FALSE/.test(upper)) return 0;
+    if (/\bCORRECT\b|"CORRECT":\s*TRUE/.test(upper)) return 1;
+    process.stderr.write(`[judge] unparseable: ${raw.slice(0, 120)}\n`);
+    return null;
+  } catch (err) {
+    process.stderr.write(`[judge] failed: ${err instanceof Error ? err.message : err}\n`);
+    return null;
   }
-  return askMiniMax(prompt, apiKey);
 }
 
 async function askGemini(prompt: string, apiKey: string): Promise<string> {
@@ -158,7 +241,7 @@ async function askMiniMax(prompt: string, apiKey: string): Promise<string> {
 function buildAnswerPrompt(question: string, memories: string[], category: number, groundTruthIsNull: boolean = false): string {
   const context = memories.map((m, i) => `[${i + 1}] ${m}`).join("\n");
   const contextBlock = context;
-  const promptVer = process.env.QMD_PROMPT_RULES || "v11";
+  const promptVer = process.env.LOTL_PROMPT_RULES || "v11";
 
   if (category === 5 || groundTruthIsNull) {
     // Adversarial — answer "undefined" for events that never happened
@@ -484,6 +567,8 @@ async function main() {
     if (args[i] === "--no-llm") useLLM = false;
     if (args[i] === "--ingest-only") { ingestOnly = true; useLLM = false; }
     if (args[i] === "--llm" && args[i + 1]) { activeLLM = args[i + 1] as LLMProvider; }
+    if (args[i] === "--judge" && args[i + 1]) { judgeProvider = args[i + 1] as LLMProvider; }
+    if (args[i] === "--judge-model" && args[i + 1]) { judgeModelOverride = args[i + 1]!; }
     if (args[i] === "--db-suffix" && args[i + 1]) dbSuffix = "-" + args[i + 1];
     if (args[i] === "--tag" && args[i + 1]) resultsTag = args[i + 1]!;
     // cat D: override LLM model for A-B testing — sets BOTH extract and answer model
@@ -491,7 +576,7 @@ async function main() {
       const m = args[i + 1]!;
       LLM_CONFIG.gemini.model = m;
       LLM_CONFIG.gemini.url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
-      process.env.QMD_QUERY_EXPANSION_MODEL = m;
+      process.env.LOTL_QUERY_EXPANSION_MODEL = m;
     }
     // Split: only override the answer model (keeps extract model on default/lite)
     if (args[i] === "--answer-model" && args[i + 1]) {
@@ -499,20 +584,18 @@ async function main() {
       LLM_CONFIG.gemini.model = m;
       LLM_CONFIG.gemini.url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
     }
-    // --extract-model was pointing at QMD_QUERY_EXPANSION_MODEL (wrong variable —
+    // --extract-model was pointing at LOTL_QUERY_EXPANSION_MODEL (wrong variable —
     // the extractor ignores it, and queryExpansion then 404s). Removed pending a
     // real per-call override in src/memory/extractor.ts.
   }
 
   // Ablation toggles via env vars (read once for logging)
   const ablation = {
-    INGEST_SYNTHESIS: process.env.QMD_INGEST_SYNTHESIS !== "off",
-    INGEST_REFLECTIONS: process.env.QMD_INGEST_REFLECTIONS !== "off",
-    PROMPT_RULES: process.env.QMD_PROMPT_RULES || "v11",
-    RECALL_DUAL_PASS: process.env.QMD_RECALL_DUAL_PASS === "on",
-    RECALL_LOG_MOD: process.env.QMD_RECALL_LOG_MOD === "on",
-    RECALL_MMR: process.env.QMD_RECALL_MMR === "on",
-    RECALL_MMR_LAMBDA: parseFloat(process.env.QMD_RECALL_MMR_LAMBDA || "0.85"),
+    INGEST_SYNTHESIS: process.env.LOTL_INGEST_SYNTHESIS !== "off",
+    INGEST_REFLECTIONS: process.env.LOTL_INGEST_REFLECTIONS !== "off",
+    PROMPT_RULES: process.env.LOTL_PROMPT_RULES || "v11",
+    RECALL_MMR: process.env.LOTL_RECALL_MMR === "on",
+    RECALL_MMR_LAMBDA: parseFloat(process.env.LOTL_RECALL_MMR_LAMBDA || "0.85"),
   };
   if (dbSuffix || resultsTag) {
     console.log(`\n  Ablation: db=${dbSuffix || "(default)"} tag=${resultsTag || "(none)"} ${JSON.stringify(ablation)}`);
@@ -527,11 +610,11 @@ async function main() {
   }
 
   // Load dataset
-  const dataPath = join(QMD_DIR, "evaluate/locomo/locomo10.json");
+  const dataPath = join(LOTL_DIR, "evaluate/locomo/locomo10.json");
   const data: Conversation[] = JSON.parse(readFileSync(dataPath, "utf-8"));
   const totalQA = data.reduce((n, c) => n + c.qa.length, 0);
   console.log(`\n  Dataset: ${data.length} conversations, ${totalQA} QA pairs`);
-  console.log(`  Mode: ${ingestOnly ? "ingest only (build DB)" : useLLM ? `QMD recall + ${LLM_CONFIG[activeLLM].model} answer` : "QMD recall only (no LLM)"}`);
+  console.log(`  Mode: ${ingestOnly ? "ingest only (build DB)" : useLLM ? `Lotl recall + ${LLM_CONFIG[activeLLM].model} answer` : "Lotl recall only (no LLM)"}`);
   if (convFilter) console.log(`  Filter: ${convFilter}`);
   if (limit) console.log(`  Limit: ${limit} questions per conversation`);
   console.log();
@@ -563,6 +646,7 @@ async function main() {
     dr10: number;
     dr15: number;
     dr50: number;
+    judge: number | null;  // LLM-as-judge verdict (1=CORRECT, 0=WRONG, null if disabled/errored)
     category: number;
     categoryName: string;
     searchMs: number;
@@ -573,8 +657,8 @@ async function main() {
   // partial results. Final write at end of main() rewrites with full summary.
   // Atomic via writeFileSync(tmp) + renameSync — safe against kill mid-write.
   const resultsName = resultsTag ? `results-${resultsTag}.json` : "results.json";
-  const outPath = join(QMD_DIR, "evaluate/locomo", resultsName);
-  const PARTIAL_SAVE_EVERY = parseInt(process.env.QMD_EVAL_PARTIAL_EVERY || "10", 10);
+  const outPath = join(LOTL_DIR, "evaluate/locomo", resultsName);
+  const PARTIAL_SAVE_EVERY = parseInt(process.env.LOTL_EVAL_PARTIAL_EVERY || "10", 10);
   const totalQuestions = conversations.reduce((s, c: any) => s + (c.qa?.length || 0), 0);
 
   function savePartial() {
@@ -598,8 +682,8 @@ async function main() {
     const ingestStart = Date.now();
 
     // Storage mode toggles (cheap optimization knobs)
-    const storeTurns = process.env.QMD_INGEST_PER_TURN !== "off";
-    const storeSessions = process.env.QMD_INGEST_SESSION_AS_MEMORY !== "off";
+    const storeTurns = process.env.LOTL_INGEST_PER_TURN !== "off";
+    const storeSessions = process.env.LOTL_INGEST_SESSION_AS_MEMORY !== "off";
     // Collect everything to ingest in one batch per conversation, then send.
     // metadata.source_session_id is the LoCoMo session ID ("D<n>") — matches QA.evidence prefix.
     const allItems: Array<{ text: string; scope: string; importance?: number; metadata?: Record<string, any> }> = [];
@@ -644,15 +728,15 @@ async function main() {
       }
 
       // Also run extractAndStore for preference bridging — toggleable (cat C)
-      if (process.env.QMD_INGEST_EXTRACTION !== "off") {
+      if (process.env.LOTL_INGEST_EXTRACTION !== "off") {
         try {
           const eResult = await extractAndStore(db, sessionLines.join("\n"), scope);
           memoryCount += eResult.stored;
         } catch { /* extraction optional */ }
       }
 
-      // v13: extract reflections (cat 18) — toggleable via QMD_INGEST_REFLECTIONS=off
-      if (process.env.QMD_INGEST_REFLECTIONS !== "off") {
+      // v13: extract reflections (cat 18) — toggleable via LOTL_INGEST_REFLECTIONS=off
+      if (process.env.LOTL_INGEST_REFLECTIONS !== "off") {
         try {
           const rResult = await extractReflections(db, sessionLines.join("\n"), scope);
           memoryCount += rResult.stored;
@@ -688,8 +772,8 @@ async function main() {
       console.log(`    Knowledge graph: ${kgCount} triples (auto-extracted by LLM)`);
     } catch { /* table may not exist */ }
 
-    // v13: Per-entity synthesis from KG (cat 11) — toggleable via QMD_INGEST_SYNTHESIS=off
-    if (process.env.QMD_INGEST_SYNTHESIS !== "off") {
+    // v13: Per-entity synthesis from KG (cat 11) — toggleable via LOTL_INGEST_SYNTHESIS=off
+    if (process.env.LOTL_INGEST_SYNTHESIS !== "off") {
       try {
         const cons = await consolidateEntityFacts(db, { scope });
         console.log(`    Consolidation: ${cons.entities} entities → ${cons.profiles} profiles + ${cons.timelines} timelines`);
@@ -716,7 +800,7 @@ async function main() {
       ablation.INGEST_SYNTHESIS ? "synth" : "nosynth",
       ablation.INGEST_REFLECTIONS ? "refl" : "norefl",
     ].join("-");
-    const dbDir = join(QMD_DIR, "evaluate/locomo/dbs");
+    const dbDir = join(LOTL_DIR, "evaluate/locomo/dbs");
     if (!existsSync(dbDir)) mkdirSync(dbDir, { recursive: true });
     // Always include ingest config when no explicit suffix passed
     const effectiveSuffix = dbSuffix || `-${ingestConfigHash}`;
@@ -757,6 +841,8 @@ async function main() {
     const evalStart = Date.now();
     let runningF1 = 0;
     let runningEM = 0;
+    let runningJudgeCorrect = 0;
+    let runningJudgeN = 0;
 
     for (let i = 0; i < qaList.length; i++) {
       const qa = qaList[i]!;
@@ -778,14 +864,20 @@ async function main() {
 
       // --- OPTIONAL REFLECT (roadmap cat 11): pre-filter memories into a
       // compressed fact list before the answer call. Opt-in via
-      // QMD_RECALL_REFLECT=on. Adds one extra LLM call per question.
+      // LOTL_RECALL_REFLECT=on. Adds one extra LLM call per question.
       //
       // v16.1 fix: AUGMENT the memory list with the reflection block at
       // the top — don't REPLACE it. v16-full shipped replacement and lost
       // ~20pp F1 on LME because the compressed bullets dropped exact
       // wording the answer model needed for date arithmetic and ordering.
-      let answerMemories = memories.map(m => m.text);
-      if (process.env.QMD_RECALL_REFLECT === "on" && memories.length > 0 && useLLM) {
+      // Honest-eval: cap LLM-context memories to top-10 (Mem0-paper default, matches Lotl's
+      // LongMemEval eval). LoCoMo convs have up to 32 sessions — top-50 LLM context would
+      // leak the full conversation regardless of ranking quality (MemPalace's admitted cheat).
+      // Retrieval metrics (R@5 / R@10 / MRR) still slice from the full 50-pool above.
+      // Override via LOTL_LOCOMO_ANSWER_TOP_K for ablation.
+      const LOCOMO_ANSWER_TOP_K = Number(process.env.LOTL_LOCOMO_ANSWER_TOP_K ?? 10);
+      let answerMemories = memories.slice(0, LOCOMO_ANSWER_TOP_K).map(m => m.text);
+      if (process.env.LOTL_RECALL_REFLECT === "on" && memories.length > 0 && useLLM) {
         try {
           const reflected = await memoryReflect(qa.question, memories, { maxFacts: 8 });
           if (reflected) {
@@ -833,6 +925,15 @@ async function main() {
       const dr50 = computeDialogRecallAtK(memories, evidenceIds, 50);
       runningF1 += f1;
       runningEM += em;
+      // LLM-as-judge (Mem0-style CORRECT/WRONG) — only when --judge is set.
+      // Tracks a separate running sum + count since judge calls may fail mid-run.
+      const judgeVerdict = (judgeProvider && useLLM && prediction)
+        ? await askJudge(qa.question, prediction, answer)
+        : null;
+      if (judgeVerdict != null) {
+        runningJudgeCorrect += judgeVerdict;
+        runningJudgeN += 1;
+      }
 
       allResults.push({
         sample_id: conv.sample_id,
@@ -842,6 +943,7 @@ async function main() {
         memories: memories.map(m => m.text.slice(0, 120)),
         memoriesFound: memories.length,
         f1, em, sh, r5, r10, mrr, sr5, sr10, sr15, sr50, dr5, dr10, dr15, dr50,
+        judge: judgeVerdict,
         category: qa.category,
         categoryName: CATEGORY_NAMES[qa.category] || "unknown",
         searchMs, answerMs,
@@ -905,6 +1007,13 @@ async function main() {
   console.log(`    F1:     ${(avgF1 * 100).toFixed(1)}%   (token overlap, fuzzy)`);
   console.log(`    EM:     ${(avgEM * 100).toFixed(1)}%   (exact match, strict)`);
   console.log(`    SH:     ${(avgSH * 100).toFixed(1)}%   (substring hit — catches short-answer EM false negatives)`);
+  // LLM-as-judge — only printed when --judge was set (Mem0-style CORRECT/WRONG semantic grading).
+  const judgeSamples = allResults.filter(r => r.judge != null);
+  if (judgeSamples.length > 0) {
+    const judgeN = judgeSamples.length;
+    const judgeCorrect = judgeSamples.reduce((s, r) => s + (r.judge ?? 0), 0);
+    console.log(`    Judge:  ${(judgeCorrect / judgeN * 100).toFixed(1)}%   (LLM-as-judge binary, n=${judgeN} via ${judgeProvider}${judgeModelOverride ? "/" + judgeModelOverride : ""})`);
+  }
   console.log(`  MemPalace-compat (reference only, take with salt — SR ceilings easily, DR depends on ground-truth quality):`);
   console.log(`    DR@5 / DR@10 / DR@15 / DR@50 = ${(avgDR5 * 100).toFixed(1)}% / ${(avgDR10 * 100).toFixed(1)}% / ${(avgDR15 * 100).toFixed(1)}% / ${(avgDR50 * 100).toFixed(1)}%`);
   console.log(`    SR@5 / SR@10 / SR@15 / SR@50 = ${(avgSR5 * 100).toFixed(1)}% / ${(avgSR10 * 100).toFixed(1)}% / ${(avgSR15 * 100).toFixed(1)}% / ${(avgSR50 * 100).toFixed(1)}%`);

@@ -12,11 +12,11 @@
 // Default local embed model — HuggingFace repo id for @huggingface/transformers
 // (Path A backend in src/llm/transformers-embed.ts). Promoted 2026-04-13 after
 // LME _s n=500 A/B: 94.2% R@5 in 14m49s vs MiniLM fp32 baseline 93.2% / 23m33s.
-// Override via QMD_EMBED_MODEL.
+// Override via LOTL_EMBED_MODEL.
 export const DEFAULT_EMBED_MODEL = "mixedbread-ai/mxbai-embed-xsmall-v1";
 
 // Rerank + generate have no local backend — they require a remote provider
-// (RemoteLLM, configured via QMD_RERANK_PROVIDER / QMD_QUERY_EXPANSION_PROVIDER).
+// (RemoteLLM, configured via LOTL_RERANK_PROVIDER / LOTL_QUERY_EXPANSION_PROVIDER).
 // These constants are kept only as informational defaults; the actual model
 // routing happens through the remote provider's own model selection.
 export const DEFAULT_RERANK_MODEL = "zerank-1";

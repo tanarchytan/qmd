@@ -8,16 +8,16 @@ cd "$(dirname "$0")"
 # No code path per-model here — just env-var swaps.
 # ============================================================
 
-export QMD_EMBED_BACKEND=transformers
-export QMD_TRANSFORMERS_DTYPE=q8
-export QMD_TRANSFORMERS_DEVICE=cpu
-export QMD_VEC_MIN_SIM=0.1
-export QMD_RECALL_RAW=on
-export QMD_INGEST_EXTRACTION=off
-export QMD_INGEST_REFLECTIONS=off
-export QMD_INGEST_SYNTHESIS=off
-export QMD_INGEST_PER_TURN=off
-export QMD_EMBED_MICROBATCH=32
+export LOTL_EMBED_BACKEND=transformers
+export LOTL_TRANSFORMERS_DTYPE=q8
+export LOTL_TRANSFORMERS_DEVICE=cpu
+export LOTL_VEC_MIN_SIM=0.1
+export LOTL_RECALL_RAW=on
+export LOTL_INGEST_EXTRACTION=off
+export LOTL_INGEST_REFLECTIONS=off
+export LOTL_INGEST_SYNTHESIS=off
+export LOTL_INGEST_PER_TURN=off
+export LOTL_EMBED_MICROBATCH=32
 
 run() {
   local model="$1" tag="$2" params="$3"
@@ -25,7 +25,7 @@ run() {
   echo "==========================================================================="
   echo "=== START: $model  (${params}, tag=$tag, $(date +%H:%M:%S))"
   echo "==========================================================================="
-  QMD_TRANSFORMERS_EMBED="$model" \
+  LOTL_TRANSFORMERS_EMBED="$model" \
     npx tsx evaluate/longmemeval/eval.mts \
       --ds s --limit 100 --no-llm --workers 2 \
       --tag "$tag" --db-suffix "$tag"

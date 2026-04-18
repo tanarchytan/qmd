@@ -1,4 +1,4 @@
-# QMD TODO — Optimization Phases
+# Lotl TODO — Optimization Phases
 
 > Last updated: 2026-04-17 late night (Phase 7 diagnostic — char-cap bug identified; fix in place, retest queued).
 >
@@ -63,9 +63,9 @@ Required for Supermemory/Hindsight/Zep/mem0 comparison.
 
 **What shipped 2026-04-17:**
 - [x] LLM-judge wired into eval harness (`--judge <provider>`, `--judge-model <name>`)
-- [x] Poe provider support (`--llm poe`, OpenAI-compatible shape) + `QMD_POE_MODEL`
+- [x] Poe provider support (`--llm poe`, OpenAI-compatible shape) + `LOTL_POE_MODEL`
 - [x] `poe-judge.mts` standalone helper + CLI for ad-hoc validation
-- [x] Top-K + per-memory char cap (`QMD_ANSWER_TOP_K=5`, `QMD_ANSWER_MAX_CHARS=800`) — fixes a ~91k-token prompt blowup bug
+- [x] Top-K + per-memory char cap (`LOTL_ANSWER_TOP_K=5`, `LOTL_ANSWER_MAX_CHARS=800`) — fixes a ~91k-token prompt blowup bug
 - [x] Defense-in-depth caps on `memoryReflect` / `runReflectionPass`
 - [x] v12 answer prompt option (paper-aligned, chain-of-thought + citations)
 - [x] `--reflect` CLI flag (enables `memoryReflect` pre-pass)
@@ -89,15 +89,15 @@ Required for Supermemory/Hindsight/Zep/mem0 comparison.
 - [ ] **`claude-haiku-4.5`** — deferred (user flagged more expensive than gpt-4o on Poe points)
 
 ### Phase 7.2: Answer prompt A/B — DONE 2026-04-17
-- [x] **v13** — minimal LongMemEval-paper-aligned prompt (`QMD_PROMPT_RULES=v13`). **Result: tied with v11 on gpt-4o-mini** (21% vs 22% Judge). Prompt style was NOT the bottleneck.
-- [x] v12 — chain-of-thought + structured `Answer:`/`Cited:` output (`QMD_PROMPT_RULES=v12`). Kept as option. Not run — v13 result suggested prompt wasn't the lever.
+- [x] **v13** — minimal LongMemEval-paper-aligned prompt (`LOTL_PROMPT_RULES=v13`). **Result: tied with v11 on gpt-4o-mini** (21% vs 22% Judge). Prompt style was NOT the bottleneck.
+- [x] v12 — chain-of-thought + structured `Answer:`/`Cited:` output (`LOTL_PROMPT_RULES=v12`). Kept as option. Not run — v13 result suggested prompt wasn't the lever.
 - [x] v11 / v11.1 (old default) — kept for reproducing old F1/EM numbers. v13 is now the recommended default for `--judge` runs.
 
 **Conclusion:** v11/v13 produce same Judge on gpt-4o-mini. Prompt-style mismatch didn't explain the gap to the paper.
 
 ### Phase 7.3: Reflection pre-pass A/B — CLOSED 2026-04-17 (superseded, deferred to post-production)
 - [x] Flag + plumbing (`--reflect`)
-- [x] Defense-in-depth caps (`QMD_REFLECT_TOP_K=10`, `QMD_REFLECT_MAX_CHARS=800`)
+- [x] Defense-in-depth caps (`LOTL_REFLECT_TOP_K=10`, `LOTL_REFLECT_MAX_CHARS=800`)
 - Closed without benchmarking. Original rationale (compression of long context model can't scan) was superseded by the Phase 7.1b char-cap fix — gpt-4o now scans 30K-char contexts natively.
 - Potential secondary rationale (multi-fact synthesis across memories) was probed via Phase 7.4 TOP_K=10 diagnostic on the 36 remaining wrong questions: only 2/36 recovered, confirming top-K window isn't the bottleneck and reflection is unlikely to help more. 22/34 remaining failures were "wrong-content" (model picked nearby distractor), 12/34 were refusals. Reflection *might* help the wrong-content cases but the probe would cost ~55K Poe pts for ~5-15pp speculative lift. Not worth it at 64% Judge already matching the LongMemEval paper baseline.
 - **Revisit if:** we productize long-conversation QA (>20 sessions/scope) where context definitely exceeds the window, or if we want to push past the paper ceiling in a future research cycle.
@@ -105,14 +105,14 @@ Required for Supermemory/Hindsight/Zep/mem0 comparison.
 ### Phase 7.4: Memory-char budget fix — DONE 2026-04-17
 **This was the real bottleneck.** LongMemEval sessions average 8,283 chars (max 42,910). The old 800-char cap dropped 90%+ of each memory. gpt-4o couldn't find answers because they were past the truncation point.
 
-Applied fix (default): `QMD_ANSWER_MAX_CHARS` **800 → 6000**.
+Applied fix (default): `LOTL_ANSWER_MAX_CHARS` **800 → 6000**.
 
 Diagnostic per-bucket at v13+gpt-4o+800char cap:
 - single-session-user: 22.9% Judge (should be EASIEST bucket)
 - multi-session: 36.7% Judge (should be HARDER bucket)
 - Inverted difficulty ⇒ content availability, not reasoning, was the bottleneck.
 
-Additional probe 2026-04-17: `QMD_ANSWER_TOP_K=10` on the 36 still-failing questions → 2/36 recovered (5.6% Judge on subset). Window-width isn't the bottleneck either; `TOP_K=5` default stays. Larger windows (20+) would cost ~2x API + risk noise; skipped.
+Additional probe 2026-04-17: `LOTL_ANSWER_TOP_K=10` on the 36 still-failing questions → 2/36 recovered (5.6% Judge on subset). Window-width isn't the bottleneck either; `TOP_K=5` default stays. Larger windows (20+) would cost ~2x API + risk noise; skipped.
 
 **Defaults settled:** `TOP_K=5`, `MAX_CHARS=6000`. Matches LongMemEval paper's top-5 × full-session recipe.
 
@@ -159,7 +159,7 @@ Swap sqlite-vec for LanceDB when users hit scale or need concurrent writes.
 - [ ] Keep SQLite for FTS + metadata, two-DB join by `id`
 - [ ] Benchmark both at LME n=500 (must hold 98.4% rAny@5)
 - [ ] Stress test at 100k memories/scope
-- [ ] Config: `QMD_VECTOR_BACKEND=sqlite-vec|lancedb`
+- [ ] Config: `LOTL_VECTOR_BACKEND=sqlite-vec|lancedb`
 
 **Status:** not urgent per Phase 10 benchmark — our scale is ~50 memories/scope,
 sqlite-vec is 2272 QPS at 1k. Real crossover at 10k-100k where LanceDB becomes
@@ -167,49 +167,40 @@ sqlite-vec is 2272 QPS at 1k. Real crossover at 10k-100k where LanceDB becomes
 become a pain point.
 
 ### Phase 11: Embedder upgrade — CONCLUDED 2026-04-17
-**Result:** mxbai-xs q8 stays permanent production default. No candidate produced a clear win; closest matches cost 3-5x params for ~0 MRR gain. Full results in `docs/notes/embedder-candidates.md`.
+**Result:** mxbai-xs q8 stays permanent production default. No candidate produced a clear win; closest matches cost 3-5x params for ~0 MRR gain. Full results in `devnotes/embedders/embedder-candidates.md`.
 
 **Revisit trigger:** a new model with int8 ONNX + MTEB retrieval ≥65 AND a clear params/latency budget fit. Until then, the retrieval ceiling on LME _s is a corpus artifact (short conversations, ceiling already hit), not an embedder limitation.
 
 ### Phase 11.5: GPU device auto-select — SHIPPED 2026-04-17
-**Result:** `QMD_TRANSFORMERS_DEVICE=auto` probes hardware (VRAM, driver age,
-NPU presence) and picks device + microbatch + workers. GPU-first with CPU
-fallback when buffer cap or probe fails. Works on AMD/Intel/NVIDIA/Apple.
+**Result:** `LOTL_TRANSFORMERS_DEVICE=auto` probes hardware (VRAM, driver age)
+and picks device + microbatch + workers. GPU-first with CPU fallback when
+buffer cap or probe fails. Works on AMD/Intel/NVIDIA/Apple.
 Deps upgraded: `@huggingface/transformers` 4.0.1→4.1.0, `better-sqlite3`
 12.8.0→12.9.0.
 
 **Files added:** `src/llm/gpu-probe.ts`, `src/llm/embed-sizer.ts`.
-**Env vars:** `QMD_TRANSFORMERS_DEVICE` (cpu|webgpu|dml|gpu|auto),
-`QMD_TRANSFORMERS_AUTO_PREFER` (cpu overrides GPU-first in auto mode).
+**Env vars:** `LOTL_TRANSFORMERS_DEVICE` (cpu|webgpu|dml|gpu|auto),
+`LOTL_TRANSFORMERS_AUTO_PREFER` (cpu overrides GPU-first in auto mode).
 
-**Validated outputs on Ryzen 7 PRO 7840U / Radeon 780M / XDNA NPU:**
+**Validated outputs on Ryzen 7 PRO 7840U / Radeon 780M:**
 - mxbai-xs → webgpu, mb=1, workers=2
 - embgemma-300m → webgpu, mb=29, workers=1
 - mxbai-embed-large → webgpu, mb=89, workers=1
 - bge-base → webgpu, mb=119, workers=1
 
-**NPU warning fires on AMD hardware**: VitisAI EP is Python-only; qmd Node
-backends don't target the NPU. User benchmarks it standalone after SDK install.
-
 ---
 
-### Phase 11.6 (pending, user-action required): AMD NPU standalone benchmark
-After user finishes Ryzen AI Software 1.3+ install and reboots, write and
-run a Python benchmark that compares CPU / DirectML / VitisAI EPs on
-mxbai-xs (or whichever model is cheapest to probe). Goal: see whether the
-XDNA NPU (10 TOPS Phoenix) is worth integrating via a future Python-sidecar.
-
-- [ ] Confirm `onnxruntime-vitisai` importable and `VitisAIExecutionProvider`
-      shows in `ort.get_available_providers()`.
-- [ ] Benchmark script: mxbai-xs int8 ONNX, 100 embeds, wall time per EP.
-- [ ] Validate cosine equivalence > 0.99 vs CPU baseline (catches quantization drift).
-- [ ] If NPU ≥ 2x CPU: scope `onnxruntime-node` + DML EP path, since native
-      DML likely overlaps + simpler than a Python sidecar.
-- [ ] Document results in `docs/notes/embedder-candidates.md`.
+### Phase 11.6 (CANCELED): AMD NPU standalone benchmark
+Originally queued as a Python-sidecar probe to see whether XDNA NPU could
+hit ≥2× CPU for Node-backed embedding. Dropped in v1.0.0: VitisAI EP is
+Python-only, has no Node binding, and the Lotl CPU+WebGPU path was already
+fast enough for the production workload. NPU detection code removed from
+`src/llm/gpu-probe.ts`. Re-open only if a first-class Node.js NPU runtime
+appears or we ship a Python sidecar for other reasons.
 
 ### Phase 11.7: CPU sweep of 8 embedders — COMPLETED 2026-04-17
 **Ran 6/8 candidates at n=100** (2 skipped for transformers.js v4.1.0 arch incompat).
-Full leaderboard in `docs/notes/embedder-candidates.md`. Key findings:
+Full leaderboard in `devnotes/embedders/embedder-candidates.md`. Key findings:
 
 | Rank | Model | MRR | Params | Verdict |
 |---|---|---|---|---|
@@ -230,15 +221,15 @@ Gate: rAny@5 ≥ 98.4% AND MRR ≥ 0.917 (current mxbai-xs n=500 baseline). Any 
 
 **Command template:**
 ```sh
-QMD_EMBED_BACKEND=transformers \
-QMD_TRANSFORMERS_EMBED=<model> \
-QMD_TRANSFORMERS_DTYPE=q8 \
-QMD_TRANSFORMERS_DEVICE=cpu \
-QMD_VEC_MIN_SIM=0.1 \
-QMD_RECALL_RAW=on \
-QMD_INGEST_EXTRACTION=off QMD_INGEST_REFLECTIONS=off \
-QMD_INGEST_SYNTHESIS=off QMD_INGEST_PER_TURN=off \
-QMD_EMBED_MICROBATCH=32 \
+LOTL_EMBED_BACKEND=transformers \
+LOTL_TRANSFORMERS_EMBED=<model> \
+LOTL_TRANSFORMERS_DTYPE=q8 \
+LOTL_TRANSFORMERS_DEVICE=cpu \
+LOTL_VEC_MIN_SIM=0.1 \
+LOTL_RECALL_RAW=on \
+LOTL_INGEST_EXTRACTION=off LOTL_INGEST_REFLECTIONS=off \
+LOTL_INGEST_SYNTHESIS=off LOTL_INGEST_PER_TURN=off \
+LOTL_EMBED_MICROBATCH=32 \
   npx tsx evaluate/longmemeval/eval.mts --ds s --limit 500 --no-llm \
     --workers 2 --tag <tag> --db-suffix <tag>
 ```
@@ -258,7 +249,7 @@ Replace mxbai-embed-xsmall-v1 q8 with a stronger retrieval-trained embedder.
 - **Matryoshka-trainable bonus** — post-hoc dim truncation for cheaper
   storage + inference without retraining (Nomic-v1.5, Jina-v3)
 - **Arch-specific ONNX variant awareness** — prefer `model_quint8_avx512_vnni`
-  on modern Intel, `model_quint8_avx2` on older x64. `QMD_TRANSFORMERS_FILE`
+  on modern Intel, `model_quint8_avx2` on older x64. `LOTL_TRANSFORMERS_FILE`
   can pin the exact variant.
 
 **Quality gates at n=500 LongMemEval:**
@@ -276,7 +267,7 @@ Replace mxbai-embed-xsmall-v1 q8 with a stronger retrieval-trained embedder.
 **Skip:** general-purpose, multilingual (English-only corpus),
 multimodal (text-only), instructor (prefix burden), scientific (wrong domain).
 
-**Procedure:** one env var change (`QMD_TRANSFORMERS_EMBED=<model>`), n=100 sanity,
+**Procedure:** one env var change (`LOTL_TRANSFORMERS_EMBED=<model>`), n=100 sanity,
 then n=500 if recall holds. Zero code changes — pipeline is embedder-agnostic.
 If wins, re-sweep RRF weights (expect shift toward vec-heavy).
 
@@ -307,7 +298,7 @@ If wins, re-sweep RRF weights (expect shift toward vec-heavy).
 
 ## Parked (proven no signal on LongMemEval)
 
-- ~~`QMD_MEMORY_MMR=session`~~ — flat on LME (byte-identical)
+- ~~`LOTL_MEMORY_MMR=session`~~ — flat on LME (byte-identical)
 - ~~kMultiplier 3→10~~ — byte-identical (vec is noise)
 - ~~HyDE / generative query expansion~~ — coverage already 100%
 - ~~Wider candidate pool~~ — top-40 already contains correct sessions
@@ -317,7 +308,7 @@ If wins, re-sweep RRF weights (expect shift toward vec-heavy).
 - ~~Per-turn ingest~~ — 10x latency, no quality gain
 - ~~extractAndStore + KG~~ — -16pp multi-session R@5
 - ~~Pure rerank (0.0/1.0)~~ — s-user collapses 100→77%
-- ~~L# cache hierarchy blend (L0+L1+L2)~~ — preference MRR -5.2pp, Cov collapse, 5.5x wall. Shipped opt-in via `QMD_MEMORY_LHASH=on` for future experimentation but not default.
+- ~~L# cache hierarchy blend (L0+L1+L2)~~ — preference MRR -5.2pp, Cov collapse, 5.5x wall. Shipped opt-in via `LOTL_MEMORY_LHASH=on` for future experimentation but not default.
 
 ---
 

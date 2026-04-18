@@ -20,7 +20,7 @@ type ParsedVirtualPath = NonNullable<ReturnType<typeof parseVirtualPath>>;
  *  - No arg or ".": current working directory
  *  - "~/..." → expanded against homedir
  *  - relative path → resolved against pwd
- *  - already absolute or qmd:// → returned as-is
+ *  - already absolute or lotl:// → returned as-is
  */
 export function resolveFsPath(pathArg: string | undefined): string {
   let fsPath = pathArg || ".";
@@ -30,13 +30,13 @@ export function resolveFsPath(pathArg: string | undefined): string {
   if (fsPath.startsWith("~/")) {
     return homedir() + fsPath.slice(1);
   }
-  if (!fsPath.startsWith("/") && !fsPath.startsWith("qmd://")) {
+  if (!fsPath.startsWith("/") && !fsPath.startsWith("lotl://")) {
     return resolve(getPwd(), fsPath);
   }
   return fsPath;
 }
 
-/** Parse a `qmd://<collection>/<path>` virtual path and verify the collection
+/** Parse a `lotl://<collection>/<path>` virtual path and verify the collection
  *  exists. Exits with a yellow-tagged error on either malformed URI or unknown
  *  collection. Returns the parsed result on success. */
 export function requireValidVirtualPath(pathArg: string): ParsedVirtualPath {
@@ -59,7 +59,7 @@ export function requireCollectionOrExit(name: string): ReturnType<typeof getColl
   const coll = getCollectionFromYaml(name);
   if (!coll) {
     console.error(`${c.yellow}Collection not found: ${name}${c.reset}`);
-    console.error(`Run 'qmd collection list' to see available collections.`);
+    console.error(`Run 'lotl collection list' to see available collections.`);
     process.exit(1);
   }
   return coll;

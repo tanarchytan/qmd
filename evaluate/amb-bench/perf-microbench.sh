@@ -8,17 +8,17 @@ set -e
 export PATH="$HOME/.local/bin:$PATH"
 export INDEX_PATH=/tmp/qmd-perftest.sqlite
 rm -f /tmp/qmd-perftest.sqlite*
-export QMD_EMBED_BACKEND=transformers
-export QMD_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1
-export QMD_TRANSFORMERS_DTYPE=q8
-export QMD_TRANSFORMERS_QUIET=on
-export QMD_VEC_MIN_SIM=0.1
-export QMD_INGEST_EXTRACTION=off
-export QMD_INGEST_REFLECTIONS=off
-export QMD_INGEST_SYNTHESIS=off
-export QMD_INGEST_PER_TURN=off
-export QMD_RECALL_RAW=on
-export QMD_ZE_COLLECTIONS=off
+export LOTL_EMBED_BACKEND=transformers
+export LOTL_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1
+export LOTL_TRANSFORMERS_DTYPE=q8
+export LOTL_TRANSFORMERS_QUIET=on
+export LOTL_VEC_MIN_SIM=0.1
+export LOTL_INGEST_EXTRACTION=off
+export LOTL_INGEST_REFLECTIONS=off
+export LOTL_INGEST_SYNTHESIS=off
+export LOTL_INGEST_PER_TURN=off
+export LOTL_RECALL_RAW=on
+export LOTL_ZE_COLLECTIONS=off
 
 ~/qmd-baselines/qmd/bin/qmd mcp --http --port 9900 2>/tmp/qmd-perftest-stderr.log &
 PID=$!

@@ -224,7 +224,7 @@ export function searchFTS(db: Database, query: string, limit: number = 20, colle
       LIMIT ${ftsLimit}
     )
     SELECT
-      'qmd://' || d.collection || '/' || d.path as filepath,
+      'lotl://' || d.collection || '/' || d.path as filepath,
       d.collection || '/' || d.path as display_path,
       d.title,
       content.doc as body,
@@ -295,7 +295,7 @@ export async function searchVec(db: Database, query: string, model: string, limi
       cv.hash || '_' || cv.seq as hash_seq,
       cv.hash,
       cv.pos,
-      'qmd://' || d.collection || '/' || d.path as filepath,
+      'lotl://' || d.collection || '/' || d.path as filepath,
       d.collection || '/' || d.path as display_path,
       d.title,
       content.doc as body
@@ -354,12 +354,12 @@ export async function searchVec(db: Database, query: string, model: string, limi
 // =============================================================================
 
 // Cached singleton of the local transformers embed backend. Opt-in only
-// via QMD_EMBED_BACKEND=transformers — the native onnxruntime-node binding
+// via LOTL_EMBED_BACKEND=transformers — the native onnxruntime-node binding
 // it pulls in (plus sharp) can crash on Windows test envs, and callers that
 // only use remote embed should not pay the load cost.
 let _localEmbed: any = null;
 async function getLocalEmbedBackend(): Promise<any> {
-  if (process.env.QMD_EMBED_BACKEND !== "transformers") return null;
+  if (process.env.LOTL_EMBED_BACKEND !== "transformers") return null;
   if (_localEmbed) return _localEmbed;
   try {
     _localEmbed = await createTransformersEmbedBackend();

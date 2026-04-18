@@ -1,7 +1,7 @@
 /**
  * cli/skill-commands.ts — `qmd skill show/install` handlers + path helpers.
  *
- * Extracted from cli/qmd.ts. Installs the embedded agent skill to either
+ * Extracted from cli/lotl.ts. Installs the embedded agent skill to either
  * the project or user scope, optionally symlinking it under `.claude/skills`
  * so Claude Code discovers it automatically. Uses a relative symlink so the
  * link doesn't break when the project directory is moved.
@@ -19,14 +19,14 @@ import { getEmbeddedQmdSkillContent, getEmbeddedQmdSkillFiles } from "../embedde
 
 export function getSkillInstallDir(globalInstall: boolean): string {
   return globalInstall
-    ? resolve(homedir(), ".agents", "skills", "qmd")
-    : resolve(getPwd(), ".agents", "skills", "qmd");
+    ? resolve(homedir(), ".agents", "skills", "lotl")
+    : resolve(getPwd(), ".agents", "skills", "lotl");
 }
 
 export function getClaudeSkillLinkPath(globalInstall: boolean): string {
   return globalInstall
-    ? resolve(homedir(), ".claude", "skills", "qmd")
-    : resolve(getPwd(), ".claude", "skills", "qmd");
+    ? resolve(homedir(), ".claude", "skills", "lotl")
+    : resolve(getPwd(), ".claude", "skills", "lotl");
 }
 
 function pathExists(path: string): boolean {
@@ -48,7 +48,7 @@ function removePath(path: string): void {
 }
 
 export function showSkill(): void {
-  console.log("QMD Skill (embedded)");
+  console.log("Lotl Skill (embedded)");
   console.log("");
   const content = getEmbeddedQmdSkillContent();
   process.stdout.write(content.endsWith("\n") ? content : content + "\n");

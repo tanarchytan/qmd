@@ -26,7 +26,7 @@ process.env.INDEX_PATH = join(tempDir, "eval.sqlite");
 // Opt into the transformers local embed backend for this test suite.
 // Production callers set this in env; tests need it set before any store
 // or memory module decides whether to lazy-load the native binding.
-process.env.QMD_EMBED_BACKEND = "transformers";
+process.env.LOTL_EMBED_BACKEND = "transformers";
 
 import {
   createStore,
@@ -39,8 +39,8 @@ import {
   reciprocalRankFusion,
   DEFAULT_EMBED_MODEL,
   type RankedResult,
-} from "../src/store";
-import { formatDocForEmbedding, createTransformersEmbedBackend } from "../src/llm";
+} from "../src/store.js";
+import { formatDocForEmbedding, createTransformersEmbedBackend } from "../src/llm.js";
 
 // Eval queries with expected documents
 const evalQueries: {
@@ -185,7 +185,7 @@ describe.skipIf(!!process.env.CI)("Vector Search", () => {
     // Generate embeddings for test documents using the production
     // transformers backend (mxbai-xs q8 default, 384d). Vec table dim is
     // derived from the first actual embedding so it stays in sync with
-    // whatever model QMD_EMBED_MODEL points at.
+    // whatever model LOTL_EMBED_MODEL points at.
     const llm = await createTransformersEmbedBackend();
     let vecDim: number | null = null;
 

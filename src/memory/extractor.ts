@@ -328,13 +328,12 @@ export async function extractAndStore(
 }
 
 // =============================================================================
-// Reflection extraction (cat 18) — DEPRECATED standalone path
+// Reflection extraction (cat 18) — legacy path, still used by LoCoMo eval ablation
 // =============================================================================
-// Reflections are now extracted as part of extractAndStore via the unified
-// EXTRACTION_PROMPT. This function is kept for backwards compatibility and as
-// a no-op so existing call sites still type-check.
-//
-// (cat 18 quality fix #4: combined into one LLM call to halve ingest API cost)
+// Reflections are extracted as part of extractAndStore via the unified
+// EXTRACTION_PROMPT. This standalone entry is retained because
+// evaluate/locomo/eval.mts (gated by LOTL_INGEST_REFLECTIONS) still calls it
+// directly for ablation runs. Not deprecated for removal — live for eval.
 export async function extractReflections(
   _db: Database,
   _text: string,

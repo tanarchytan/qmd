@@ -84,20 +84,20 @@ export function createRemoteConfigFromEnv(): RemoteLLMConfig | null {
   const config: RemoteLLMConfig = {};
 
   if (embed) {
-    const dimRaw = process.env.QMD_EMBED_DIMENSIONS;
+    const dimRaw = process.env.LOTL_EMBED_DIMENSIONS;
     const dimNum = dimRaw ? parseInt(dimRaw, 10) : undefined;
     const dimensions = dimNum && dimNum > 0 ? dimNum : undefined;
     if (dimRaw && !dimensions) {
-      process.stderr.write(`Warning: QMD_EMBED_DIMENSIONS=${dimRaw} is not a valid positive integer. Ignoring.\n`);
+      process.stderr.write(`Warning: LOTL_EMBED_DIMENSIONS=${dimRaw} is not a valid positive integer. Ignoring.\n`);
     }
     config.embed = { ...embed, dimensions };
   }
 
   if (rerank) {
     // 'url' provider targets a dedicated rerank API endpoint — default to 'rerank' mode.
-    // 'api' and 'gemini' default to 'llm' mode. QMD_RERANK_MODE always wins if set.
+    // 'api' and 'gemini' default to 'llm' mode. LOTL_RERANK_MODE always wins if set.
     const defaultMode = rerank.provider === 'url' ? 'rerank' : 'llm';
-    const rerankMode = (process.env.QMD_RERANK_MODE as 'llm' | 'rerank' | undefined) || defaultMode;
+    const rerankMode = (process.env.LOTL_RERANK_MODE as 'llm' | 'rerank' | undefined) || defaultMode;
     config.rerank = { ...rerank, mode: rerankMode };
   }
 

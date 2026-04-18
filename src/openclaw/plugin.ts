@@ -14,11 +14,11 @@
  *
  * Use both together:
  *   memory.backend = "qmd"          ← built-in document search
- *   plugins.tanarchy-qmd.enabled    ← this plugin for memory + knowledge
+ *   plugins.tanarchy-lotl.enabled    ← this plugin for memory + knowledge
  *
- * Install: openclaw plugins install @tanarchy/qmd
+ * Install: openclaw plugins install @tanarchy/lotl
  * Config in openclaw.json:
- *   "tanarchy-qmd": {
+ *   "tanarchy-lotl": {
  *     "enabled": true,
  *     "config": {
  *       "autoRecall": true,
@@ -80,26 +80,26 @@ const DEFAULT_CONFIG: QmdPluginConfig = {
  */
 function applyConfigToEnv(cfg: QmdPluginConfig): void {
   if (cfg.embed) {
-    if (cfg.embed.provider) process.env.QMD_EMBED_PROVIDER = cfg.embed.provider;
-    if (cfg.embed.apiKey) process.env.QMD_EMBED_API_KEY = cfg.embed.apiKey;
-    if (cfg.embed.url) process.env.QMD_EMBED_URL = cfg.embed.url;
-    if (cfg.embed.model) process.env.QMD_EMBED_MODEL = cfg.embed.model;
-    if (cfg.embed.dimensions) process.env.QMD_EMBED_DIMENSIONS = String(cfg.embed.dimensions);
+    if (cfg.embed.provider) process.env.LOTL_EMBED_PROVIDER = cfg.embed.provider;
+    if (cfg.embed.apiKey) process.env.LOTL_EMBED_API_KEY = cfg.embed.apiKey;
+    if (cfg.embed.url) process.env.LOTL_EMBED_URL = cfg.embed.url;
+    if (cfg.embed.model) process.env.LOTL_EMBED_MODEL = cfg.embed.model;
+    if (cfg.embed.dimensions) process.env.LOTL_EMBED_DIMENSIONS = String(cfg.embed.dimensions);
   }
 
   if (cfg.rerank) {
-    if (cfg.rerank.provider) process.env.QMD_RERANK_PROVIDER = cfg.rerank.provider;
-    if (cfg.rerank.apiKey) process.env.QMD_RERANK_API_KEY = cfg.rerank.apiKey;
-    if (cfg.rerank.url) process.env.QMD_RERANK_URL = cfg.rerank.url;
-    if (cfg.rerank.model) process.env.QMD_RERANK_MODEL = cfg.rerank.model;
-    if (cfg.rerank.mode) process.env.QMD_RERANK_MODE = cfg.rerank.mode;
+    if (cfg.rerank.provider) process.env.LOTL_RERANK_PROVIDER = cfg.rerank.provider;
+    if (cfg.rerank.apiKey) process.env.LOTL_RERANK_API_KEY = cfg.rerank.apiKey;
+    if (cfg.rerank.url) process.env.LOTL_RERANK_URL = cfg.rerank.url;
+    if (cfg.rerank.model) process.env.LOTL_RERANK_MODEL = cfg.rerank.model;
+    if (cfg.rerank.mode) process.env.LOTL_RERANK_MODE = cfg.rerank.mode;
   }
 
   if (cfg.queryExpansion) {
-    if (cfg.queryExpansion.provider) process.env.QMD_QUERY_EXPANSION_PROVIDER = cfg.queryExpansion.provider;
-    if (cfg.queryExpansion.apiKey) process.env.QMD_QUERY_EXPANSION_API_KEY = cfg.queryExpansion.apiKey;
-    if (cfg.queryExpansion.url) process.env.QMD_QUERY_EXPANSION_URL = cfg.queryExpansion.url;
-    if (cfg.queryExpansion.model) process.env.QMD_QUERY_EXPANSION_MODEL = cfg.queryExpansion.model;
+    if (cfg.queryExpansion.provider) process.env.LOTL_QUERY_EXPANSION_PROVIDER = cfg.queryExpansion.provider;
+    if (cfg.queryExpansion.apiKey) process.env.LOTL_QUERY_EXPANSION_API_KEY = cfg.queryExpansion.apiKey;
+    if (cfg.queryExpansion.url) process.env.LOTL_QUERY_EXPANSION_URL = cfg.queryExpansion.url;
+    if (cfg.queryExpansion.model) process.env.LOTL_QUERY_EXPANSION_MODEL = cfg.queryExpansion.model;
   }
 }
 
@@ -123,7 +123,7 @@ function getDb(config: QmdPluginConfig) {
 // =============================================================================
 
 const qmdPlugin = definePluginEntry({
-  id: "tanarchy-qmd",
+  id: "tanarchy-lotl",
   name: "Tanarchy QMD",
   description: "Document search + conversation memory + knowledge graph powered by QMD",
 
@@ -143,7 +143,7 @@ const qmdPlugin = definePluginEntry({
     let activeScope = defaultScope;
 
     api.logger.info(
-      `tanarchy-qmd: registered (autoRecall: ${cfg.autoRecall}, autoCapture: ${cfg.autoCapture}, scope: ${defaultScope})`,
+      `tanarchy-lotl: registered (autoRecall: ${cfg.autoRecall}, autoCapture: ${cfg.autoCapture}, scope: ${defaultScope})`,
     );
 
     // ========================================================================
@@ -212,7 +212,7 @@ const qmdPlugin = definePluginEntry({
             }
           }
         } catch (err) {
-          api.logger.warn(`tanarchy-qmd recall failed: ${err}`);
+          api.logger.warn(`tanarchy-lotl recall failed: ${err}`);
         }
       });
     }
@@ -235,7 +235,7 @@ const qmdPlugin = definePluginEntry({
 
           await extractAndStore(_db, text, activeScope);
         } catch (err) {
-          api.logger.warn(`tanarchy-qmd capture failed: ${err}`);
+          api.logger.warn(`tanarchy-lotl capture failed: ${err}`);
         }
       });
     }
@@ -255,7 +255,7 @@ const qmdPlugin = definePluginEntry({
 
       if (sessionCount >= DREAM_SESSION_THRESHOLD && hoursSince >= DREAM_HOURS_THRESHOLD) {
         try {
-          api.logger.info("tanarchy-qmd: dream gate passed, running consolidation");
+          api.logger.info("tanarchy-lotl: dream gate passed, running consolidation");
 
           // 1. Ingest session corpus files with cursor checkpointing
           const corpusDir = `${process.env.HOME || process.env.USERPROFILE}/.openclaw/memory/.dreams/session-corpus`;
@@ -306,7 +306,7 @@ const qmdPlugin = definePluginEntry({
             ? `eviction ${cleanup.eviction.evicted}/${cleanup.eviction.evaluated}`
             : "eviction skipped";
           api.logger.info(
-            `tanarchy-qmd: cleanup — ${decayLog}, ${evictLog}, ` +
+            `tanarchy-lotl: cleanup — ${decayLog}, ${evictLog}, ` +
             `${cleanup.totalMemoriesBefore} → ${cleanup.totalMemoriesAfter} memories`,
           );
 
@@ -325,17 +325,17 @@ const qmdPlugin = definePluginEntry({
             });
             if (!reflect.skipped) {
               api.logger.info(
-                `tanarchy-qmd: reflections generated — ${reflect.reflections}`,
+                `tanarchy-lotl: reflections generated — ${reflect.reflections}`,
               );
             }
           } catch (err) {
-            api.logger.warn(`tanarchy-qmd reflection failed: ${err}`);
+            api.logger.warn(`tanarchy-lotl reflection failed: ${err}`);
           }
 
           lastDreamAt = Date.now();
           sessionCount = 0;
         } catch (err) {
-          api.logger.warn(`tanarchy-qmd consolidation failed: ${err}`);
+          api.logger.warn(`tanarchy-lotl consolidation failed: ${err}`);
         }
       }
     });
@@ -443,11 +443,11 @@ const qmdPlugin = definePluginEntry({
         const result = runDecayPass(_db);
         if (result.promoted > 0 || result.demoted > 0) {
           api.logger.info(
-            `tanarchy-qmd: startup decay — ${result.promoted} promoted, ${result.demoted} demoted`,
+            `tanarchy-lotl: startup decay — ${result.promoted} promoted, ${result.demoted} demoted`,
           );
         }
       } catch (err) {
-        api.logger.warn(`tanarchy-qmd: startup decay failed: ${err}`);
+        api.logger.warn(`tanarchy-lotl: startup decay failed: ${err}`);
       }
     });
 
@@ -470,13 +470,13 @@ const qmdPlugin = definePluginEntry({
     // ========================================================================
 
     api.registerService({
-      id: "tanarchy-qmd",
+      id: "tanarchy-lotl",
       start: () => {
-        api.logger.info("tanarchy-qmd: memory service started");
+        api.logger.info("tanarchy-lotl: memory service started");
       },
       stop: () => {
         try { if (_db) _db.close(); } catch {}
-        api.logger.info("tanarchy-qmd: memory service stopped");
+        api.logger.info("tanarchy-lotl: memory service stopped");
       },
     });
   },

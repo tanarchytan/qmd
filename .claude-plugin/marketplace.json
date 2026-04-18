@@ -1,26 +1,26 @@
 {
-	"name": "qmd",
+	"name": "lotl",
 	"owner": {
-		"name": "tobi",
-		"email": "tobi@lutke.com"
+		"name": "tanarchytan",
+		"email": "admin@tanarchy.org"
 	},
 	"plugins": [
 		{
-			"name": "qmd",
+			"name": "lotl",
 			"source": "./",
-			"description": "Search and retrieve documents from local markdown files.",
-			"version": "0.1.0",
+			"description": "Living-off-the-Land memory for AI agents: hybrid search + temporal KG on SQLite + local ONNX.",
+			"version": "1.0.0",
 			"author": {
-				"name": "tobi",
-				"email": "tobi@lutke.com"
+				"name": "tanarchytan",
+				"email": "admin@tanarchy.org"
 			},
-			"repository": "https://github.com/tobi/qmd",
+			"repository": "https://github.com/tanarchytan/lotl",
 			"license": "MIT",
-			"keywords": ["markdown", "search", "qmd"],
-			"skills": ["./skills/"],
+			"keywords": ["memory", "agent", "rag", "sqlite-vec", "hybrid-search", "knowledge-graph"],
+			"skills": ["./skills/lotl/"],
 			"mcpServers": {
-				"qmd": {
-					"command": "qmd",
+				"lotl": {
+					"command": "lotl",
 					"args": ["mcp"]
 				}
 			}

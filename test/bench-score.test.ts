@@ -11,8 +11,8 @@ describe("normalizePath", () => {
       .toBe("resources/concepts/context engineering.md");
   });
 
-  test("strips qmd:// prefix", () => {
-    expect(normalizePath("qmd://collection/docs/readme.md"))
+  test("strips lotl:// prefix", () => {
+    expect(normalizePath("lotl://collection/docs/readme.md"))
       .toBe("docs/readme.md");
   });
 
@@ -42,8 +42,8 @@ describe("pathsMatch", () => {
     expect(pathsMatch("readme.md", "docs/readme.md")).toBe(true);
   });
 
-  test("qmd:// prefix handled", () => {
-    expect(pathsMatch("qmd://col/docs/readme.md", "docs/readme.md")).toBe(true);
+  test("lotl:// prefix handled", () => {
+    expect(pathsMatch("lotl://col/docs/readme.md", "docs/readme.md")).toBe(true);
   });
 
   test("different files don't match", () => {

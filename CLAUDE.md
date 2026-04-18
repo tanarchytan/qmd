@@ -20,10 +20,12 @@ Project documentation lives in `docs/`. **Read these before starting non-trivial
 
 ## Package
 
-`@tanarchy/qmd` — on-device hybrid search for markdown files with BM25, vector search, and LLM reranking. Plus a memory system with decay, knowledge graph, and OpenClaw integration.
+`@tanarchy/lotl` — Lotl (Living-off-the-Land): on-device hybrid search + agent memory + temporal knowledge graph. Everything runs on SQLite + sqlite-vec + local ONNX (`@huggingface/transformers`). No new infra, no LLM required. Cloud APIs (OpenAI, Gemini, ZeroEntropy, etc.) are opt-in for cheaper embed/rerank.
 
-Repo: `github.com/tanarchytan/qmd` — `main` (stable) + `dev` (active development).
-npm: `@tanarchy/qmd` (scope: tanarchy, not tanarchytan).
+Repo: `github.com/tanarchytan/lotl` — `main` (stable) + `dev` (active development).
+npm: `@tanarchy/lotl` (scope: tanarchy, not tanarchytan). CLI binary: `lotl` (primary), `qmd` (alias for legacy installs).
+
+**Renamed from `@tanarchy/qmd` at v1.0.0 (2026-04-18).** Env vars are now `LOTL_*`; config dir is `~/.config/lotl`; virtual path scheme is `lotl://`. The `qmd` CLI binary remains as an alias for existing installs through v1.x.
 
 ## Build & Development
 
@@ -31,10 +33,10 @@ npm: `@tanarchy/qmd` (scope: tanarchy, not tanarchytan).
 npm install                        # Install dependencies (Node.js only, no Bun)
 npm run build                      # tsc -p tsconfig.build.json → dist/
 npm run typecheck                  # tsc --noEmit (no emit, just type-check)
-npx tsx src/cli/qmd.ts <command>   # Run CLI from source (dev mode)
+npx tsx src/cli/lotl.ts <command>   # Run CLI from source (dev mode)
 ```
 
-**Never run `bun build --compile`** — it overwrites the shell wrapper (`bin/qmd`) and breaks sqlite-vec. The `qmd` binary is a shell script that dispatches to `dist/cli/qmd.js`.
+**Never run `bun build --compile`** — it overwrites the shell wrapper (`bin/lotl`) and breaks sqlite-vec. The `lotl` binary is a shell script that dispatches to `dist/cli/lotl.js`.
 
 **Node.js ≥22 required.** Bun support was removed — all code is Node-only with synchronous `createRequire()` in db.ts.
 
@@ -57,7 +59,7 @@ npm run inspector   # Launches @modelcontextprotocol/inspector against the MCP s
 
 ## Releasing
 
-Use `/release <version>` to cut a release. Add changelog entries under `## [Unreleased]` in CHANGELOG.md as you make changes — the release script renames it to `[X.Y.Z] - date`. Full details in `skills/release/SKILL.md`.
+Use `/release <version>` to cut a release. Add changelog entries under `## [Unreleased]` in CHANGELOG.md as you make changes — the release script renames it to `[X.Y.Z] - date`. Full details in `.claude/skills/release/SKILL.md`.
 
 ## Architecture
 
@@ -65,7 +67,7 @@ Use `/release <version>` to cut a release. Add changelog entries under `## [Unre
 
 | Entry | File | Purpose |
 |-------|------|---------|
-| CLI | `src/cli/qmd.ts` | ~40 commands, main user interface |
+| CLI | `src/cli/lotl.ts` | ~40 commands, main user interface |
 | SDK | `src/index.ts` | `createStore()` + typed search/retrieval API |
 | MCP | `src/mcp/server.ts` | MCP tools (stdio + HTTP transport) |
 | OpenClaw | `src/openclaw/plugin.ts` | Auto-recall/capture hooks for agent frameworks |
@@ -79,7 +81,7 @@ Use `/release <version>` to cut a release. Add changelog entries under `## [Unre
   - `constants.ts` — Tuning constants (RRF weights, chunk sizes, intent weights, default models)
   - `db-init.ts` — SQLite schema creation, FTS5/sqlite-vec table init, migrations
   - `db.ts` — Thin re-export of `factory.js` and `path.js`
-  - `path.ts` — Path resolution, virtual path (`qmd://`) parsing/building, Windows/Git Bash support
+  - `path.ts` — Path resolution, virtual path (`lotl://`) parsing/building, Windows/Git Bash support
   - `collections.ts` — Re-exports collection CRUD from `context.ts`
   - `store-collections.ts` — `store_collections` table CRUD, config-to-DB sync
   - `context.ts` — Collection listing, context retrieval/insertion, path-context queries
@@ -92,10 +94,10 @@ Use `/release <version>` to cut a release. Add changelog entries under `## [Unre
 - **`src/llm.ts`** — LLM abstraction layer. Local models via node-llama-cpp (lazy-loaded via dynamic `await import()`). Remote providers: OpenAI-compatible, ZeroEntropy, SiliconFlow, Gemini, Nebius. `chatComplete()` method for freeform LLM calls.
 - **`src/db.ts`** — better-sqlite3 + sqlite-vec initialization via synchronous `createRequire()`. Zero top-level await (Jiti-safe).
 - **`src/collections.ts`** — YAML config parsing, collection CRUD with write-through to both SQLite and YAML.
-- **`src/remote-config.ts`** — Per-operation provider configuration builder (`QMD_EMBED_PROVIDER`, `QMD_RERANK_PROVIDER`, `QMD_QUERY_EXPANSION_PROVIDER`). Cached singleton.
-- **`src/env.ts`** — Loads QMD config from `~/.config/qmd/.env`. Two-tier precedence: QMD_* env vars from .env override stale parent process vars.
+- **`src/remote-config.ts`** — Per-operation provider configuration builder (`LOTL_EMBED_PROVIDER`, `LOTL_RERANK_PROVIDER`, `LOTL_QUERY_EXPANSION_PROVIDER`). Cached singleton.
+- **`src/env.ts`** — Loads Lotl config from `~/.config/lotl/.env`. Two-tier precedence: LOTL_* env vars from .env override stale parent process vars.
 - **`src/ast.ts`** — AST-aware code chunking via tree-sitter (TS/JS/Python/Go/Rust). Falls back to regex chunking for markdown and unknown types.
-- **`src/embedded-skills.ts`** — Generated file bundling `skills/qmd/` content. Regenerate when updating packaged skills.
+- **`src/embedded-skills.ts`** — Generated file bundling `skills/lotl/` content. Regenerate when updating packaged skills.
 
 ### Memory system (`src/memory/`)
 
@@ -108,14 +110,14 @@ Use `/release <version>` to cut a release. Add changelog entries under `## [Unre
 
 ### OpenClaw plugin (`src/openclaw/`)
 
-- **`plugin.ts`** — Registers with OpenClaw via `definePluginEntry()`. Maps openclaw.json config → QMD_* env vars. Hooks: `message_received`, `before_prompt_build`, `agent_end`, `session_end`, `gateway_start`, `after_tool_call`. Per-agent scope auto-detection from sessionKey. Dream consolidation with cursor checkpointing.
+- **`plugin.ts`** — Registers with OpenClaw via `definePluginEntry()`. Maps openclaw.json config → LOTL_* env vars. Hooks: `message_received`, `before_prompt_build`, `agent_end`, `session_end`, `gateway_start`, `after_tool_call`. Per-agent scope auto-detection from sessionKey. Dream consolidation with cursor checkpointing.
 - **`openclaw-types.d.ts`** — Type stubs for `openclaw/plugin-sdk` (optional peer dep).
 - **`openclaw.plugin.json`** (root) — Plugin manifest with configSchema for autoRecall, autoCapture, embed/rerank/queryExpansion provider config.
 - **`index.ts`** (root) — OpenClaw entry point: `export { default } from "./src/openclaw/plugin.js"`
 
 ### Setup tooling (`setup/`)
 
-- **`setup-qmd.sh`** — One-click installer: detects OpenClaw, picks provider plan, probes endpoints, writes config (openclaw.json or ~/.config/qmd/.env).
+- **`setup-qmd.sh`** — One-click installer: detects OpenClaw, picks provider plan, probes endpoints, writes config (openclaw.json or ~/.config/lotl/.env).
 - **`scripts/selfcheck.mjs`** — Probes embed/rerank/expansion endpoints, reports pass/warn/fail.
 - **`scripts/config-validate.mjs`** — Validates .env + openclaw.json config.
 
@@ -138,21 +140,21 @@ Queries flow through `hybridQuery()` or `structuredSearch()` in `store/search.ts
 
 ## Environment
 
-Config lives in `~/.config/qmd/.env` (see `.env.example` for all options).
-Index stored at `~/.cache/qmd/index.sqlite`.
+Config lives in `~/.config/lotl/.env` (see `.env.example` for all options).
+Index stored at `~/.cache/lotl/index.sqlite`.
 
 Key env vars:
-- `QMD_EMBED_BACKEND=transformers` — local ONNX embed via `@huggingface/transformers` (default: remote only)
-- `QMD_EMBED_PROVIDER`, `QMD_RERANK_PROVIDER`, `QMD_QUERY_EXPANSION_PROVIDER` — per-operation remote LLM config
-- `QMD_MEMORY_RERANK=on` — enable memory rerank. Backend: `QMD_RERANK_BACKEND=transformers` (local cross-encoder, default) or `remote`
-- `QMD_MEMORY_KG=on` — KG fact injection on weak recall (default off)
-- `QMD_MEMORY_MMR=session` — dialog-aware diversity reranking (default off)
-- `QMD_RECALL_RAW=on` — skip all post-fusion boosts (for eval baselines)
-- `QMD_MEMORY_EXPAND=keywords|entities` — zero-LLM query expansion (default off)
+- `LOTL_EMBED_BACKEND=transformers` — local ONNX embed via `@huggingface/transformers` (default: remote only)
+- `LOTL_EMBED_PROVIDER`, `LOTL_RERANK_PROVIDER`, `LOTL_QUERY_EXPANSION_PROVIDER` — per-operation remote LLM config
+- `LOTL_MEMORY_RERANK=on` — enable memory rerank. Backend: `LOTL_RERANK_BACKEND=transformers` (local cross-encoder, default) or `remote`
+- `LOTL_MEMORY_KG=on` — KG fact injection on weak recall (default off)
+- `LOTL_MEMORY_MMR=session` — dialog-aware diversity reranking (default off)
+- `LOTL_RECALL_RAW=on` — skip all post-fusion boosts (for eval baselines)
+- `LOTL_MEMORY_EXPAND=keywords|entities` — zero-LLM query expansion (default off)
 
 Memory recall tunables are hardcoded in `src/store/constants.ts` (validated at n=500 LME 2026-04-16).
 
-When running as OpenClaw plugin: provider config lives in `openclaw.json` under `plugins.entries.tanarchy-qmd.config` (embed/rerank/queryExpansion objects). Plugin maps these to QMD_* env vars on register().
+When running as OpenClaw plugin: provider config lives in `openclaw.json` under `plugins.entries.tanarchy-lotl.config` (embed/rerank/queryExpansion objects). Plugin maps these to LOTL_* env vars on register().
 
 ## Commands
 
@@ -213,16 +215,15 @@ Knowledge: `knowledge_add`, `knowledge_search`, `knowledge_invalidate`, `knowled
 - **Never run `bun build --compile`** — breaks the shell wrapper and sqlite-vec
 - **Jiti compatibility** — No top-level await anywhere in the import chain. node-llama-cpp lazy-loaded via dynamic import. db.ts uses synchronous createRequire.
 - Node.js ≥22 required (Bun dropped)
-- **Build script** syncs `openclaw.plugin.json` version from `package.json`, compiles TS, and injects a shebang into `dist/cli/qmd.js`
-- **tsconfig excludes** — `src/bench-*.ts` is excluded from type-checking (standalone benchmark scripts)
+- **Build script** — `scripts/build.mjs` cleans `dist/`, syncs `openclaw.plugin.json` version with `package.json`, runs `tsc -p tsconfig.build.json`, and injects the shebang into `dist/cli/lotl.js`. The `src/bench/` harness is part of the build because the CLI `bench` subcommand imports it.
 
 ## OpenClaw Plugin Install
 
 ```sh
-openclaw plugins install @tanarchy/qmd@dev
+openclaw plugins install @tanarchy/lotl@dev
 # Then in openclaw.json:
-# 1. Add "tanarchy-qmd" to plugins.allow
-# 2. Add plugins.entries.tanarchy-qmd with enabled: true + config
+# 1. Add "tanarchy-lotl" to plugins.allow
+# 2. Add plugins.entries.tanarchy-lotl with enabled: true + config
 # 3. openclaw gateway restart
 ```
 

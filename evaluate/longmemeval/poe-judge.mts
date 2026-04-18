@@ -18,12 +18,12 @@
  *     --gold "Portland, Oregon"
  *
  * Env:
- *   QMD_JUDGE_URL            (default https://api.poe.com/v1)
- *   QMD_JUDGE_API_KEY        (falls back to POE_API_KEY)
- *   QMD_JUDGE_MODEL          (default gpt-4o)
- *   QMD_JUDGE_TEMPERATURE    (default 0)
- *   QMD_JUDGE_MAX_TOKENS     (default 128)
- *   QMD_JUDGE_TIMEOUT_MS     (default 30000)
+ *   LOTL_JUDGE_URL            (default https://api.poe.com/v1)
+ *   LOTL_JUDGE_API_KEY        (falls back to POE_API_KEY)
+ *   LOTL_JUDGE_MODEL          (default gpt-4o)
+ *   LOTL_JUDGE_TEMPERATURE    (default 0)
+ *   LOTL_JUDGE_MAX_TOKENS     (default 128)
+ *   LOTL_JUDGE_TIMEOUT_MS     (default 30000)
  */
 
 export interface JudgeInput {
@@ -60,13 +60,13 @@ function buildUserMessage(input: JudgeInput): string {
 }
 
 export async function judgeAnswer(input: JudgeInput): Promise<JudgeVerdict> {
-  const url = (process.env.QMD_JUDGE_URL || "https://api.poe.com/v1").replace(/\/$/, "");
-  const apiKey = process.env.QMD_JUDGE_API_KEY || process.env.POE_API_KEY;
-  if (!apiKey) throw new Error("QMD_JUDGE_API_KEY or POE_API_KEY must be set");
-  const model = process.env.QMD_JUDGE_MODEL || "gpt-4o";
-  const temperature = Number(process.env.QMD_JUDGE_TEMPERATURE ?? 0);
-  const maxTokens = Number(process.env.QMD_JUDGE_MAX_TOKENS ?? 64);
-  const timeoutMs = Number(process.env.QMD_JUDGE_TIMEOUT_MS ?? 30000);
+  const url = (process.env.LOTL_JUDGE_URL || "https://api.poe.com/v1").replace(/\/$/, "");
+  const apiKey = process.env.LOTL_JUDGE_API_KEY || process.env.POE_API_KEY;
+  if (!apiKey) throw new Error("LOTL_JUDGE_API_KEY or POE_API_KEY must be set");
+  const model = process.env.LOTL_JUDGE_MODEL || "gpt-4o";
+  const temperature = Number(process.env.LOTL_JUDGE_TEMPERATURE ?? 0);
+  const maxTokens = Number(process.env.LOTL_JUDGE_MAX_TOKENS ?? 64);
+  const timeoutMs = Number(process.env.LOTL_JUDGE_TIMEOUT_MS ?? 30000);
 
   const body = {
     model,

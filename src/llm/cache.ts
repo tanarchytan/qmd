@@ -12,7 +12,7 @@
  *   const response = await fetchFromAPI(...);
  *   cache.set(key, response);
  *
- * Disable with QMD_LLM_CACHE=off env var.
+ * Disable with LOTL_LLM_CACHE=off env var.
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
@@ -41,7 +41,7 @@ function makeHash(key: CacheKey): string {
 }
 
 export function openCache(path: string): LLMCache {
-  const enabled = process.env.QMD_LLM_CACHE !== "off";
+  const enabled = process.env.LOTL_LLM_CACHE !== "off";
   let store: Record<string, string> = {};
   let hits = 0;
   let misses = 0;

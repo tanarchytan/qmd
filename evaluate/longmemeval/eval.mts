@@ -1,5 +1,5 @@
 /**
- * LongMemEval evaluation: QMD memory pipeline against the LongMemEval benchmark.
+ * LongMemEval evaluation: Lotl memory pipeline against the LongMemEval benchmark.
  *
  * Dataset: https://github.com/xiaowu0162/longmemeval (ICLR 2025)
  *   - longmemeval_oracle.json — only relevant sessions (~1.9 per question, fast)
@@ -9,7 +9,7 @@
  *   npx tsx evaluate/longmemeval/eval.mts --ds oracle --limit 50 --llm gemini
  *   npx tsx evaluate/longmemeval/eval.mts --ds s --limit 100 --llm gemini
  *
- * Env: same env-var toggles as locomo eval (QMD_INGEST_REFLECTIONS, QMD_RECALL_MMR, etc.)
+ * Env: same env-var toggles as locomo eval (LOTL_INGEST_REFLECTIONS, LOTL_RECALL_MMR, etc.)
  */
 
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from "fs";
@@ -19,17 +19,17 @@ import { openCache } from "../../src/llm/cache.js";
 
 const LLM_CACHE_PATH = join(process.cwd(), "evaluate/longmemeval/llm-cache.json");
 const llmCache = openCache(LLM_CACHE_PATH);
-process.env.QMD_LLM_CACHE_PATH = LLM_CACHE_PATH;
+process.env.LOTL_LLM_CACHE_PATH = LLM_CACHE_PATH;
 
-const QMD_DIR = process.cwd();
+const LOTL_DIR = process.cwd();
 function toUrl(p: string) { return pathToFileURL(p).href; }
 
-const { loadQmdEnv } = await import(toUrl(join(QMD_DIR, "src/env.ts")));
+const { loadQmdEnv } = await import(toUrl(join(LOTL_DIR, "src/env.ts")));
 loadQmdEnv();
 
-const { openDatabase } = await import(toUrl(join(QMD_DIR, "src/db.ts")));
-const { initializeDatabase } = await import(toUrl(join(QMD_DIR, "src/store/db-init.ts")));
-const { memoryStore, memoryStoreBatch, memoryRecall, extractAndStore, consolidateEntityFacts, memoryReflect, turnsToText } = await import(toUrl(join(QMD_DIR, "src/memory/index.ts")));
+const { openDatabase } = await import(toUrl(join(LOTL_DIR, "src/db.ts")));
+const { initializeDatabase } = await import(toUrl(join(LOTL_DIR, "src/store/db-init.ts")));
+const { memoryStore, memoryStoreBatch, memoryRecall, extractAndStore, consolidateEntityFacts, memoryReflect, turnsToText } = await import(toUrl(join(LOTL_DIR, "src/memory/index.ts")));
 
 type Database = ReturnType<typeof openDatabase>;
 
@@ -50,10 +50,10 @@ const LLM_CONFIG: Record<LLMProvider, { url: string; model: string; keyEnv: stri
     keyEnv: "MINIMAX_API_KEY",
   },
   // Poe OpenAI-compatible endpoint — one key, access to gpt-4o / claude / gemini / etc.
-  // Model override via QMD_POE_MODEL (default gpt-4o). Requires active Poe subscription.
+  // Model override via LOTL_POE_MODEL (default gpt-4o). Requires active Poe subscription.
   poe: {
     url: "https://api.poe.com/v1/chat/completions",
-    model: process.env.QMD_POE_MODEL || "gpt-4o",
+    model: process.env.LOTL_POE_MODEL || "gpt-4o",
     keyEnv: "POE_API_KEY",
   },
 };
@@ -147,9 +147,9 @@ async function askOpenAICompat(
 
 /** Pre-flight quota probe. Hits the judge/gen provider with a 1-token ping so
  *  a low-quota account fails fast before ingesting 100+ questions. No-op if
- *  QMD_SKIP_PREFLIGHT=on. */
+ *  LOTL_SKIP_PREFLIGHT=on. */
 async function preflightQuotaCheck(provider: LLMProvider, model: string): Promise<void> {
-  if (process.env.QMD_SKIP_PREFLIGHT === "on") return;
+  if (process.env.LOTL_SKIP_PREFLIGHT === "on") return;
   const cfg = LLM_CONFIG[provider];
   const apiKey = process.env[cfg.keyEnv];
   if (!apiKey) throw new Error(`${cfg.keyEnv} not set — cannot preflight ${provider}`);
@@ -246,11 +246,25 @@ async function askJudge(question: string, predicted: string, gold: string): Prom
   try {
     // Judge outputs a single JSON line of ~30 tokens. 48-token cap is
     // plenty of headroom and saves Poe-output cost vs the prior 64.
-    const raw = await askLLM(fullPrompt, judgeProvider, 48, judgeModelOverride ?? undefined, "judge");
+    // Bump to 96 tokens so Gemini has room for prose around the verdict;
+    // poe/gpt-4o typically replies with JSON-only in ~30 tokens anyway.
+    const raw = await askLLM(fullPrompt, judgeProvider, 96, judgeModelOverride ?? undefined, "judge");
+    // 1) JSON path — preferred, works for Poe/gpt-4o and well-behaved models.
     const m = raw.match(/\{[\s\S]*?\}/);
-    if (!m) return 0;
-    const obj = JSON.parse(m[0]);
-    return obj.correct ? 1 : 0;
+    if (m) {
+      try {
+        const obj = JSON.parse(m[0]);
+        if (typeof obj.correct === "boolean") return obj.correct ? 1 : 0;
+      } catch { /* fall through to text parse */ }
+    }
+    // 2) Text fallback — Gemini-flash often replies with prose + CORRECT/WRONG.
+    //    Look for bare verdict tokens (case-insensitive).
+    const upper = raw.toUpperCase();
+    if (/\bINCORRECT\b|\bWRONG\b|"CORRECT":\s*FALSE/.test(upper)) return 0;
+    if (/\bCORRECT\b|"CORRECT":\s*TRUE/.test(upper)) return 1;
+    // Unparseable — log once so we can see the raw response shape.
+    process.stderr.write(`[judge] unparseable verdict: ${raw.slice(0, 120)}\n`);
+    return null;
   } catch (err) {
     process.stderr.write(`[judge] failed: ${err instanceof Error ? err.message : err}\n`);
     return null;
@@ -260,16 +274,12 @@ async function askJudge(question: string, predicted: string, gold: string): Prom
 function buildAnswerPrompt(question: string, memories: string[], questionType: string): string {
   const context = memories.map((m, i) => `[${i + 1}] ${m}`).join("\n");
   const isAbstention = questionType.endsWith("_abs");
-  const rules = process.env.QMD_PROMPT_RULES || "v11";
-  const useV111 = rules === "v11.1";
-  const useV12 = rules === "v12";
-  const useV13 = rules === "v13";
+  const rules = process.env.LOTL_PROMPT_RULES || "v11";
 
   // v13: minimal prompt matching LongMemEval paper / Mem0 / RAGAS best practice.
   // No rule list, no CoT scaffolding — just memories + question.
-  // v11/v11.1 rule lists were tuned for F1/EM string-overlap scoring and can HURT
-  // LLM-judge accuracy by constraining phrasing. Recommended for `--judge` runs.
-  if (useV13) {
+  // Recommended for `--judge` runs (rule lists constrain phrasing and hurt LLM-judge).
+  if (rules === "v13") {
     const preamble = isAbstention
       ? "Answer the question based on the memories below. If the memories do not contain the information needed, respond with exactly: I don't know."
       : "Answer the question based on the memories below.";
@@ -293,40 +303,7 @@ If the context does NOT contain information to answer this question, respond wit
 Question: ${question} Short answer:`;
   }
 
-  // v12: LongMemEval paper-aligned prompt — chain-of-thought + structured output
-  // with citations. Strips CoT from the final answer via a post-process regex.
-  // Use for stronger generator models (gpt-4o, claude-sonnet); gpt-4o-mini
-  // sometimes leaks the reasoning trace.
-  if (useV12) {
-    return `You are an assistant answering a question based ONLY on the memories below. Each memory has an index [N] and a timestamp.
-
-Memories:
-${context}
-
-Question: ${question}
-
-Instructions:
-1. First, think step-by-step about which memories are relevant. Keep this section short.
-2. For timestamps, resolve relative dates ("yesterday", "last week") to absolute dates.
-3. For ORDERING questions, compare timestamps and pick the earlier/later one as asked.
-4. For DURATION questions, compute the span between two dates and output "N days/weeks/months".
-5. For COUNTING questions, enumerate every matching item then count.
-6. For LIST questions, include ALL items across all memories.
-7. For Yes/No questions, answer with bare "Yes" or "No".
-8. NEVER answer with relative terms — always convert to absolute dates.
-9. If memories don't contain enough information to answer, say so.
-
-Output EXACTLY this format:
-Reasoning: <1-2 sentences on which memories you used and why>
-Answer: <the factual answer — no preamble, no quotes, no explanation here>
-Cited: [<comma-separated memory indices you used, e.g. 1,3,7>]`;
-  }
-
-  const extraRules = useV111 ? `
-7. For ORDERING questions ("which came first", "which did I X first/earlier"), compare the dates/timestamps in the context and pick the item with the earlier date. If both dates are present, NEVER refuse.
-8. For DURATION questions ("how long", "how many days/weeks/months between X and Y"), if both anchor dates are present in context, compute the difference and answer with number + unit (e.g. "7 days", "two months"). NEVER respond with "context does not provide" when both dates are visible.
-9. For COUNTING questions ("how many X"), enumerate every matching item from the context first, then count them. Do not estimate.` : "";
-
+  // v11 (default): tuned for F1/EM string-overlap scoring.
   return `${context}
 
 Based on the above context, write a short, factual answer to the following question. Use exact words from the context whenever possible.
@@ -337,18 +314,9 @@ Rules:
 3. For Yes/No questions, answer with bare "Yes" or "No".
 4. For DURATION questions ("how long"), compute the time span between two dates.
 5. NEVER answer with relative terms — always convert to absolute dates.
-6. Output the answer ONLY — no explanation, no preamble.${extraRules}
+6. Output the answer ONLY — no explanation, no preamble.
 
 Question: ${question} Short answer:`;
-}
-
-/** Parse v12 structured output into just the Answer field. Returns the raw
- *  string if the format isn't matched (tolerant — model may skip the wrapper). */
-function extractV12Answer(raw: string): string {
-  // Match "Answer: ..." line, stopping at "Cited:" or EOL. Case-insensitive.
-  const m = raw.match(/^\s*Answer:\s*(.+?)(?:\n\s*Cited:|$)/ims);
-  if (m && m[1]) return m[1].trim();
-  return raw.trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +361,7 @@ function computeSubstringHit(prediction: string, groundTruth: string): number {
 // =============================================================================
 // METRIC SPACE — distinct families, each with a clear audience
 // =============================================================================
-// See docs/notes/metrics.md for the walkthrough. Naming trap: different
+// See devnotes/metrics/metric-discipline.md for the walkthrough. Naming trap: different
 // memory-benchmark publications use the same labels for different metrics.
 // We compute and display them separately so nothing is ambiguous.
 //
@@ -424,7 +392,7 @@ function computeSubstringHit(prediction: string, groundTruth: string): number {
 //                     retrieved chunks from the same session count once.
 //                     Function: computeSessionNDCG
 //
-// CONTENT COVERAGE (qmd-specific — NOT comparable with any competitor)
+// CONTENT COVERAGE (lotl-specific — NOT comparable with any competitor)
 //
 //   Cov@K / Cov-MRR / Cov-NDCG@K
 //     Token-overlap based: does the retrieved memory's text actually
@@ -439,7 +407,7 @@ function computeSubstringHit(prediction: string, groundTruth: string): number {
 //   LongMemEval QA accuracy
 //     LLM-as-judge flow: retrieve → generator LLM → judge LLM → 0/1.
 //     Supermemory 81.6%, Hindsight 91.4% are THIS metric.
-//     We don't implement it; see docs/notes/metrics.md.
+//     We don't implement it; see devnotes/metrics/metric-discipline.md.
 //
 // ABSTENTION
 //   Questions with empty answer_session_ids (abstention in the LME paper)
@@ -455,7 +423,7 @@ function memoryHitsTruth(text: string, truthTokens: string[]): boolean {
   return hits / truthTokens.length >= 0.5;
 }
 
-/** Content-overlap recall@K — qmd-specific, NOT comparable with competitors. */
+/** Content-overlap recall@K — lotl-specific, NOT comparable with competitors. */
 function computeContentRecallAtK(memories: { text: string }[], groundTruth: string, k: number): number {
   const truthTokens = tokenize(groundTruth);
   if (truthTokens.length === 0) return 1;
@@ -468,7 +436,7 @@ function computeContentRecallAtK(memories: { text: string }[], groundTruth: stri
   return totalHits / truthTokens.length >= 0.7 ? 1 : 0;
 }
 
-/** Content-overlap MRR — qmd-specific, NOT comparable with competitors. */
+/** Content-overlap MRR — lotl-specific, NOT comparable with competitors. */
 function computeContentMRR(memories: { text: string }[], groundTruth: string, k: number): number {
   const truthTokens = tokenize(groundTruth);
   if (truthTokens.length === 0) return 1;
@@ -481,14 +449,14 @@ function computeContentMRR(memories: { text: string }[], groundTruth: string, k:
   return 0;
 }
 
-/** Content-overlap NDCG@K — qmd-specific, NOT comparable with competitors. */
+/** Content-overlap NDCG@K — lotl-specific, NOT comparable with competitors. */
 function computeContentNDCG(memories: { text: string }[], groundTruth: string, k: number): number {
   const truthTokens = tokenize(groundTruth);
   if (truthTokens.length === 0) return 1;
   const topK = memories.slice(0, k);
   if (topK.length === 0) return 0;
   const rels = topK.map(m => (memoryHitsTruth(m.text, truthTokens) ? 1 : 0));
-  const totalRel = rels.reduce((a, b) => a + b, 0);
+  const totalRel = rels.reduce((a: number, b: number) => a + b, 0);
   if (totalRel === 0) return 0;
   let dcg = 0;
   for (let i = 0; i < rels.length; i++) {
@@ -503,7 +471,7 @@ function computeContentNDCG(memories: { text: string }[], groundTruth: string, k
 
 // -----------------------------------------------------------------------------
 // Session-based retrieval metrics — shared helpers + strict implementations
-// per docs/notes/metrics.md and the LongMemEval paper.
+// per devnotes/metrics/metric-discipline.md and the LongMemEval paper.
 
 /** Extract source_session_id from one memory's metadata JSON, or null. */
 function sessionIdOf(mem: { metadata?: string | null }): string | null {
@@ -694,8 +662,8 @@ async function main() {
     if (args[i] === "--judge" && args[i + 1]) judgeProvider = args[i + 1] as LLMProvider;
     if (args[i] === "--judge-model" && args[i + 1]) judgeModelOverride = args[i + 1]!;
     // Enable the `memoryReflect` pre-pass (distil top-K memories into facts before
-    // the answer call). Maps to QMD_RECALL_REFLECT=on internally.
-    if (args[i] === "--reflect") process.env.QMD_RECALL_REFLECT = "on";
+    // the answer call). Maps to LOTL_RECALL_REFLECT=on internally.
+    if (args[i] === "--reflect") process.env.LOTL_RECALL_REFLECT = "on";
     if (args[i] === "--tag" && args[i + 1]) resultsTag = args[i + 1]!;
     if (args[i] === "--db-suffix" && args[i + 1]) dbSuffix = "-" + args[i + 1];
     if (args[i] === "--no-llm") useLLM = false;
@@ -705,7 +673,7 @@ async function main() {
       LLM_CONFIG.gemini.model = m;
       LLM_CONFIG.gemini.url = geminiUrl(m);
       // Also override the extraction model used by chatComplete in src/llm.ts
-      process.env.QMD_QUERY_EXPANSION_MODEL = m;
+      process.env.LOTL_QUERY_EXPANSION_MODEL = m;
     }
     // --answer-model: override only the answer-generation model (cat D split)
     if (args[i] === "--answer-model" && args[i + 1]) {
@@ -713,7 +681,7 @@ async function main() {
       LLM_CONFIG.gemini.model = m;
       LLM_CONFIG.gemini.url = geminiUrl(m);
     }
-    // --extract-model was here historically but it pointed at QMD_QUERY_EXPANSION_MODEL
+    // --extract-model was here historically but it pointed at LOTL_QUERY_EXPANSION_MODEL
     // which is read by the query-expansion path, not the memory extractor. That caused
     // queryExpansion to 404 when passed a Gemini model name. Removed until a proper
     // per-call extractor model override is implemented in src/memory/extractor.ts.
@@ -730,7 +698,7 @@ async function main() {
     // briefly on writes, but await calls (LLM/embed) suspend the worker so
     // others can run. Net 4-8x speedup for IO-heavy workloads.
     if (args[i] === "--workers" && args[i + 1]) {
-      process.env.QMD_LME_WORKERS = args[i + 1]!;
+      process.env.LOTL_LME_WORKERS = args[i + 1]!;
     }
   }
 
@@ -753,12 +721,12 @@ async function main() {
   // --ds s now prefers the huggingface-released longmemeval_s_cleaned.json
   // (277 MB, 500 questions with full distractor haystack). Falls back to the
   // original longmemeval_s.json if cleaned isn't present.
-  const sPreferred = join(QMD_DIR, "evaluate/longmemeval", "longmemeval_s_cleaned.json");
-  const sFallback = join(QMD_DIR, "evaluate/longmemeval", "longmemeval_s.json");
+  const sPreferred = join(LOTL_DIR, "evaluate/longmemeval", "longmemeval_s_cleaned.json");
+  const sFallback = join(LOTL_DIR, "evaluate/longmemeval", "longmemeval_s.json");
   const sPath = existsSync(sPreferred) ? sPreferred : sFallback;
   const dataPath = dsName === "s"
     ? sPath
-    : join(QMD_DIR, "evaluate/longmemeval", "longmemeval_oracle.json");
+    : join(LOTL_DIR, "evaluate/longmemeval", "longmemeval_oracle.json");
   console.log(`\n  Loading ${dataPath}...`);
   const data: LMEInstance[] = JSON.parse(readFileSync(dataPath, "utf-8"));
   console.log(`  Loaded ${data.length} instances`);
@@ -781,17 +749,15 @@ async function main() {
   console.log(`  Running: ${instances.length} questions${questionTypeFilter ? ` (type=${questionTypeFilter})` : ""}`);
 
   const ablation = {
-    INGEST_SYNTHESIS: process.env.QMD_INGEST_SYNTHESIS !== "off",
-    INGEST_REFLECTIONS: process.env.QMD_INGEST_REFLECTIONS !== "off",
-    PROMPT_RULES: process.env.QMD_PROMPT_RULES || "v11",
-    RECALL_DUAL_PASS: process.env.QMD_RECALL_DUAL_PASS === "on",
-    RECALL_LOG_MOD: process.env.QMD_RECALL_LOG_MOD === "on",
-    RECALL_MMR: process.env.QMD_RECALL_MMR === "on",
+    INGEST_SYNTHESIS: process.env.LOTL_INGEST_SYNTHESIS !== "off",
+    INGEST_REFLECTIONS: process.env.LOTL_INGEST_REFLECTIONS !== "off",
+    PROMPT_RULES: process.env.LOTL_PROMPT_RULES || "v11",
+    RECALL_MMR: process.env.LOTL_RECALL_MMR === "on",
   };
   console.log(`  Ablation: ${JSON.stringify(ablation)}\n`);
 
   // One DB per shard so SQLite WAL doesn't contend across workers
-  const dbDir = join(QMD_DIR, "evaluate/longmemeval/dbs");
+  const dbDir = join(LOTL_DIR, "evaluate/longmemeval/dbs");
   if (!existsSync(dbDir)) mkdirSync(dbDir, { recursive: true });
   const shardLabel = shardTotal > 1 ? `-shard${shardIdx}of${shardTotal}` : "";
   const dbPath = join(dbDir, `lme-${dsName}${dbSuffix}${shardLabel}.sqlite`);
@@ -808,8 +774,8 @@ async function main() {
   // partial results. Final write at end of main() rewrites with full summary.
   // Atomic via writeFileSync(tmp) + renameSync — safe against kill mid-write.
   const outName = resultsTag ? `results-${resultsTag}.json` : "results.json";
-  const outPath = join(QMD_DIR, "evaluate/longmemeval", outName);
-  const PARTIAL_SAVE_EVERY = parseInt(process.env.QMD_EVAL_PARTIAL_EVERY || "10", 10);
+  const outPath = join(LOTL_DIR, "evaluate/longmemeval", outName);
+  const PARTIAL_SAVE_EVERY = parseInt(process.env.LOTL_EVAL_PARTIAL_EVERY || "10", 10);
 
   function savePartial() {
     const partial = {
@@ -834,18 +800,18 @@ async function main() {
     // --- INGEST sessions for this question (skip if already ingested under this scope) ---
     const existingCount = (db.prepare(`SELECT COUNT(*) as n FROM memories WHERE scope = ?`).get(scope) as any)?.n || 0;
     if (existingCount === 0) {
-      const storeTurns = process.env.QMD_INGEST_PER_TURN !== "off";
-      const storeSessions = process.env.QMD_INGEST_SESSION_AS_MEMORY !== "off";
-      const batchExtract = process.env.QMD_INGEST_BATCH_EXTRACT !== "off";
+      const storeTurns = process.env.LOTL_INGEST_PER_TURN !== "off";
+      const storeSessions = process.env.LOTL_INGEST_SESSION_AS_MEMORY !== "off";
+      const batchExtract = process.env.LOTL_INGEST_BATCH_EXTRACT !== "off";
       // L1 (user-turns-only) ingest from Schift's L# cache pattern. When on,
       // the session-level memory text is built from user turns only,
       // stripping the assistant's verbose responses so the embedding
       // centroid focuses on the user's preference statements.
-      const userOnlySession = process.env.QMD_INGEST_USER_ONLY === "on";
+      const userOnlySession = process.env.LOTL_INGEST_USER_ONLY === "on";
       // L# cache hierarchy: store same session at L0 (full), L1 (user turns
       // only), L2 (first 3 user turns). Score-blended at recall time via
-      // MEMORY_L0/L1/L2_WEIGHT. Opt-in via QMD_MEMORY_LHASH=on.
-      const lHashIngest = process.env.QMD_MEMORY_LHASH === "on";
+      // MEMORY_L0/L1/L2_WEIGHT. Opt-in via LOTL_MEMORY_LHASH=on.
+      const lHashIngest = process.env.LOTL_MEMORY_LHASH === "on";
 
       const sessionTexts: string[] = [];
       const turnBatch: Array<{ text: string; scope: string; importance?: number; metadata?: Record<string, unknown> }> = [];
@@ -876,7 +842,7 @@ async function main() {
           }
         }
         sessionTexts.push(date ? `[${date}]\n${sessionText}` : sessionText);
-        if (!batchExtract && process.env.QMD_INGEST_EXTRACTION !== "off") {
+        if (!batchExtract && process.env.LOTL_INGEST_EXTRACTION !== "off") {
           try { await extractAndStore(db, sessionText, scope, { source_session_id: sessionId }); } catch { /* skip */ }
         }
       }
@@ -887,10 +853,10 @@ async function main() {
         }
       }
 
-      if (batchExtract && process.env.QMD_INGEST_EXTRACTION !== "off") {
+      if (batchExtract && process.env.LOTL_INGEST_EXTRACTION !== "off") {
         try { await extractAndStore(db, sessionTexts.join("\n\n---\n\n"), scope); } catch { /* skip */ }
       }
-      if (process.env.QMD_INGEST_SYNTHESIS !== "off") {
+      if (process.env.LOTL_INGEST_SYNTHESIS !== "off") {
         try {
           const entCount = (db.prepare(`SELECT COUNT(DISTINCT subject) c FROM knowledge WHERE scope = ?`).get(scope) as any)?.c || 0;
           if (entCount >= 5) await consolidateEntityFacts(db, { scope });
@@ -910,7 +876,7 @@ async function main() {
 
     // --- OPTIONAL REFLECT (roadmap cat 11): pre-filter memories into a
     // compressed fact list before the answer call. Opt-in via
-    // QMD_RECALL_REFLECT=on. Adds one extra LLM call per question.
+    // LOTL_RECALL_REFLECT=on. Adds one extra LLM call per question.
     //
     // v16.1 fix: AUGMENT the memory list with the reflection block at
     // the top — don't REPLACE it. v16-full shipped replacement and lost
@@ -927,12 +893,12 @@ async function main() {
     // Judge stuck at 27% until the cap was raised). 6000 chars × top-5 ≈
     // 30K chars ≈ 7.5K input tokens per question — fits every major model's
     // context window, still under 10K/question token budget.
-    const ANSWER_TOP_K = Number(process.env.QMD_ANSWER_TOP_K ?? 5);
-    const ANSWER_MAX_CHARS = Number(process.env.QMD_ANSWER_MAX_CHARS ?? 6000);
+    const ANSWER_TOP_K = Number(process.env.LOTL_ANSWER_TOP_K ?? 10);
+    const ANSWER_MAX_CHARS = Number(process.env.LOTL_ANSWER_MAX_CHARS ?? 6000);
     let answerMemories = memories
       .slice(0, ANSWER_TOP_K)
       .map(m => m.text.length > ANSWER_MAX_CHARS ? m.text.slice(0, ANSWER_MAX_CHARS) + "…" : m.text);
-    if (process.env.QMD_RECALL_REFLECT === "on" && memories.length > 0 && useLLM) {
+    if (process.env.LOTL_RECALL_REFLECT === "on" && memories.length > 0 && useLLM) {
       try {
         const reflected = await memoryReflect(inst.question, memories, { maxFacts: 8 });
         if (reflected) {
@@ -953,11 +919,10 @@ async function main() {
         // top-K cap landed). Cheap defensive log — doesn't affect behaviour.
         const estTok = Math.ceil(prompt.length / 4);
         if (estTok > 8000) {
-          process.stderr.write(`\n[warn] answer prompt ~${estTok} tokens (${answerMemories.length} memories). Consider lowering QMD_ANSWER_TOP_K or QMD_ANSWER_MAX_CHARS.\n`);
+          process.stderr.write(`\n[warn] answer prompt ~${estTok} tokens (${answerMemories.length} memories). Consider lowering LOTL_ANSWER_TOP_K or LOTL_ANSWER_MAX_CHARS.\n`);
         }
         const raw = await askLLM(prompt);
-        // Strip v12's Reasoning: / Cited: scaffolding if used — keep only the answer.
-        prediction = (process.env.QMD_PROMPT_RULES === "v12") ? extractV12Answer(raw) : raw;
+        prediction = raw;
       } catch (e) {
         prediction = memories.map(m => m.text).join(" ").slice(0, 300);
         process.stderr.write(`\n[warn] LLM failed: ${e}\n`);
@@ -991,7 +956,7 @@ async function main() {
     const mrr = computeSessionMRR(memories, sessionIds, 10);
     const ndcg10 = computeSessionNDCG(memories, sessionIds, 10);
 
-    // SECONDARY (qmd-specific content-overlap proxy — NOT comparable externally)
+    // SECONDARY (lotl-specific content-overlap proxy — NOT comparable externally)
     const cov_r5 = computeContentRecallAtK(memories, gt, 5);
     const cov_r10 = computeContentRecallAtK(memories, gt, 10);
     const cov_r20 = computeContentRecallAtK(memories, gt, 20);
@@ -1013,7 +978,7 @@ async function main() {
       r_any5, r_any10, r_any20,  // binary recall_any@K (agentmemory/mem0/MemPalace convention)
       r5, r10, r15, r20, r50,     // fractional R@K (LongMemEval paper convention)
       mrr, ndcg10,
-      // SECONDARY — content overlap (qmd-specific)
+      // SECONDARY — content overlap (lotl-specific)
       cov_r5, cov_r10, cov_r20, cov_mrr, cov_ndcg10,
       // PHASE 7 — LLM-as-judge binary correctness (null when judge not run)
       judgeCorrect,
@@ -1026,8 +991,8 @@ async function main() {
   }
 
   // Worker pool: N concurrent workers pulling from a shared index queue.
-  // QMD_LME_WORKERS=1 (default) preserves the original sequential behavior.
-  const concurrency = Math.max(1, parseInt(process.env.QMD_LME_WORKERS || "1", 10));
+  // LOTL_LME_WORKERS=1 (default) preserves the original sequential behavior.
+  const concurrency = Math.max(1, parseInt(process.env.LOTL_LME_WORKERS || "1", 10));
   const queue = [...instances];
   if (concurrency > 1) {
     console.log(`  Workers: ${concurrency} concurrent (--workers ${concurrency})`);
@@ -1082,7 +1047,7 @@ async function main() {
   const avgR50 = avgNullable(allResults, "r50");
   const avgMRR = avgNullable(allResults, "mrr");
   const avgNDCG10 = avgNullable(allResults, "ndcg10");
-  // SECONDARY (content-overlap proxy — qmd-specific)
+  // SECONDARY (content-overlap proxy — lotl-specific)
   const avgCovR5 = allResults.reduce((s, r) => s + r.cov_r5, 0) / n;
   const avgCovR10 = allResults.reduce((s, r) => s + r.cov_r10, 0) / n;
   const avgCovR20 = allResults.reduce((s, r) => s + r.cov_r20, 0) / n;
@@ -1103,7 +1068,7 @@ async function main() {
   console.log(`    R@50:    ${(avgR50 * 100).toFixed(1)}%`);
   console.log(`    MRR:     ${avgMRR.toFixed(3)}`);
   console.log(`    NDCG@10: ${avgNDCG10.toFixed(3)}`);
-  console.log(`  SECONDARY — content-overlap coverage (qmd-specific; NOT comparable with competitors)`);
+  console.log(`  SECONDARY — content-overlap coverage (lotl-specific; NOT comparable with competitors)`);
   console.log(`    Cov@5:       ${(avgCovR5 * 100).toFixed(1)}%`);
   console.log(`    Cov@10:      ${(avgCovR10 * 100).toFixed(1)}%`);
   console.log(`    Cov@20:      ${(avgCovR20 * 100).toFixed(1)}%`);
@@ -1150,7 +1115,7 @@ async function main() {
       avgRAny5, avgRAny10, avgRAny20,    // binary recall_any
       avgR5, avgR10, avgR15, avgR20, avgR50,  // fractional R@K (paper definition)
       avgMRR, avgNDCG10,
-      // SECONDARY — content-overlap (qmd-specific)
+      // SECONDARY — content-overlap (lotl-specific)
       avgCovR5, avgCovR10, avgCovR20, avgCovMRR, avgCovNDCG10,
       // Answer quality
       avgF1, avgEM, avgSH,

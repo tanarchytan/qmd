@@ -1,7 +1,7 @@
 /**
- * cli/help-version.ts — `qmd --help` and `qmd --version` implementations.
+ * cli/help-version.ts — `lotl --help` and `lotl --version` implementations.
  *
- * Extracted from cli/qmd.ts. Kept as one small module because they're both
+ * Extracted from cli/lotl.ts. Kept as one small module because they're both
  * dispatcher-leaf commands with no shared state beyond reading package.json
  * and the active DB path.
  */
@@ -14,37 +14,37 @@ import { resolve } from "../store.js";
 import { getDbPath } from "./db-state.js";
 
 export function showHelp(): void {
-  console.log("qmd — Quick Markdown Search");
+  console.log("lotl — Living-off-the-Land memory for AI agents");
   console.log("");
   console.log("Usage:");
-  console.log("  qmd <command> [options]");
+  console.log("  lotl <command> [options]");
   console.log("");
   console.log("Primary commands:");
-  console.log("  qmd query <query>             - Hybrid search with auto expansion + reranking (recommended)");
-  console.log("  qmd query 'lex:..\\nvec:...'   - Structured query document (you provide lex/vec/hyde lines)");
-  console.log("  qmd search <query>            - Full-text BM25 keywords (no LLM)");
-  console.log("  qmd vsearch <query>           - Vector similarity only");
-  console.log("  qmd get <file>[:line] [-l N]  - Show a single document, optional line slice");
-  console.log("  qmd multi-get <pattern>       - Batch fetch via glob or comma-separated list");
-  console.log("  qmd skill show/install        - Show or install the packaged QMD skill");
-  console.log("  qmd mcp                       - Start the MCP server (stdio transport for AI agents)");
-  console.log("  qmd bench <fixture.json>      - Run search quality benchmarks against a fixture file");
+  console.log("  lotl query <query>             - Hybrid search with auto expansion + reranking (recommended)");
+  console.log("  lotl query 'lex:..\\nvec:...'   - Structured query document (you provide lex/vec/hyde lines)");
+  console.log("  lotl search <query>            - Full-text BM25 keywords (no LLM)");
+  console.log("  lotl vsearch <query>           - Vector similarity only");
+  console.log("  lotl get <file>[:line] [-l N]  - Show a single document, optional line slice");
+  console.log("  lotl multi-get <pattern>       - Batch fetch via glob or comma-separated list");
+  console.log("  lotl skill show/install        - Show or install the packaged Lotl skill");
+  console.log("  lotl mcp                       - Start the MCP server (stdio transport for AI agents)");
+  console.log("  lotl bench <fixture.json>      - Run search quality benchmarks against a fixture file");
   console.log("");
   console.log("Collections & context:");
-  console.log("  qmd collection add/list/remove/rename/show   - Manage indexed folders");
-  console.log("  qmd context add/list/rm                      - Attach human-written summaries");
-  console.log("  qmd ls [collection[/path]]                   - Inspect indexed files");
+  console.log("  lotl collection add/list/remove/rename/show   - Manage indexed folders");
+  console.log("  lotl context add/list/rm                      - Attach human-written summaries");
+  console.log("  lotl ls [collection[/path]]                   - Inspect indexed files");
   console.log("");
   console.log("Maintenance:");
-  console.log("  qmd status                    - View index + collection health");
-  console.log("  qmd update [--pull]           - Re-index collections (optionally git pull first)");
-  console.log("  qmd embed [-f]                - Generate/refresh vector embeddings");
+  console.log("  lotl status                    - View index + collection health");
+  console.log("  lotl update [--pull]           - Re-index collections (optionally git pull first)");
+  console.log("  lotl embed [-f]                - Generate/refresh vector embeddings");
   console.log("    --max-docs-per-batch <n>    - Cap docs loaded into memory per embedding batch");
   console.log("    --max-batch-mb <n>          - Cap UTF-8 MB loaded into memory per embedding batch");
-  console.log("  qmd cleanup                   - Clear caches, vacuum DB");
+  console.log("  lotl cleanup                   - Clear caches, vacuum DB");
   console.log("");
-  console.log("Query syntax (qmd query):");
-  console.log("  QMD queries are either a single expand query (no prefix) or a multi-line");
+  console.log("Query syntax (lotl query):");
+  console.log("  Lotl queries are either a single expand query (no prefix) or a multi-line");
   console.log("  document where every line is typed with lex:, vec:, or hyde:. This grammar");
   console.log("  matches the docs in docs/SYNTAX.md and is enforced in the CLI.");
   console.log("");
@@ -67,10 +67,10 @@ export function showHelp(): void {
   }
   console.log("");
   console.log("  Examples:");
-  console.log("    qmd query \"how does auth work\"                # single-line → implicit expand");
-  console.log("    qmd query $'lex: CAP theorem\\nvec: consistency'  # typed query document");
-  console.log("    qmd query $'lex: \"exact matches\" sports -baseball'  # phrase + negation lex search");
-  console.log("    qmd query $'hyde: Hypothetical answer text'       # hyde-only document");
+  console.log("    lotl query \"how does auth work\"                # single-line → implicit expand");
+  console.log("    lotl query $'lex: CAP theorem\\nvec: consistency'  # typed query document");
+  console.log("    lotl query $'lex: \"exact matches\" sports -baseball'  # phrase + negation lex search");
+  console.log("    lotl query $'hyde: Hypothetical answer text'       # hyde-only document");
   console.log("");
   console.log("  Constraints:");
   console.log("    - Standalone expand queries cannot mix with typed lines.");
@@ -78,15 +78,15 @@ export function showHelp(): void {
   console.log("    - Each typed line must be single-line text with balanced quotes.");
   console.log("");
   console.log("AI agents & integrations:");
-  console.log("  - Run `qmd mcp` to expose the MCP server (stdio) to agents/IDEs.");
-  console.log("  - `qmd skill install` installs the QMD skill into ./.agents/skills/qmd.");
-  console.log("  - Use `qmd skill install --global` for ~/.agents/skills/qmd.");
-  console.log("  - `qmd --skill` is kept as an alias for `qmd skill show`.");
-  console.log("  - Advanced: `qmd mcp --http ...` and `qmd mcp --http --daemon` are optional for custom transports.");
+  console.log("  - Run `lotl mcp` to expose the MCP server (stdio) to agents/IDEs.");
+  console.log("  - `lotl skill install` installs the Lotl skill into ./.agents/skills/lotl.");
+  console.log("  - Use `lotl skill install --global` for ~/.agents/skills/lotl.");
+  console.log("  - `lotl --skill` is kept as an alias for `lotl skill show`.");
+  console.log("  - Advanced: `lotl mcp --http ...` and `lotl mcp --http --daemon` are optional for custom transports.");
   console.log("");
   console.log("Global options:");
   console.log("  --index <name>             - Use a named index (default: index)");
-  console.log("  QMD_EDITOR_URI             - Editor link template for clickable TTY search output");
+  console.log("  LOTL_EDITOR_URI             - Editor link template for clickable TTY search output");
   console.log("");
   console.log("Search options:");
   console.log("  -n <num>                   - Max results (default 5, or 20 for --files/--json)");
@@ -125,5 +125,5 @@ export async function showVersion(): Promise<void> {
   }
 
   const versionStr = commit ? `${pkg.version} (${commit})` : pkg.version;
-  console.log(`qmd ${versionStr}`);
+  console.log(`lotl ${versionStr}`);
 }

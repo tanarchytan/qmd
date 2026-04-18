@@ -2,7 +2,7 @@
  * QMD SDK - Library mode for programmatic access to QMD search and indexing.
  *
  * Usage:
- *   import { createStore } from '@tanarchy/qmd'
+ *   import { createStore } from '@tanarchy/lotl'
  *
  *   const store = await createStore({
  *     dbPath: './my-index.sqlite',
@@ -210,7 +210,7 @@ export interface StoreOptions {
  * context management, and indexing operations.
  *
  * All methods are async. Embed is lazy — local via transformers.js (when
- * QMD_EMBED_BACKEND=transformers) or remote via RemoteLLM.
+ * LOTL_EMBED_BACKEND=transformers) or remote via RemoteLLM.
  */
 export interface QMDStore {
   /** The underlying internal store (for advanced use) */
@@ -317,7 +317,7 @@ export interface QMDStore {
  * // With a YAML config file
  * const store = await createStore({
  *   dbPath: './index.sqlite',
- *   configPath: './qmd.yml',
+ *   configPath: './lotl.yml',
  * })
  *
  * // With inline config (no files needed besides the DB)

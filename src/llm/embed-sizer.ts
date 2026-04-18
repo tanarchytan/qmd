@@ -38,7 +38,7 @@ export interface SizerOptions {
 /**
  * Pick a good device/microbatch/workers tuple for a given model + dtype.
  *
- * GPU-first decision tree (can be inverted via opts or QMD_TRANSFORMERS_AUTO_PREFER=cpu):
+ * GPU-first decision tree (can be inverted via opts or LOTL_TRANSFORMERS_AUTO_PREFER=cpu):
  *   1. GPU available + model fits the per-buffer limit → webgpu
  *   2. GPU unavailable OR model overruns the per-buffer limit → cpu fallback
  *   3. Always surface probe warnings (driver age, missing stack, iGPU hints) on caller's log
@@ -54,7 +54,7 @@ export async function computeEmbedBudget(
 
   const vramHeadroom = opts.vramHeadroom ?? 0.80;
   const bufferHeadroom = opts.bufferHeadroom ?? 0.70;
-  const preferCpu = process.env.QMD_TRANSFORMERS_AUTO_PREFER === "cpu";
+  const preferCpu = process.env.LOTL_TRANSFORMERS_AUTO_PREFER === "cpu";
 
   const cpuThreads = Math.max(1, (await import("os")).cpus().length - 1);
   const cpuBudget = (reason: string): EmbedBudget => ({
@@ -72,7 +72,7 @@ export async function computeEmbedBudget(
 
   // Environment asked for CPU preference.
   if (preferCpu) {
-    return cpuBudget(`CPU chosen: QMD_TRANSFORMERS_AUTO_PREFER=cpu`);
+    return cpuBudget(`CPU chosen: LOTL_TRANSFORMERS_AUTO_PREFER=cpu`);
   }
 
   // Compute safe microbatch from maxBufferSize. If ≥1, GPU path is viable.

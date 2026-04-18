@@ -6,20 +6,20 @@
  * `onnx-community/<name>-ONNX` org or an `onnx/` subfolder in the main repo.
  *
  * Lazy-loaded. Dynamic import means `@huggingface/transformers` only
- * materializes when a user opts in via `QMD_EMBED_BACKEND=transformers`.
+ * materializes when a user opts in via `LOTL_EMBED_BACKEND=transformers`.
  *
- * Model files cache under `~/.cache/qmd/transformers/` (override via
- * `QMD_TRANSFORMERS_CACHE_DIR`). First use downloads ~150–600 MB depending
+ * Model files cache under `~/.cache/lotl/transformers/` (override via
+ * `LOTL_TRANSFORMERS_CACHE_DIR`). First use downloads ~150–600 MB depending
  * on the chosen dtype.
  *
  * Activation:
- *   QMD_EMBED_BACKEND=transformers
- *   QMD_TRANSFORMERS_MODEL=mixedbread-ai/mxbai-embed-xsmall-v1   (default)
- *   QMD_TRANSFORMERS_DTYPE=q8                                     (default; q8 | fp16 | fp32 | q4 | int8 | uint8)
- *   QMD_TRANSFORMERS_FILE=                                        (optional override, e.g. model_quint8_avx2)
- *   QMD_TRANSFORMERS_DEVICE=cpu                                   (default; cpu | webgpu | dml | auto). On Node.js only cpu/webgpu/dml are valid device IDs.
+ *   LOTL_EMBED_BACKEND=transformers
+ *   LOTL_TRANSFORMERS_MODEL=mixedbread-ai/mxbai-embed-xsmall-v1   (default)
+ *   LOTL_TRANSFORMERS_DTYPE=q8                                     (default; q8 | fp16 | fp32 | q4 | int8 | uint8)
+ *   LOTL_TRANSFORMERS_FILE=                                        (optional override, e.g. model_quint8_avx2)
+ *   LOTL_TRANSFORMERS_DEVICE=cpu                                   (default; cpu | webgpu | dml | auto). On Node.js only cpu/webgpu/dml are valid device IDs.
  *                                                                 `auto` probes GPU capabilities + model size and picks the best combination
- *                                                                 (see `embed-sizer.ts` — also sets QMD_EMBED_MICROBATCH and QMD_EMBED_MAX_WORKERS).
+ *                                                                 (see `embed-sizer.ts` — also sets LOTL_EMBED_MICROBATCH and LOTL_EMBED_MAX_WORKERS).
  *                                                                 WebGPU unblocks models that OOM on CPU (e.g. embgemma-300m via fp32 external-data expansion).
  *                                                                 Benchmarked 2026-04-17: CPU q8 is fastest for small+medium models (22M–335M);
  *                                                                 WebGPU only wins when CPU won't fit. DML was worse than CPU on AMD iGPU.
@@ -69,7 +69,7 @@ const KNOWN_PREFIX_FAMILIES: Array<{ pattern: RegExp; query: string; passage: st
 /** Resolve the query/passage prefix for a model.
  *  Priority: env override → known family auto-detect → empty (no prefix). */
 function resolveEmbedPrefix(model: string, isQuery: boolean): string {
-  const envKey = isQuery ? "QMD_EMBED_QUERY_PREFIX" : "QMD_EMBED_PASSAGE_PREFIX";
+  const envKey = isQuery ? "LOTL_EMBED_QUERY_PREFIX" : "LOTL_EMBED_PASSAGE_PREFIX";
   const fromEnv = process.env[envKey];
   if (fromEnv !== undefined) return fromEnv; // Allow explicit empty-string to disable auto-detect.
   for (const fam of KNOWN_PREFIX_FAMILIES) {
@@ -79,8 +79,8 @@ function resolveEmbedPrefix(model: string, isQuery: boolean): string {
 }
 
 function defaultCacheDir(): string {
-  return process.env.QMD_TRANSFORMERS_CACHE_DIR
-    || join(homedir(), ".cache", "qmd", "transformers");
+  return process.env.LOTL_TRANSFORMERS_CACHE_DIR
+    || join(homedir(), ".cache", "lotl", "transformers");
 }
 
 export class TransformersEmbedBackend implements LLM {
@@ -117,7 +117,7 @@ export class TransformersEmbedBackend implements LLM {
 
       // transformers.js env knobs — set before pipeline() call.
       (tf as any).env.cacheDir = cacheDir;
-      if (process.env.QMD_TRANSFORMERS_QUIET !== "off") {
+      if (process.env.LOTL_TRANSFORMERS_QUIET !== "off") {
         (tf as any).env.allowLocalModels = false;
       }
 
@@ -133,7 +133,7 @@ export class TransformersEmbedBackend implements LLM {
   }
 
   /** Apply query/passage prefix required by E5, Nomic, BGE-instruct etc.
-   * Prefixes come from env vars (`QMD_EMBED_QUERY_PREFIX`, `QMD_EMBED_PASSAGE_PREFIX`),
+   * Prefixes come from env vars (`LOTL_EMBED_QUERY_PREFIX`, `LOTL_EMBED_PASSAGE_PREFIX`),
    * or are auto-detected from the model id for well-known families.
    * No prefix → returns text unchanged. */
   private withPrefix(text: string, isQuery: boolean): string {
@@ -197,16 +197,16 @@ export class TransformersEmbedBackend implements LLM {
  *
  * Two ways to specify the model:
  *
- *   QMD_TRANSFORMERS_EMBED — composite HF path, e.g.
+ *   LOTL_TRANSFORMERS_EMBED — composite HF path, e.g.
  *     mixedbread-ai/mxbai-embed-xsmall-v1
  *     mixedbread-ai/mxbai-embed-xsmall-v1/onnx/model_q8
  *     sentence-transformers/all-MiniLM-L6-v2/onnx/model_quint8_avx2
  *   (parsed into modelId + optional fileName via parseHfModelPath)
  *
  * OR the explicit triple:
- *   QMD_TRANSFORMERS_MODEL  — HF repo id
- *   QMD_TRANSFORMERS_DTYPE  — q8 | fp16 | fp32 | q4 | int8 | uint8
- *   QMD_TRANSFORMERS_FILE   — ONNX file stem (omit .onnx suffix)
+ *   LOTL_TRANSFORMERS_MODEL  — HF repo id
+ *   LOTL_TRANSFORMERS_DTYPE  — q8 | fp16 | fp32 | q4 | int8 | uint8
+ *   LOTL_TRANSFORMERS_FILE   — ONNX file stem (omit .onnx suffix)
  *
  * The composite var takes precedence when set.
  */
@@ -216,9 +216,18 @@ export async function createTransformersEmbedBackend(
   fileName?: string,
   device?: string,
 ): Promise<TransformersEmbedBackend> {
+  // Opt-in direct-ORT path for models whose `model_type` is not registered
+  // in transformers.js's feature-extraction pipeline dispatcher
+  // (e.g. jina_embeddings_v5, eurobert, nomic_bert, NewModel).
+  // Returns the same structural LLM shape — consumers type it as `any`.
+  if (process.env.LOTL_EMBED_DIRECT === "on") {
+    const { createTransformersEmbedDirectBackend } = await import("./transformers-embed-direct.js");
+    return (await createTransformersEmbedDirectBackend()) as unknown as TransformersEmbedBackend;
+  }
+
   // Composite override (parseHfModelPath lives in transformers-rerank.ts
   // — re-export there so both backends share the parser).
-  const composite = process.env.QMD_TRANSFORMERS_EMBED;
+  const composite = process.env.LOTL_TRANSFORMERS_EMBED;
   let envModel: string | undefined;
   let envFile: string | undefined;
   if (composite) {
@@ -235,15 +244,15 @@ export async function createTransformersEmbedBackend(
   }
   const m = model
     ?? envModel
-    ?? process.env.QMD_TRANSFORMERS_MODEL
+    ?? process.env.LOTL_TRANSFORMERS_MODEL
     ?? "mixedbread-ai/mxbai-embed-xsmall-v1";
   const d = dtype
-    ?? process.env.QMD_TRANSFORMERS_DTYPE
+    ?? process.env.LOTL_TRANSFORMERS_DTYPE
     ?? "q8";
   const f = fileName
     ?? envFile
-    ?? process.env.QMD_TRANSFORMERS_FILE;
-  let dev = device ?? process.env.QMD_TRANSFORMERS_DEVICE;
+    ?? process.env.LOTL_TRANSFORMERS_FILE;
+  let dev = device ?? process.env.LOTL_TRANSFORMERS_DEVICE;
 
   // Accept the friendlier alias `gpu` and route it through the same GPU path on
   // every platform (webgpu is the only GPU device transformers.js accepts in Node).
@@ -253,7 +262,7 @@ export async function createTransformersEmbedBackend(
     const { computeEmbedBudget, formatBudget } = await import("./embed-sizer.js");
     const { probeGpu } = await import("./gpu-probe.js");
     const [caps, budget] = await Promise.all([probeGpu(), computeEmbedBudget(m, d)]);
-    const quiet = process.env.QMD_TRANSFORMERS_QUIET === "on";
+    const quiet = process.env.LOTL_TRANSFORMERS_QUIET === "on";
     if (!quiet) {
       for (const w of caps.warnings ?? []) process.stderr.write(`[qmd.embed] warning: ${w}\n`);
       process.stderr.write(`[qmd.embed] auto-selected: ${formatBudget(budget)}\n`);
@@ -261,11 +270,11 @@ export async function createTransformersEmbedBackend(
     dev = budget.device;
     // Export the sized microbatch + worker count so eval harnesses and the
     // memory ingest path can honor them without running the probe twice.
-    if (!process.env.QMD_EMBED_MICROBATCH) {
-      process.env.QMD_EMBED_MICROBATCH = String(budget.microbatch);
+    if (!process.env.LOTL_EMBED_MICROBATCH) {
+      process.env.LOTL_EMBED_MICROBATCH = String(budget.microbatch);
     }
-    if (!process.env.QMD_EMBED_MAX_WORKERS) {
-      process.env.QMD_EMBED_MAX_WORKERS = String(budget.maxWorkers);
+    if (!process.env.LOTL_EMBED_MAX_WORKERS) {
+      process.env.LOTL_EMBED_MAX_WORKERS = String(budget.maxWorkers);
     }
   }
 

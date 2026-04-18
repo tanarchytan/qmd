@@ -1,6 +1,111 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.0] — 2026-04-18 — 🦎 Lotl
+
+**First stable release under the new name.** Previously `@tanarchy/lotl` — rebranded
+to `@tanarchy/lotl` (Living-off-the-Land) to communicate the actual product
+identity: AI agent memory on what's already on the machine (FTS5 + sqlite-vec +
+local ONNX), no new infrastructure, no LLM required.
+
+### Migration from `@tanarchy/lotl`
+
+- **Package**: `npm uninstall -g @tanarchy/lotl && npm install -g @tanarchy/lotl`
+- **CLI**: `lotl` is the new canonical binary. `qmd` still works as an alias.
+- **Env vars**: `QMD_*` env vars keep working through v1.x. `LOTL_*` aliases
+  will be added with deprecation warnings in v1.1; full migration at v2.0.
+- **MCP tools, SDK API, config file format**: unchanged. Your `~/.config/lotl/.env`,
+  `~/.cache/lotl/index.sqlite`, and collection data migrate as-is.
+- **OpenClaw plugin**: still registered as `tanarchy-lotl` in `openclaw.json`
+  for v1.0 (plugin name migration in v1.1).
+
+Version reset from `2.1.0-dev.23` to `1.0.0` to mark the new identity. The
+feature set IS release-ready — the previous `2.1.0-dev.*` numbering was the
+pre-rebrand progression.
+
+### What Lotl actually is
+
+First release-ready version after the n=500 LongMemEval embedder sweep + LoCoMo
+end-to-end Judge-Acc validation. mxbai-xs q8 confirmed as production default.
+
+### Highlights
+
+- **n=500 LME sweep concluded**: mxbai-xs q8 (384d) wins on rAny@5 (98.4%) and
+  preference MRR (0.745). Four challengers (gte-small, bge-large, UAE-Large,
+  jina-v5) tied or regressed. See [`evaluate/SNAPSHOTS.md`](evaluate/SNAPSHOTS.md).
+- **LoCoMo end-to-end (10 convs, 1986 QA, gemini-2.5-flash gen+judge): 81.4% Judge-Acc.**
+  Competitive with Mem0 (91.6%, GPT-4 class) and Hindsight (89.6%/83.6%) given
+  generator differences.
+- **Direct-ORT backend** for transformers.js arch-incompat models
+  (`src/llm/transformers-embed-direct.ts`). Activated by `LOTL_EMBED_DIRECT=on`.
+  Probed jina-v5-nano-retrieval at 402 MB RSS (RSS-leak-safe with
+  `LOTL_TRANSFORMERS_DIRECT_MAXLEN=1024`).
+- **Honest eval harness**: top-k=10 LLM context (was 50, matching MemPalace's
+  admitted cheat), Mem0-style judge prompt, robust JSON+text verdict parser.
+- **Eval harness disconnected from npm package** — eval scripts live in
+  `evaluate/` (not shipped). Run from source against your own dataset.
+- **30 pre-existing typecheck errors** in `test/` fixed.
+
+### Embedder n=500 LME _s leaderboard (no-LLM, retrieval-only)
+
+| Embedder | Dim | rAny@5 | MRR | Pref MRR | Wall |
+|---|---|---|---|---|---|
+| **mxbai-embed-xsmall-v1 q8** (default) | 384 | **98.4%** | 0.917 | **0.745** | 26 min |
+| UAE-Large-V1 | 1024 | 98.0% | **0.921** | 0.714 | 145 min |
+| gte-small | 384 | 97.8% | 0.919 | 0.703 | 26 min |
+| bge-large-en-v1.5 | 1024 | 98.0% | 0.917 | 0.680 | 147 min |
+| jina-v5-nano-retrieval (direct-ORT) | 768 | 95.4% | 0.860 | 0.533 | ~5 h |
+
+### Cleanup pass (release-ready bar)
+
+- **`evaluate/`**: canonical `scripts/` + archived `legacy/` split (24 one-off
+  scripts moved out of the root). New `evaluate/scripts/README.md` +
+  `evaluate/legacy/README.md` explain the keepers and the archive.
+- **`evaluate/longmemeval/README.md` + `evaluate/locomo/README.md`**: per-eval
+
+- **`evaluate/`**: canonical `scripts/` + archived `legacy/` split (24 one-off
+  scripts moved out of the root). New `evaluate/scripts/README.md` +
+  `evaluate/legacy/README.md` explain the keepers and the archive.
+- **`evaluate/longmemeval/README.md` + `evaluate/locomo/README.md`**: per-eval
+  docs with CLI flag tables, canonical recipes (no-LLM / Gemini / Poe), DB-reuse
+  notes, and performance expectations.
+- **`evaluate/CLEANUP_PLAN.md`** + **`evaluate/locomo/HYBRID_HARNESS.md`**:
+  release-ready cleanup plan + honest-harness design (competitor audit of
+  Mem0 / Zep / Hindsight / MemPalace / memory-lancedb-pro judge configs + top-k).
+- **`.env.example`**: complete rewrite — now documents 85+ `QMD_*` env vars
+  grouped by domain with purpose + defaults. Quick-start block on top.
+  Previously enumerated zero of them.
+- **`test/`**: 30 pre-existing typecheck errors fixed (missing `.js` extensions
+  + implicit-any params). Smoke tests moved to `test/smoke/` subdir with README.
+- **`tsconfig.build.json`**: stale `src/bench-*.ts` exclude pattern replaced
+  with `src/bench/**` (matches the real location).
+- **`src/memory/index.ts`**: renamed `getFastEmbedBackend` →
+  `getLocalEmbedBackend` (misleading post-2026-04-13 removal of fastembed).
+- **`evaluate/*/eval.mts`**: deleted truly-dead `LOTL_RECALL_DUAL_PASS` +
+  `LOTL_RECALL_LOG_MOD` reads (ablation-log-only, no consumers).
+- **`evaluate/longmemeval/eval.mts`**: added `--judge` + `--judge-model` flags
+  and Mem0-style judge wiring (consistent with existing LongMemEval support).
+  `LOTL_ANSWER_TOP_K` default raised `5 → 10` (Mem0 paper alignment).
+- **`evaluate/locomo/eval.mts`**: added `LOTL_LOCOMO_ANSWER_TOP_K=10` cap on
+  LLM context (was 50 — matches MemPalace's admitted cheat). Retrieval pool
+  stays at 50 so ranking metrics are unaffected.
+- **`src/llm/transformers-embed-direct.ts`** (new): direct-ORT backend for
+  jina_embeddings_v5 / eurobert / other arch-incompat models. Tokenizer via
+  `AutoTokenizer`, inference via `onnxruntime-node`, last-token pool + L2
+  normalize. Activated by `LOTL_EMBED_DIRECT=on`. Probed at 402 MB RSS on
+  jina-v5-nano-retrieval; RSS capped via `LOTL_TRANSFORMERS_DIRECT_MAXLEN=1024`.
+- **`src/store/constants.ts`**, **`src/cli/format.ts`**,
+  **`src/memory/extractor.ts`**, **`src/memory/index.ts`**: stale TODO markers
+  reworded or deleted. `cli/format.ts` LOC reference updated from stale
+  "3,379 LOC" to match current state.
+- **`src/memory/index.ts`**: renamed `getFastEmbedBackend` → `getLocalEmbedBackend`
+  (misleading name; transformers backend replaced fastembed in 2026-04-13 cleanup).
+- **Dead prompt versions purged**: `evaluate/longmemeval/eval.mts` lost the v11.1
+  and v12 branches + `extractV12Answer` helper. Kept v11 (default) + v13
+  (paper-aligned, recommended for `--judge` runs).
+- **DB cleanup**: removed 137 unused ablation DBs from `evaluate/longmemeval/dbs/`,
+  freed ~73 GB. Retained 5 sweep candidates + winner baseline (~12 GB).
+- **`evaluate/SNAPSHOTS.md`**: canonical pinned metrics for v1, with reproduction
+  recipes for every published number. Static verification reference.
 
 ### 2026-04-18 — CLI refactor + shared helpers + message formatters
 
@@ -24,9 +129,9 @@ modules, ~875 LOC relocated, ~40 LOC of duplicate logic collapsed.
 Typecheck clean at every slice; 197/197 store + memory tests pass.
 
 **Three duplications collapsed** (all into `src/cli/command-helpers.ts`):
-- `resolveFsPath(pathArg)` — normalize `~/`, `./`, relative, `qmd://`,
+- `resolveFsPath(pathArg)` — normalize `~/`, `./`, relative, `lotl://`,
   absolute paths. Was duplicated in contextAdd + contextRemove.
-- `requireValidVirtualPath(pathArg)` — parse `qmd://c/p`, exit on malformed
+- `requireValidVirtualPath(pathArg)` — parse `lotl://c/p`, exit on malformed
   or unknown collection.
 - `requireCollectionOrExit(name)` — YAML collection lookup with the
   "run qmd collection list" hint.
@@ -52,10 +157,10 @@ model. Three distinct bugs caught in sequence, each fix measurable:
 **Added:**
 - `--llm poe` / `--judge <provider>` / `--judge-model <name>` flags in eval.mts
 - Poe (OpenAI-compatible) provider in LLM_CONFIG
-- v13 answer prompt (LongMemEval paper-aligned minimal style — `QMD_PROMPT_RULES=v13`)
+- v13 answer prompt (LongMemEval paper-aligned minimal style — `LOTL_PROMPT_RULES=v13`)
 - v12 CoT + citations prompt (kept as option, not default — over-engineered)
 - `--reflect` CLI flag for existing `memoryReflect` pre-pass
-- `QMD_ANSWER_TOP_K` / `QMD_ANSWER_MAX_CHARS` env knobs for answer context budget
+- `LOTL_ANSWER_TOP_K` / `LOTL_ANSWER_MAX_CHARS` env knobs for answer context budget
 - `preflightQuotaCheck()` — probes Poe with a 16-token ping before ingest, fails
   fast if the account is out of quota (prevents mid-run 402 blowups like we
   hit earlier in the day)
@@ -68,16 +173,16 @@ model. Three distinct bugs caught in sequence, each fix measurable:
 **Bugs caught + fixed:**
 1. **Prompt blowup (91K input tokens / call)** — eval.mts was dumping all 50
    retrieved memories into the answer prompt with no cap. First n=100 attempt
-   burned 6.9K Poe points on a single call. Fixed with `QMD_ANSWER_TOP_K=5`
+   burned 6.9K Poe points on a single call. Fixed with `LOTL_ANSWER_TOP_K=5`
    default + per-memory char cap.
 2. **Defense-in-depth caps missing** from `memoryReflect` and `runReflectionPass`
-   — same leak latent in core. Added `QMD_REFLECT_TOP_K` / `QMD_REFLECT_MAX_CHARS`.
+   — same leak latent in core. Added `LOTL_REFLECT_TOP_K` / `LOTL_REFLECT_MAX_CHARS`.
 3. **800-char default too tight for session-level memories** (THE big one,
    caught during Phase 7.1 diagnostics). LongMemEval memories average
    **8,283 chars** (max 42,910). Our 800-char cap dropped 90%+ of every
    memory's content, so even when retrieval hit the right session
    (rAny@5 = 99%), the answer-phase LLM saw a truncated prefix that rarely
-   contained the actual answer. Fixed: `QMD_ANSWER_MAX_CHARS` default bumped
+   contained the actual answer. Fixed: `LOTL_ANSWER_MAX_CHARS` default bumped
    to **6000**. Previous 800 default kept for backward compat via env var.
 
 **Benchmark progression (LME _s, n=100, mxbai-xs baseline DB):**
@@ -98,7 +203,7 @@ model. Three distinct bugs caught in sequence, each fix measurable:
   session was in top-5.
 
 **Changed:**
-- `QMD_ANSWER_MAX_CHARS` default: 800 → **6000** (sized for LME session memories)
+- `LOTL_ANSWER_MAX_CHARS` default: 800 → **6000** (sized for LME session memories)
 - `askLLM` default `maxTokens`: 256 → **128** (tightened to save output-token cost)
 - Judge `maxTokens`: 64 → **48**
 
@@ -117,7 +222,7 @@ backend so future sweeps on faster hardware (dedicated GPUs, NPUs) can
 opt in without env-var choreography.
 
 **Added:**
-- `QMD_TRANSFORMERS_DEVICE` env var — `cpu | webgpu | dml | gpu | auto`. `gpu`
+- `LOTL_TRANSFORMERS_DEVICE` env var — `cpu | webgpu | dml | gpu | auto`. `gpu`
   aliases `webgpu`. `auto` probes the machine and picks.
 - `src/llm/gpu-probe.ts` — cached GPU capability probe. OS-level VRAM/driver
   detection (Windows WMI, Linux sysfs, macOS system_profiler) + optional
@@ -128,7 +233,7 @@ opt in without env-var choreography.
   `{device, dtype, microbatch, maxWorkers, reason}`. Uses attention-matrix
   math: `microbatch = floor(maxBufferSize × 0.70 / (heads × seq² × 4))`.
   Falls back to CPU when even microbatch=1 exceeds the per-buffer cap.
-  Honors `QMD_TRANSFORMERS_AUTO_PREFER=cpu` for power users who want CPU
+  Honors `LOTL_TRANSFORMERS_AUTO_PREFER=cpu` for power users who want CPU
   on a WebGPU-capable box.
 
 **Upgrades:**
@@ -182,9 +287,9 @@ together.
 - Rank-based RRF fusion (`MEMORY_RRF_W_BM25=0.9`, `W_VEC=0.1`, K=60). Replaces
   additive score accumulation. Vec rank list properly normalized against BM25.
 - Temporal as 3rd RRF list (`MEMORY_RRF_W_TIME=0.1`) — fires on time refs.
-- Keyword expansion default on (`QMD_MEMORY_EXPAND=keywords`).
+- Keyword expansion default on (`LOTL_MEMORY_EXPAND=keywords`).
 - Synonym expansion default on with curated preference/temporal dict
-  (`MEMORY_SYNONYMS` in constants.ts). Opt-out: `QMD_MEMORY_SYNONYMS=off`.
+  (`MEMORY_SYNONYMS` in constants.ts). Opt-out: `LOTL_MEMORY_SYNONYMS=off`.
 - Cross-encoder rerank score normalization (min-max to [0,1] on both sides
   of the blend). Default blend 0.7 original / 0.3 rerank when enabled.
 - MCP tools: `memory_recall_tiered`, `memory_push_pack`.
@@ -211,7 +316,7 @@ together.
 - Per-turn ingest: 2-3s per query at 10x memories, no quality gain.
 - L# cache hierarchy (Schift pattern): n=500 validated. -0.6pp recall,
   -5.2pp preference MRR, 5.5x wall time. Ships opt-in via
-  `QMD_MEMORY_LHASH=on` for future experimentation; LME sessions are
+  `LOTL_MEMORY_LHASH=on` for future experimentation; LME sessions are
   too short for L2 to differ meaningfully from L0, and keyword expansion
   already captures the paraphrase lift Schift attributed to L#.
 
@@ -238,7 +343,7 @@ together.
 - `docs/ARCHITECTURE.md` updated to A→F staged pipeline.
 - `docs/EVAL.md` updated to transformers backend commands.
 - `docs/TODO.md` phase-ordered with pass/fail gates.
-- `docs/notes/metrics.md` metric family walkthrough.
+- `devnotes/metrics/metric-discipline.md` metric family walkthrough.
 
 ### v16 release summary (2026-04-13)
 
@@ -293,7 +398,7 @@ scope, multi-session R@5 stuck at 81% vs MemPalace 100% on n=500.
 Confirmed via the BGE A/B (next entry) that this is NOT a
 representational-capacity problem — BGE-base 768-dim scored identically
 to MiniLM 384-dim. Bottleneck is training objective / data, not model
-size. Queued v17 experiments documented in `docs/notes/`:
+size. Queued v17 experiments documented in `devnotes/`:
 
 - Small-class A/B (gte-small, arctic-xs, mxbai-xsmall, e5-small, nomic)
   — try BEFORE jumping to larger models
@@ -340,7 +445,7 @@ Skipped n=500 BGE confirmation because n=100 was already definitive.
 
 The small-class A/B plan (gte-small, snowflake-arctic-embed-xs,
 mxbai-embed-xsmall-v1, e5-small-v2, nomic-embed-text-v1.5) is documented
-as the next experiment in ROADMAP and `docs/notes/qwen3-embedding-paths.md`.
+as the next experiment in ROADMAP and `devnotes/embedders/qwen3-paths.md`.
 Will run before any larger-model experiment.
 
 ### Vector retrieval — scope partition key (2026-04-13 late session)
@@ -400,7 +505,7 @@ This is a quality fix for both regimes — open vault (top1=0.85
 → floor 0.425, long tail correctly pruned) and focused haystack
 (top1=0.32 → floor 0.16, low-cosine matches survive). 7 unit tests
 in `test/pick-vector-matches.test.ts`. Override via
-`QMD_VEC_MIN_SIM=adaptive|0|<number>`.
+`LOTL_VEC_MIN_SIM=adaptive|0|<number>`.
 
 **Bug 2 — `memories_vec` (vec0) has no scope filter.** The KNN query
 returned the K=150 most similar memories across the entire 23,867-row
@@ -409,7 +514,7 @@ queries had only 1-5 memories left. Diagnosed via DB inspection: 500
 distinct scopes × ~48 memories each = correct ingest, but K=150
 across 500 scopes ≈ 0.3 hits per scope on average.
 
-Quick fix: bump K via `QMD_VEC_K_MULTIPLIER` (default 20) so vecK =
+Quick fix: bump K via `LOTL_VEC_K_MULTIPLIER` (default 20) so vecK =
 max(limit*3, limit*20) = 1000. Fetches enough overshoot that the
 post-vector scope filter has full top-50 candidates for most queries.
 Workaround, not the proper fix — linear scan cost grows with K.
@@ -517,7 +622,7 @@ results land separately.
 - **Cat 2 — Dialog-aware diversity in top-K recall**
   (`src/memory/index.ts:applyDialogDiversity`). Greedy MMR-lite
   reshuffle of the top-K that prefers unseen `source_dialog_id` /
-  `source_session_id` first. Opt-in via `QMD_RECALL_DIVERSIFY=on`.
+  `source_session_id` first. Opt-in via `LOTL_RECALL_DIVERSIFY=on`.
   Addresses the DR@K vs SR@K gap surfaced by the v15.1 LoCoMo
   conv-30 analysis (SR@5=82.9% but DR@5=52.6% — retrieval was finding
   the right session but piling up duplicate dialog turns).
@@ -540,7 +645,7 @@ results land separately.
   graph is populated at ingest but wasn't queried during recall;
   v8's blunt injection had to be rolled back because generic KG
   entries flooded the top-K. This pass is opt-in via
-  `QMD_RECALL_KG=on` and only fires when the query contains ≤3
+  `LOTL_RECALL_KG=on` and only fires when the query contains ≤3
   proper-noun entities AND the current top score is weak (<0.3) AND
   fewer than 5 KG facts are returned. Inserted with fixed score 0.25
   so strong FTS/vec hits are never displaced.
@@ -550,7 +655,7 @@ results land separately.
   takes a question + list of retrieved memories and makes one LLM
   call to extract the facts directly relevant to the question,
   returned as a compressed numbered list. Both eval scripts integrate
-  it behind `QMD_RECALL_REFLECT=on`. Designed to help on the LME
+  it behind `LOTL_RECALL_REFLECT=on`. Designed to help on the LME
   v15.1 multi-session F1=30% bottleneck where retrieval is at
   SR@5=100% but the answer model drowns in 50 scattered memories.
 
@@ -624,7 +729,7 @@ keeps working; only the internal layout changed.
   matching against `qa.evidence` is bit-exact. Top-K pulls 50 memories
   and reports K ∈ {5, 10, 15, 50} from one recall call.
 - **v11.1 answer prompt for temporal reasoning** (opt-in via
-  `QMD_PROMPT_RULES=v11.1`). Adds three rules: ordering ("which came
+  `LOTL_PROMPT_RULES=v11.1`). Adds three rules: ordering ("which came
   first" → compare dates, never refuse), duration arithmetic ("how long
   between X and Y" → compute, never say "context does not provide"
   when both anchor dates are visible), enumerate-then-count for
@@ -632,7 +737,7 @@ keeps working; only the internal layout changed.
   F1 51.4 → 52.9 (+1.5pp), EM 22.0 → 28.0 (+6.0pp), SR@5 100%
   unchanged.
 - Fix `--extract-model` flag in LME/LoCoMo eval scripts: it was
-  setting `QMD_QUERY_EXPANSION_MODEL` (wrong variable — the extractor
+  setting `LOTL_QUERY_EXPANSION_MODEL` (wrong variable — the extractor
   ignores it, queryExpansion then 404'd against Nebius on every run).
   Removed pending a proper per-call override in the extractor.
 
@@ -698,13 +803,13 @@ embedding stability, BM25 accuracy, and cross-platform launcher issues.
   the eval-docs test collection. #470 (thanks @jmilinovich)
 - `models:` section in `index.yml` lets you configure `embed`, `rerank`,
   and `generate` model URIs per collection. Resolution order is
-  config > env var (`QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`,
-  `QMD_GENERATE_MODEL`) > built-in default. #502
+  config > env var (`LOTL_EMBED_MODEL`, `LOTL_RERANK_MODEL`,
+  `LOTL_GENERATE_MODEL`) > built-in default. #502
   (thanks @JohnRichardEnders)
 - CLI search output now emits clickable OSC 8 terminal hyperlinks when
-  stdout is a TTY. Links resolve `qmd://` paths to absolute filesystem
+  stdout is a TTY. Links resolve `lotl://` paths to absolute filesystem
   paths and open in editors via URI templates (default:
-  `vscode://file/{path}:{line}:{col}`). Configure with `QMD_EDITOR_URI`
+  `vscode://file/{path}:{line}:{col}`). Configure with `LOTL_EDITOR_URI`
   or `editor_uri` in the YAML config. #508 (thanks @danmackinlay)
 - `--no-rerank` flag skips the reranking step in `qmd query` — useful
   when you want fast results or don't have a GPU. Also exposed as
@@ -722,7 +827,7 @@ embedding stability, BM25 accuracy, and cross-platform launcher issues.
   crash, and bound memory usage during batch embedding. #393
   (thanks @lskun), #395 (thanks @ProgramCaiCai)
 - Embedding: set explicit embed context size (default 2048, configurable
-  via `QMD_EMBED_CONTEXT_SIZE`) instead of using the model's full
+  via `LOTL_EMBED_CONTEXT_SIZE`) instead of using the model's full
   window. #500
 - Embedding: error on dimension mismatch instead of silently rebuilding
   the vec0 table. #501
@@ -739,7 +844,7 @@ embedding stability, BM25 accuracy, and cross-platform launcher issues.
 - BM25: use CTE in `searchFTS` to prevent query planner regression with
   collection filter.
 - Reranker: increase default context size 2048→4096 and make
-  configurable via `QMD_RERANK_CONTEXT_SIZE`. Fix template overhead
+  configurable via `LOTL_RERANK_CONTEXT_SIZE`. Fix template overhead
   underestimate 200→512. #453 (thanks @builderjarvis)
 - GPU: catch initialization failures and fall back to CPU instead of
   crashing.
@@ -875,10 +980,10 @@ exhaustion.
   (thanks @vyalamar)
 - **Collection ignore patterns**: `ignore: ["Sessions/**", "*.tmp"]` in
   collection config to exclude files from indexing. #304 (thanks @sebkouba)
-- **Multilingual embeddings**: `QMD_EMBED_MODEL` env var lets you swap in
+- **Multilingual embeddings**: `LOTL_EMBED_MODEL` env var lets you swap in
   models like Qwen3-Embedding for non-English collections. #273 (thanks
   @daocoding)
-- **Configurable expansion context**: `QMD_EXPAND_CONTEXT_SIZE` env var
+- **Configurable expansion context**: `LOTL_EXPAND_CONTEXT_SIZE` env var
   (default 2048) — previously used the model's full 40960-token window,
   wasting VRAM. #313 (thanks @0xble)
 - **`candidateLimit` exposed**: `-C` / `--candidate-limit` flag and MCP
@@ -1175,7 +1280,7 @@ auto-download from HuggingFace on first use.
 ## [0.5.0] - 2025-12-13
 
 Collections and contexts moved from SQLite tables to YAML at
-`~/.config/qmd/index.yml`. SQLite was overkill for config — you can't share
+`~/.config/lotl/index.yml`. SQLite was overkill for config — you can't share
 it, and it's opaque. YAML is human-readable and version-controllable. The
 migration was extensive (35+ commits) because every part of the system that
 touched collections or contexts had to be updated.
@@ -1190,12 +1295,12 @@ touched collections or contexts had to be updated.
 - CLI: `qmd ls` virtual file tree — list collections, files in a collection,
   or files under a path prefix.
 - CLI: `qmd context add/list/check/rm` with hierarchical context inheritance.
-  A query to `qmd://notes/2024/jan/` inherits context from `notes/`,
+  A query to `lotl://notes/2024/jan/` inherits context from `notes/`,
   `notes/2024/`, and `notes/2024/jan/`.
 - CLI: `qmd context add / "text"` for global context across all collections.
 - CLI: `qmd context check` audit command to find paths without context.
-- Paths: `qmd://` virtual URI scheme for portable document references.
-  `qmd://notes/ideas.md` works regardless of where the collection lives on
+- Paths: `lotl://` virtual URI scheme for portable document references.
+  `lotl://notes/ideas.md` works regardless of where the collection lives on
   disk. Works in `get`, `multi-get`, `ls`, and context commands.
 - CLI: document IDs (docid) — first 6 chars of content hash for stable
   references. Shown as `#abc123` in search results, usable with `get` and

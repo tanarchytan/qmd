@@ -19,7 +19,6 @@ export interface GpuCapabilities {
   maxStorageBufferBindingSize?: number;
   driverDateMs?: number;                  // driver install date (Windows only); missing on other OSes
   driverStaleDays?: number;               // days since driver install
-  hasNpu?: boolean;                       // AMD XDNA NPU present (Windows only for now)
   probeError?: string;
   warnings?: string[];                    // human-readable advisories to surface on first use
 }
@@ -43,7 +42,6 @@ async function doProbe(): Promise<GpuCapabilities> {
     const osInfo = await probeOsGpuInfo();
     caps.vramBytes = osInfo.vramBytes;
     caps.driverDateMs = osInfo.driverDateMs;
-    caps.hasNpu = osInfo.hasNpu;
     caps.vendor = osInfo.vendor;
     if (osInfo.driverDateMs) {
       const ageDays = Math.floor((Date.now() - osInfo.driverDateMs) / 86400_000);
@@ -95,12 +93,6 @@ async function doProbe(): Promise<GpuCapabilities> {
       `Recent AMD/Intel driver updates include WebGPU/DirectML fixes; consider updating for better throughput and stability.`,
     );
   }
-  if (caps.hasNpu && process.platform === "win32") {
-    caps.warnings.push(
-      `AMD XDNA NPU detected. qmd Node backends do not currently target the NPU ` +
-      `(VitisAI EP is Python-only). For your own benchmark, install AMD Ryzen AI Software SDK.`,
-    );
-  }
   if (caps.type === "igpu" && caps.vramBytes && caps.vramBytes < 2 * 2 ** 30) {
     caps.warnings.push(
       `iGPU has ${(caps.vramBytes / 2 ** 30).toFixed(1)} GiB VRAM — small models fit comfortably, ` +
@@ -124,7 +116,6 @@ async function doProbe(): Promise<GpuCapabilities> {
 interface OsGpuInfo {
   vramBytes: number;
   driverDateMs?: number;
-  hasNpu?: boolean;
   vendor?: string;
 }
 
@@ -134,14 +125,13 @@ async function probeOsGpuInfo(): Promise<OsGpuInfo> {
   const exec = promisify(execFile);
 
   if (process.platform === "win32") {
-    // One PowerShell call returns all signals (VRAM, GPU driver date, GPU name, NPU presence).
+    // One PowerShell call returns VRAM, driver date, and GPU name.
     try {
       const script =
         "$gpu = Get-CimInstance Win32_VideoController | Where-Object { $_.AdapterRAM -gt 0 } | Sort-Object AdapterRAM -Descending | Select-Object -First 1;" +
-        "$npu = Get-PnpDevice | Where-Object { $_.FriendlyName -match 'NPU|XDNA|IPU' -and $_.Status -eq 'OK' } | Select-Object -First 1;" +
-        "[PSCustomObject]@{ VRAM = [int64]$gpu.AdapterRAM; DriverDate = if ($gpu.DriverDate) { [int64](($gpu.DriverDate - [DateTime]'1970-01-01Z').TotalMilliseconds) } else { 0 }; HasNPU = [bool]$npu; Name = [string]$gpu.Name } | ConvertTo-Json -Compress";
+        "[PSCustomObject]@{ VRAM = [int64]$gpu.AdapterRAM; DriverDate = if ($gpu.DriverDate) { [int64](($gpu.DriverDate - [DateTime]'1970-01-01Z').TotalMilliseconds) } else { 0 }; Name = [string]$gpu.Name } | ConvertTo-Json -Compress";
       const { stdout } = await exec("powershell", ["-NoProfile", "-Command", script], { timeout: 5000 });
-      const j = JSON.parse(stdout.trim()) as { VRAM?: number; DriverDate?: number; HasNPU?: boolean; Name?: string };
+      const j = JSON.parse(stdout.trim()) as { VRAM?: number; DriverDate?: number; Name?: string };
       const name = String(j.Name || "").toLowerCase();
       let vendor: string | undefined;
       if (name.includes("nvidia") || name.includes("geforce") || name.includes("rtx")) vendor = "NVIDIA";
@@ -151,7 +141,6 @@ async function probeOsGpuInfo(): Promise<OsGpuInfo> {
       return {
         vramBytes: Number(j.VRAM) || 0,
         driverDateMs: Number(j.DriverDate) || undefined,
-        hasNpu: Boolean(j.HasNPU),
         vendor,
       };
     } catch { return { vramBytes: 0 }; }

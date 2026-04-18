@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Self-installing git hooks for qmd
-# Called from package.json "prepare" script after bun install
+# Self-installing git hooks for lotl
+# Called from package.json "prepare" script after npm install
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOOKS_DIR="$REPO_ROOT/.git/hooks"

@@ -1,6 +1,6 @@
-# QMD Query Syntax
+# Lotl Query Syntax
 
-QMD queries are structured documents with typed sub-queries. Each line specifies a search type and query text.
+Lotl queries are structured documents with typed sub-queries. Each line specifies a search type and query text.
 
 ## Grammar
 
@@ -28,7 +28,7 @@ newline        = "\n" ;
 
 ## Default Behavior
 
-A QMD query is either a single expand query or a multi-line query document. Any single-line query with no prefix is treated as an expand query and passed to the expansion model, which emits lex, vec, and hyde variants automatically.
+A Lotl query is either a single expand query or a multi-line query document. Any single-line query with no prefix is treated as an expand query and passed to the expansion model, which emits lex, vec, and hyde variants automatically.
 
 ```
 # These are equivalent and cannot be combined with typed lines:

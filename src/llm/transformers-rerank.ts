@@ -5,7 +5,7 @@
  * better than bi-encoder cosine for preference-style retrieval because
  * they see both sides of the comparison in a single forward pass.
  * Used as the post-retrieval rerank stage in memoryRecall when
- * `QMD_MEMORY_RERANK=cross-encoder` is set.
+ * `LOTL_MEMORY_RERANK=cross-encoder` is set.
  *
  * Default model: `cross-encoder/ms-marco-MiniLM-L6-v2` with quantized
  * file `model_quint8_avx2.onnx`. ~22M params, ~23 MB quantized. Trained on
@@ -13,13 +13,13 @@
  * higher is better.
  *
  * Activation:
- *   QMD_MEMORY_RERANK=cross-encoder
- *   QMD_TRANSFORMERS_RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L6-v2  (default)
- *   QMD_TRANSFORMERS_RERANK_FILE=model_quint8_avx2                     (default; no .onnx suffix)
- *   QMD_TRANSFORMERS_RERANK_DTYPE=q8                                   (default)
+ *   LOTL_MEMORY_RERANK=cross-encoder
+ *   LOTL_TRANSFORMERS_RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L6-v2  (default)
+ *   LOTL_TRANSFORMERS_RERANK_FILE=model_quint8_avx2                     (default; no .onnx suffix)
+ *   LOTL_TRANSFORMERS_RERANK_DTYPE=q8                                   (default)
  *
- * Dedicated env names (vs the embed backend's QMD_TRANSFORMERS_*) to
- * avoid colliding with QMD_RERANK_{MODEL,URL,API_KEY} which are already
+ * Dedicated env names (vs the embed backend's LOTL_TRANSFORMERS_*) to
+ * avoid colliding with LOTL_RERANK_{MODEL,URL,API_KEY} which are already
  * used by the RemoteLLM rerank provider config (e.g. ZeroEntropy zerank-2).
  *
  * Why this model: MS MARCO MiniLM-L6 is the standard small cross-encoder
@@ -53,8 +53,8 @@ import type {
 const backends = new Map<string, Promise<TransformersRerankBackend>>();
 
 function defaultCacheDir(): string {
-  return process.env.QMD_TRANSFORMERS_CACHE_DIR
-    || join(homedir(), ".cache", "qmd", "transformers");
+  return process.env.LOTL_TRANSFORMERS_CACHE_DIR
+    || join(homedir(), ".cache", "lotl", "transformers");
 }
 
 export class TransformersRerankBackend implements LLM {
@@ -104,7 +104,7 @@ export class TransformersRerankBackend implements LLM {
       // transformers.js env knobs — set before model load, identical to
       // the embed backend's init path.
       (tf as any).env.cacheDir = cacheDir;
-      if (process.env.QMD_TRANSFORMERS_QUIET !== "off") {
+      if (process.env.LOTL_TRANSFORMERS_QUIET !== "off") {
         (tf as any).env.allowLocalModels = false;
       }
 
@@ -221,15 +221,15 @@ export function parseHfModelPath(path: string): { modelId: string; fileName?: st
 /**
  * Convenience factory. Reads env vars or uses the 2026-04-14 defaults
  * (ms-marco-MiniLM-L6-v2 + model_quint8_avx2). Dedicated env knobs
- * avoid collision with QMD_RERANK_MODEL which is used by RemoteLLM for
+ * avoid collision with LOTL_RERANK_MODEL which is used by RemoteLLM for
  * remote rerank providers (e.g. ZeroEntropy zerank-2).
  *
- *   QMD_TRANSFORMERS_RERANK        — composite HF path, e.g.
+ *   LOTL_TRANSFORMERS_RERANK        — composite HF path, e.g.
  *                                    cross-encoder/ms-marco-MiniLM-L6-v2/onnx/model_quint8_avx2
  *                                    (overrides the three vars below if set)
- *   QMD_TRANSFORMERS_RERANK_MODEL  — HF repo id
- *   QMD_TRANSFORMERS_RERANK_FILE   — ONNX file name without .onnx suffix
- *   QMD_TRANSFORMERS_RERANK_DTYPE  — q8 | fp16 | fp32 | q4 | int8 | uint8
+ *   LOTL_TRANSFORMERS_RERANK_MODEL  — HF repo id
+ *   LOTL_TRANSFORMERS_RERANK_FILE   — ONNX file name without .onnx suffix
+ *   LOTL_TRANSFORMERS_RERANK_DTYPE  — q8 | fp16 | fp32 | q4 | int8 | uint8
  */
 export function createTransformersRerankBackend(
   model?: string,
@@ -237,7 +237,7 @@ export function createTransformersRerankBackend(
   fileName?: string,
 ): Promise<TransformersRerankBackend> {
   // Composite override takes precedence over the three individual vars.
-  const composite = process.env.QMD_TRANSFORMERS_RERANK;
+  const composite = process.env.LOTL_TRANSFORMERS_RERANK;
   let envModel: string | undefined;
   let envFile: string | undefined;
   if (composite) {
@@ -247,14 +247,14 @@ export function createTransformersRerankBackend(
   }
   const m = model
     ?? envModel
-    ?? process.env.QMD_TRANSFORMERS_RERANK_MODEL
+    ?? process.env.LOTL_TRANSFORMERS_RERANK_MODEL
     ?? "cross-encoder/ms-marco-MiniLM-L6-v2";
   const d = dtype
-    ?? process.env.QMD_TRANSFORMERS_RERANK_DTYPE
+    ?? process.env.LOTL_TRANSFORMERS_RERANK_DTYPE
     ?? "fp32";
   const f = fileName
     ?? envFile
-    ?? process.env.QMD_TRANSFORMERS_RERANK_FILE
+    ?? process.env.LOTL_TRANSFORMERS_RERANK_FILE
     ?? "model_quint8_avx2";
   return TransformersRerankBackend.create(m, d, f);
 }

@@ -7,7 +7,7 @@ import type { Database } from "../db.js";
 import { getStoreCollections, getCollectionByName } from "./store-collections.js";
 
 // USERPROFILE fallback for Windows MCP subprocess case (upstream tobi/qmd 77e71d0).
-// MCP clients spawn QMD as a subprocess passing USERPROFILE but not HOME; without
+// MCP clients spawn Lotl as a subprocess passing USERPROFILE but not HOME; without
 // the fallback we open an empty /tmp DB instead of the user's actual index.
 const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp";
 
@@ -220,9 +220,9 @@ export function getDefaultDbPath(indexName: string = "index"): string {
   }
 
   const cacheDir = process.env.XDG_CACHE_HOME || resolve(homedir(), ".cache");
-  const qmdCacheDir = resolve(cacheDir, "qmd");
-  try { mkdirSync(qmdCacheDir, { recursive: true }); } catch { }
-  return resolve(qmdCacheDir, `${indexName}.sqlite`);
+  const lotlCacheDir = resolve(cacheDir, "lotl");
+  try { mkdirSync(lotlCacheDir, { recursive: true }); } catch { }
+  return resolve(lotlCacheDir, `${indexName}.sqlite`);
 }
 
 export function getPwd(): string {
@@ -238,7 +238,7 @@ export function getRealPath(path: string): string {
 }
 
 // =============================================================================
-// Virtual Path Utilities (qmd://)
+// Virtual Path Utilities (lotl://)
 // =============================================================================
 
 export type VirtualPath = {
@@ -247,11 +247,11 @@ export type VirtualPath = {
 };
 
 /**
- * Normalize explicit virtual path formats to standard qmd:// format.
+ * Normalize explicit virtual path formats to standard lotl:// format.
  * Only handles paths that are already explicitly virtual:
- * - qmd://collection/path.md (already normalized)
- * - qmd:////collection/path.md (extra slashes - normalize)
- * - //collection/path.md (missing qmd: prefix - add it)
+ * - lotl://collection/path.md (already normalized)
+ * - lotl:////collection/path.md (extra slashes - normalize)
+ * - //collection/path.md (missing lotl: prefix - add it)
  *
  * Does NOT handle:
  * - collection/path.md (bare paths - could be filesystem relative)
@@ -260,19 +260,19 @@ export type VirtualPath = {
 export function normalizeVirtualPath(input: string): string {
   let path = input.trim();
 
-  // Handle qmd:// with extra slashes: qmd:////collection/path -> qmd://collection/path
-  if (path.startsWith('qmd:')) {
-    // Remove qmd: prefix and normalize slashes
-    path = path.slice(4);
+  // Handle lotl:// with extra slashes: lotl:////collection/path -> lotl://collection/path
+  if (path.startsWith('lotl:')) {
+    // Remove lotl: prefix and normalize slashes
+    path = path.slice(5);
     // Remove leading slashes and re-add exactly two
     path = path.replace(/^\/+/, '');
-    return `qmd://${path}`;
+    return `lotl://${path}`;
   }
 
-  // Handle //collection/path (missing qmd: prefix)
+  // Handle //collection/path (missing lotl: prefix)
   if (path.startsWith('//')) {
     path = path.replace(/^\/+/, '');
-    return `qmd://${path}`;
+    return `lotl://${path}`;
   }
 
   // Return as-is for other cases (filesystem paths, docids, bare collection/path, etc.)
@@ -280,17 +280,17 @@ export function normalizeVirtualPath(input: string): string {
 }
 
 /**
- * Parse a virtual path like "qmd://collection-name/path/to/file.md"
+ * Parse a virtual path like "lotl://collection-name/path/to/file.md"
  * into its components.
- * Also supports collection root: "qmd://collection-name/" or "qmd://collection-name"
+ * Also supports collection root: "lotl://collection-name/" or "lotl://collection-name"
  */
 export function parseVirtualPath(virtualPath: string): VirtualPath | null {
   // Normalize the path first
   const normalized = normalizeVirtualPath(virtualPath);
 
-  // Match: qmd://collection-name[/optional-path]
-  // Allows: qmd://name, qmd://name/, qmd://name/path
-  const match = normalized.match(/^qmd:\/\/([^\/]+)\/?(.*)$/);
+  // Match: lotl://collection-name[/optional-path]
+  // Allows: lotl://name, lotl://name/, lotl://name/path
+  const match = normalized.match(/^lotl:\/\/([^\/]+)\/?(.*)$/);
   if (!match?.[1]) return null;
   return {
     collectionName: match[1],
@@ -302,13 +302,13 @@ export function parseVirtualPath(virtualPath: string): VirtualPath | null {
  * Build a virtual path from collection name and relative path.
  */
 export function buildVirtualPath(collectionName: string, path: string): string {
-  return `qmd://${collectionName}/${path}`;
+  return `lotl://${collectionName}/${path}`;
 }
 
 /**
  * Check if a path is explicitly a virtual path.
  * Only recognizes explicit virtual path formats:
- * - qmd://collection/path.md
+ * - lotl://collection/path.md
  * - //collection/path.md
  *
  * Does NOT consider bare collection/path.md as virtual - that should be
@@ -317,10 +317,10 @@ export function buildVirtualPath(collectionName: string, path: string): string {
 export function isVirtualPath(path: string): boolean {
   const trimmed = path.trim();
 
-  // Explicit qmd:// prefix (with any number of slashes)
-  if (trimmed.startsWith('qmd:')) return true;
+  // Explicit lotl:// prefix (with any number of slashes)
+  if (trimmed.startsWith('lotl:')) return true;
 
-  // //collection/path format (missing qmd: prefix)
+  // //collection/path format (missing lotl: prefix)
   if (trimmed.startsWith('//')) return true;
 
   return false;

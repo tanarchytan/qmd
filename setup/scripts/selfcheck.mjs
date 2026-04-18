@@ -3,7 +3,7 @@
  * selfcheck.mjs — Probe QMD embedding/rerank/expansion endpoints.
  *
  * Usage:
- *   node setup/scripts/selfcheck.mjs                    # Read from ~/.config/qmd/.env
+ *   node setup/scripts/selfcheck.mjs                    # Read from ~/.config/lotl/.env
  *   node setup/scripts/selfcheck.mjs --config file.json # Read from config file
  *   node setup/scripts/selfcheck.mjs --json             # JSON output
  *   node setup/scripts/selfcheck.mjs --help
@@ -44,33 +44,33 @@ function loadConfig(args) {
     }
   }
 
-  // Default: ~/.config/qmd/.env
-  const configDir = process.env.QMD_CONFIG_DIR ||
-    (process.env.XDG_CONFIG_HOME ? join(process.env.XDG_CONFIG_HOME, "qmd") : null) ||
-    join(homedir(), ".config", "qmd");
+  // Default: ~/.config/lotl/.env
+  const configDir = process.env.LOTL_CONFIG_DIR ||
+    (process.env.XDG_CONFIG_HOME ? join(process.env.XDG_CONFIG_HOME, "lotl") : null) ||
+    join(homedir(), ".config", "lotl");
   const envPath = join(configDir, ".env");
   const vars = loadEnvFile(envPath);
 
   return {
     source: envPath,
-    embed: vars.QMD_EMBED_PROVIDER ? {
-      provider: vars.QMD_EMBED_PROVIDER,
-      apiKey: vars.QMD_EMBED_API_KEY,
-      url: vars.QMD_EMBED_URL,
-      model: vars.QMD_EMBED_MODEL,
-      dimensions: vars.QMD_EMBED_DIMENSIONS ? parseInt(vars.QMD_EMBED_DIMENSIONS) : undefined,
+    embed: vars.LOTL_EMBED_PROVIDER ? {
+      provider: vars.LOTL_EMBED_PROVIDER,
+      apiKey: vars.LOTL_EMBED_API_KEY,
+      url: vars.LOTL_EMBED_URL,
+      model: vars.LOTL_EMBED_MODEL,
+      dimensions: vars.LOTL_EMBED_DIMENSIONS ? parseInt(vars.LOTL_EMBED_DIMENSIONS) : undefined,
     } : undefined,
-    rerank: vars.QMD_RERANK_PROVIDER ? {
-      provider: vars.QMD_RERANK_PROVIDER,
-      apiKey: vars.QMD_RERANK_API_KEY,
-      url: vars.QMD_RERANK_URL,
-      model: vars.QMD_RERANK_MODEL,
+    rerank: vars.LOTL_RERANK_PROVIDER ? {
+      provider: vars.LOTL_RERANK_PROVIDER,
+      apiKey: vars.LOTL_RERANK_API_KEY,
+      url: vars.LOTL_RERANK_URL,
+      model: vars.LOTL_RERANK_MODEL,
     } : undefined,
-    queryExpansion: vars.QMD_QUERY_EXPANSION_PROVIDER ? {
-      provider: vars.QMD_QUERY_EXPANSION_PROVIDER,
-      apiKey: vars.QMD_QUERY_EXPANSION_API_KEY,
-      url: vars.QMD_QUERY_EXPANSION_URL,
-      model: vars.QMD_QUERY_EXPANSION_MODEL,
+    queryExpansion: vars.LOTL_QUERY_EXPANSION_PROVIDER ? {
+      provider: vars.LOTL_QUERY_EXPANSION_PROVIDER,
+      apiKey: vars.LOTL_QUERY_EXPANSION_API_KEY,
+      url: vars.LOTL_QUERY_EXPANSION_URL,
+      model: vars.LOTL_QUERY_EXPANSION_MODEL,
     } : undefined,
   };
 }
@@ -255,7 +255,7 @@ if (args.includes("--help") || args.includes("-h")) {
   console.log("selfcheck.mjs — Probe QMD endpoints");
   console.log("");
   console.log("Usage:");
-  console.log("  node setup/scripts/selfcheck.mjs                    # Read ~/.config/qmd/.env");
+  console.log("  node setup/scripts/selfcheck.mjs                    # Read ~/.config/lotl/.env");
   console.log("  node setup/scripts/selfcheck.mjs --config file.json # Read config file");
   console.log("  node setup/scripts/selfcheck.mjs --json             # JSON output");
   process.exit(0);
@@ -314,7 +314,7 @@ if (jsonOutput) {
   const allSkip = Object.values(results).every(r => r.status === "skip");
   console.log("");
   if (allSkip) {
-    console.log("  No providers configured. Run setup-qmd.sh or edit ~/.config/qmd/.env");
+    console.log("  No providers configured. Run setup-lotl.sh or edit ~/.config/lotl/.env");
   } else if (hasFail) {
     console.log("  ⚠ Some endpoints failed. Check API keys and model names.");
   } else {

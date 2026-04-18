@@ -88,7 +88,7 @@ async function fetchWithRetry(
   } as const;
 
   const envTimeoutMs = (() => {
-    const raw = process.env.QMD_TIMEOUT_MS;
+    const raw = process.env.LOTL_TIMEOUT_MS;
     if (!raw) return undefined;
     const parsed = Number(raw);
     if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
@@ -222,7 +222,7 @@ async function fetchWithRetry(
 }
 
 // =============================================================================
-// Rerank prompt: loads from ~/.config/qmd/rerank-prompt.txt if it exists,
+// Rerank prompt: loads from ~/.config/lotl/rerank-prompt.txt if it exists,
 // otherwise uses the built-in default.
 // =============================================================================
 
@@ -246,7 +246,7 @@ const DEFAULT_RERANK_PROMPT = `你是记忆检索助手。根据查询从候选�
 [3] 另一篇的核心内容`;
 
 function buildRerankPrompt(query: string, docsText: string): string {
-  const configDir = process.env.QMD_CONFIG_DIR || join(homedir(), ".config", "qmd");
+  const configDir = process.env.LOTL_CONFIG_DIR || join(homedir(), ".config", "lotl");
   const promptPath = join(configDir, "rerank-prompt.txt");
   let template = DEFAULT_RERANK_PROMPT;
   try {
@@ -291,7 +291,7 @@ export class RemoteLLM implements LLM {
   }
 
   async embed(text: string, options?: EmbedOptions): Promise<EmbeddingResult | null> {
-    if (!this.config.embed) throw new Error("RemoteLLM.embed() requires embed config. Set QMD_EMBED_PROVIDER.");
+    if (!this.config.embed) throw new Error("RemoteLLM.embed() requires embed config. Set LOTL_EMBED_PROVIDER.");
     const results = await this._embedTexts([text], options);
     return results[0] ?? null;
   }
@@ -352,7 +352,7 @@ export class RemoteLLM implements LLM {
         const url = provider === 'api'
           ? `${(cfg.url || '').replace(/\/$/, '')}/chat/completions`
           : cfg.url!;
-        if (!url || url === '/chat/completions') throw new Error("QMD_QUERY_EXPANSION_URL is required. Set the base URL (api) or full endpoint (url) for query expansion.");
+        if (!url || url === '/chat/completions') throw new Error("LOTL_QUERY_EXPANSION_URL is required. Set the base URL (api) or full endpoint (url) for query expansion.");
         const body: Record<string, unknown> = {
           messages: [{ role: "user", content: prompt }],
           max_tokens: 300,
@@ -391,11 +391,11 @@ export class RemoteLLM implements LLM {
     // gemini-2.5-flash → gemini-2.5-flash-001 (Apr 2026 stable checkpoint)
     const SEED = 42;
     // Quality fix C: file-based response cache. Eval scripts set
-    // QMD_LLM_CACHE_PATH to opt in (production code uses an in-memory map).
-    const cachePath = process.env.QMD_LLM_CACHE_PATH;
+    // LOTL_LLM_CACHE_PATH to opt in (production code uses an in-memory map).
+    const cachePath = process.env.LOTL_LLM_CACHE_PATH;
     let cacheGet: ((p: string, m: string) => string | null) | null = null;
     let cacheSet: ((p: string, m: string, v: string) => void) | null = null;
-    if (cachePath && process.env.QMD_LLM_CACHE !== "off") {
+    if (cachePath && process.env.LOTL_LLM_CACHE !== "off") {
       try {
         const { openCache } = await import("./cache.js");
         const cache = openCache(cachePath);
@@ -459,7 +459,7 @@ export class RemoteLLM implements LLM {
     options: RerankOptions = {}
   ): Promise<RerankResult> {
     const cfg = this.config.rerank;
-    if (!cfg) throw new Error("RemoteLLM.rerank() requires rerank config. Set QMD_RERANK_PROVIDER.");
+    if (!cfg) throw new Error("RemoteLLM.rerank() requires rerank config. Set LOTL_RERANK_PROVIDER.");
 
     const provider = cfg.provider;
     const apiKey = cfg.apiKey;
@@ -475,7 +475,7 @@ export class RemoteLLM implements LLM {
       const url = provider === 'api'
         ? `${(cfg.url || '').replace(/\/$/, '')}/rerank`
         : cfg.url!;
-      if (!url || url === '/rerank') throw new Error("QMD_RERANK_URL is required. Set the base URL (api) or full endpoint (url) for reranking.");
+      if (!url || url === '/rerank') throw new Error("LOTL_RERANK_URL is required. Set the base URL (api) or full endpoint (url) for reranking.");
 
       const resp = await fetchWithRetry(url, {
         method: "POST",
@@ -505,7 +505,7 @@ export class RemoteLLM implements LLM {
     const url = provider === 'api'
       ? `${(cfg.url || '').replace(/\/$/, '')}/chat/completions`
       : cfg.url!;
-    if (!url || url === '/chat/completions') throw new Error("QMD_RERANK_URL is required. Set the base URL (api) or full endpoint (url) for LLM-based reranking.");
+    if (!url || url === '/chat/completions') throw new Error("LOTL_RERANK_URL is required. Set the base URL (api) or full endpoint (url) for LLM-based reranking.");
 
     const docsText = documents.map((doc, i) => `[${i}] ${doc.text}`).join("\n---\n");
     const prompt = buildRerankPrompt(query, docsText);
@@ -551,7 +551,7 @@ export class RemoteLLM implements LLM {
 
   async embedBatch(texts: string[]): Promise<(EmbeddingResult | null)[]> {
     if (texts.length === 0) return [];
-    if (!this.config.embed) throw new Error("RemoteLLM.embedBatch() requires embed config. Set QMD_EMBED_PROVIDER.");
+    if (!this.config.embed) throw new Error("RemoteLLM.embedBatch() requires embed config. Set LOTL_EMBED_PROVIDER.");
     return this._embedTexts(texts);
   }
 
@@ -565,16 +565,16 @@ export class RemoteLLM implements LLM {
     // 5 for Gemini free tier (30k TPM cap binding — small batches keep
     // each request well under 5k tokens so the throttle controls steady-
     // state TPM cleanly).
-    const geminiBatchSize = Number(process.env.QMD_GEMINI_EMBED_BATCH_SIZE ?? "5");
+    const geminiBatchSize = Number(process.env.LOTL_GEMINI_EMBED_BATCH_SIZE ?? "5");
     const BATCH_SIZE = provider === 'gemini' ? geminiBatchSize : 64;
     const allResults: (EmbeddingResult | null)[] = new Array(texts.length).fill(null);
     // Gemini rate limit throttle (free tier: 100 RPM, 30k TPM, 1k RPD).
     // TPM is the binding constraint — at BATCH_SIZE=5 averaging ~600 tok/text,
     // each batch is ~3k tokens. 15-sec interval = 4 batches/min × 3k = 12k TPM,
     // safely under the 30k cap with margin for token estimation error.
-    // Override via QMD_GEMINI_EMBED_INTERVAL_MS.
+    // Override via LOTL_GEMINI_EMBED_INTERVAL_MS.
     const geminiIntervalMs = provider === 'gemini'
-      ? Number(process.env.QMD_GEMINI_EMBED_INTERVAL_MS ?? "15000")
+      ? Number(process.env.LOTL_GEMINI_EMBED_INTERVAL_MS ?? "15000")
       : 0;
 
     for (let i = 0; i < texts.length; i += BATCH_SIZE) {
@@ -584,7 +584,7 @@ export class RemoteLLM implements LLM {
       try {
         if (provider === 'api') {
           const baseUrl = (cfg.url || '').replace(/\/$/, '');
-          if (!baseUrl) throw new Error("QMD_EMBED_URL is required when QMD_EMBED_PROVIDER=api. Set the base URL of your embedding endpoint (e.g. https://api.openai.com/v1).");
+          if (!baseUrl) throw new Error("LOTL_EMBED_URL is required when LOTL_EMBED_PROVIDER=api. Set the base URL of your embedding endpoint (e.g. https://api.openai.com/v1).");
           const resp = await fetchWithRetry(`${baseUrl}/embeddings`, {
             method: "POST",
             headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -604,7 +604,7 @@ export class RemoteLLM implements LLM {
           }
         } else if (provider === 'url') {
           const url = cfg.url;
-          if (!url) throw new Error("QMD_EMBED_URL is required when QMD_EMBED_PROVIDER=url. Set the full endpoint URL for embedding.");
+          if (!url) throw new Error("LOTL_EMBED_URL is required when LOTL_EMBED_PROVIDER=url. Set the full endpoint URL for embedding.");
           const body: Record<string, unknown> = { input, input_type: "document" };
           if (model) body.model = model;
           if (cfg.dimensions) body.dimensions = cfg.dimensions;
@@ -640,7 +640,7 @@ export class RemoteLLM implements LLM {
           // Endpoint: POST /v1beta/models/<model>:batchEmbedContents
           // Body: { requests: [{ model: "models/<m>", content: { parts: [{text}] }, outputDimensionality? }] }
           // Default model: gemini-embedding-001 (Gemini Embedding 2 marketing name, 3072d, matryoshka).
-          // QMD_EMBED_DIMENSIONS=1024 is the Google-recommended sweet spot.
+          // LOTL_EMBED_DIMENSIONS=1024 is the Google-recommended sweet spot.
           //
           // Throttle + custom retry loop. Bypasses fetchWithRetry because
           // Google embeds RetryInfo in the JSON body's `details` array (not
@@ -649,7 +649,7 @@ export class RemoteLLM implements LLM {
           // intervals like fetchWithRetry's exponential backoff does.
           const baseUrl = (cfg.url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
           const geminiModel = model || 'gemini-embedding-001';
-          if (!apiKey) throw new Error("QMD_EMBED_API_KEY is required when QMD_EMBED_PROVIDER=gemini.");
+          if (!apiKey) throw new Error("LOTL_EMBED_API_KEY is required when LOTL_EMBED_PROVIDER=gemini.");
           const requests = batch.map(text => ({
             model: `models/${geminiModel}`,
             content: { parts: [{ text }] },

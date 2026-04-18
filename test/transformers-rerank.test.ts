@@ -22,16 +22,16 @@
  * the score discrimination will fail and this test will catch it instantly.
  *
  * The test downloads ~23 MB of model weights on first run (cached under
- * ~/.cache/qmd/transformers/) and is gated behind QMD_RUN_TRANSFORMERS_TEST
+ * ~/.cache/lotl/transformers/) and is gated behind LOTL_RUN_TRANSFORMERS_TEST
  * to keep CI from pulling the model on every PR. Run locally with:
  *
- *   QMD_RUN_TRANSFORMERS_TEST=1 npx vitest run test/transformers-rerank.test.ts
+ *   LOTL_RUN_TRANSFORMERS_TEST=1 npx vitest run test/transformers-rerank.test.ts
  */
 
 import { describe, test, expect } from "vitest";
 import { createTransformersRerankBackend } from "../src/llm/transformers-rerank.js";
 
-const skipUnlessOptedIn = process.env.QMD_RUN_TRANSFORMERS_TEST !== "1";
+const skipUnlessOptedIn = process.env.LOTL_RUN_TRANSFORMERS_TEST !== "1";
 
 describe.skipIf(skipUnlessOptedIn)("TransformersRerankBackend", () => {
   test("returns discriminative scores from the raw cross-encoder logits", async () => {

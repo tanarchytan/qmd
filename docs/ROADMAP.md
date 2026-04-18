@@ -1,4 +1,4 @@
-# QMD Roadmap
+# Lotl Roadmap
 
 > For agents: this file tracks all pending work and benchmark history. Read this first when resuming a session.
 > Last updated: 2026-04-17 late night (Phase 7 three-bug investigation; char-cap identified as the real bottleneck)
@@ -70,14 +70,14 @@ Validated end-to-end on n=100 baseline. **Retrieval is no longer the bottleneck.
 ### Bugs caught this session
 - Eval harness was dumping **all 50 retrieved memories** into the answer prompt
   (no top-K cap). First n=100 attempt burned 6.9K Poe points in a single gpt-4o
-  call with 91k input tokens. **Fixed** with `QMD_ANSWER_TOP_K=5` and
-  `QMD_ANSWER_MAX_CHARS=800` (matches LongMemEval / Mem0 norms).
+  call with 91k input tokens. **Fixed** with `LOTL_ANSWER_TOP_K=5` and
+  `LOTL_ANSWER_MAX_CHARS=800` (matches LongMemEval / Mem0 norms).
 - Defense-in-depth caps added to `memoryReflect` and `runReflectionPass` —
   same latent leak existed in the core memory module.
 
 ### Shipped (no-token-cost code work)
 - v12 answer prompt: LongMemEval-aligned chain-of-thought + structured output
-  with citations (`QMD_PROMPT_RULES=v12`). Output extractor strips the
+  with citations (`LOTL_PROMPT_RULES=v12`). Output extractor strips the
   scaffolding so Judge sees just the final answer.
 - `--reflect` CLI flag (wires existing `memoryReflect` pre-pass).
 - Pre-flight token estimate with warning at >8k tokens/prompt.
@@ -87,7 +87,7 @@ Validated end-to-end on n=100 baseline. **Retrieval is no longer the bottleneck.
 ### Phase 7.1-7.5 queued (token-cost experiments)
 See `docs/TODO.md` "Phase 7 family" for full plan. Ordered by effort/value:
 1. **7.2** — v11 vs v12 prompt A/B on `gpt-4o-mini` (cheapest, confirms prompt helps)
-2. **7.4** — `QMD_ANSWER_MAX_CHARS` / `TOP_K` sweep (no code, env-only)
+2. **7.4** — `LOTL_ANSWER_MAX_CHARS` / `TOP_K` sweep (no code, env-only)
 3. **7.3** — reflection pre-pass A/B
 4. **7.1** — generator model sweep (gpt-4o, claude-sonnet, claude-haiku)
 
@@ -95,9 +95,8 @@ See `docs/TODO.md` "Phase 7 family" for full plan. Ordered by effort/value:
 
 ## 🟢 2026-04-17 evening — Phase 11.5: GPU device auto-select + deps upgrade
 
-Shipped a capability-aware device picker so future embedder experiments on
-GPU/NPU hardware don't need env-var surgery. User is installing AMD Ryzen
-AI SDK; NPU benchmark is a standalone test after reboot cycle.
+Shipped a capability-aware device picker so embedder experiments on GPU
+hardware don't need env-var surgery.
 
 ### Deps upgraded
 - `@huggingface/transformers` 4.0.1 → 4.1.0 (WebGPU in Node, ModelRegistry,
@@ -106,8 +105,8 @@ AI SDK; NPU benchmark is a standalone test after reboot cycle.
 - Both caret-prefixed for patch floats.
 
 ### New surface area
-- `QMD_TRANSFORMERS_DEVICE=cpu|webgpu|dml|gpu|auto` env toggle (default: cpu)
-- `src/llm/gpu-probe.ts` — OS-level VRAM/driver/NPU detection + optional
+- `LOTL_TRANSFORMERS_DEVICE=cpu|webgpu|dml|gpu|auto` env toggle (default: cpu)
+- `src/llm/gpu-probe.ts` — OS-level VRAM + driver detection + optional
   WebGPU adapter probe. Returns human-readable warnings.
 - `src/llm/embed-sizer.ts` — GPU-first `computeEmbedBudget()` with
   attention-matrix-aware microbatch. Formula:
@@ -116,8 +115,6 @@ AI SDK; NPU benchmark is a standalone test after reboot cycle.
 
 ### Hardware this session (Ryzen 7 PRO 7840U)
 - Radeon 780M iGPU, 4.0 GiB UMA VRAM, 2 GiB maxBuffer, driver 39 days old.
-- XDNA NPU present (Phoenix, 10 TOPS). **Unreachable from Node** (VitisAI EP
-  is Python-only).
 - Auto sizer output: mxbai-xs→webgpu mb=1 workers=2; embgemma-300m→
   webgpu mb=29 workers=1; mxbai-large→webgpu mb=89; bge-base→webgpu mb=119.
 
@@ -128,14 +125,15 @@ AI SDK; NPU benchmark is a standalone test after reboot cycle.
 - embgemma-300m CPU microbatch=1 was stable (no OOM at 2 GB RSS) but ~2.5 s
   per embed → 3.5 h for n=100. Killed — not viable for iteration.
 - jina-v5-nano: transformers.js v4.1.0 still doesn't register the arch.
+  (Unblocked later by the direct-ORT backend — see `src/llm/transformers-embed-direct.ts`.)
 
-### Pending when driver install completes
-- User runs standalone `benchmark-npu.py` on Ryzen AI SDK 1.3+ (Python,
-  onnxruntime-vitisai EP). Compare CPU / DML / NPU throughput on mxbai-xs.
-- If DML or NPU look compelling, add `onnxruntime-node` as optional dep and
-  write `DmlEmbedBackend` (native DirectML, ~150 LOC).
-- Remaining untested embedders (bge-large, jina-v3, UAE-Large, nomic-v1.5)
-  queued for CPU n=100 — ~1 hour total once machine is back up.
+### AMD NPU probe — CANCELED in v1.0
+Originally queued `benchmark-npu.py` (AMD Ryzen AI SDK 1.3+, onnxruntime-vitisai
+Python EP) to see whether the XDNA NPU (10 TOPS Phoenix) could beat CPU for
+Node-backed embedding. Dropped: no Node.js binding for VitisAI EP, the Node +
+WebGPU path was already fast enough for production. NPU detection code
+removed from `src/llm/gpu-probe.ts` in the v1.0 cleanup. Re-open only if a
+first-class Node NPU runtime appears.
 
 ### Still open (pre-Phase-11.5 priority ordering)
 | # | Phase | Status |
@@ -168,7 +166,7 @@ Swept retrieval-trained int8 ONNX candidates at n=100 LongMemEval _s. **No candi
 
 **Revisit Phase 11 only if:** a new retrieval-trained model ships with int8 ONNX canonical/Xenova port AND MTEB retrieval ≥65 AND params/latency budget fits (≤~120M at int8, ≤~100ms/query).
 
-Full sweep results + gotchas (ZE env override, zombie RAM starvation, external-data OOM, jina architecture incompat) in `docs/notes/embedder-candidates.md` and `~/.claude/projects/.../memory/project_phase11_concluded.md`.
+Full sweep results + gotchas (ZE env override, zombie RAM starvation, external-data OOM, jina architecture incompat) in `devnotes/embedders/embedder-candidates.md` and `~/.claude/projects/.../memory/project_phase11_concluded.md`.
 
 ---
 
@@ -178,7 +176,7 @@ Full sweep results + gotchas (ZE env override, zombie RAM starvation, external-d
 
 Schift's L0/L1/L2 pattern (full / user-only / first-3-user-turns),
 weighted score blend at query time (0.2/0.5/0.3). Gated opt-in via
-`QMD_MEMORY_LHASH=on`. Ships for future experimentation but not default.
+`LOTL_MEMORY_LHASH=on`. Ships for future experimentation but not default.
 
 n=500 result vs baseline:
 - rAny@5 98.4% → **97.8%** (-0.6pp)
@@ -309,10 +307,10 @@ MRR and NDCG per bucket. **qmd wins every metric on every bucket overall.**
 
 ### Env var consolidation
 
-- `QMD_MEMORY_RERANK=on` + `QMD_RERANK_BACKEND=transformers|remote`
-  (replaces `QMD_MEMORY_RERANK=cross-encoder`)
-- `QMD_MEMORY_KG=on` (replaces `QMD_RECALL_KG` + `QMD_RECALL_KG_RAW`)
-- Removed legacy `QMD_RECALL_DIVERSIFY` (use `QMD_MEMORY_MMR=session`)
+- `LOTL_MEMORY_RERANK=on` + `LOTL_RERANK_BACKEND=transformers|remote`
+  (replaces `LOTL_MEMORY_RERANK=cross-encoder`)
+- `LOTL_MEMORY_KG=on` (replaces `LOTL_RECALL_KG` + `LOTL_RECALL_KG_RAW`)
+- Removed legacy `LOTL_RECALL_DIVERSIFY` (use `LOTL_MEMORY_MMR=session`)
 - Hardcoded 7 doc-store tunables + 4 memory tunables in `src/store/constants.ts`
 - All old env values still accepted (back-compat)
 
@@ -334,7 +332,7 @@ MRR and NDCG per bucket. **qmd wins every metric on every bucket overall.**
 | Wall | ~15min | ~24min | +60% |
 
 Rerank lifts MRR/NDCG, biggest gains on temporal (+2.2pp) and preference
-(+1.0pp). Ships as opt-in `QMD_MEMORY_RERANK=on` — 60% wall penalty is
+(+1.0pp). Ships as opt-in `LOTL_MEMORY_RERANK=on` — 60% wall penalty is
 steep for +0.7pp.
 
 ### New best n=500 baseline (ftsOverfetch=10, no rerank)
@@ -411,7 +409,7 @@ elsewhere. Next investigation target.
 
 ---
 
-**Package:** `@tanarchy/qmd` — npm (`@dev` tag for dev branch, `@fork` tag for stable)
+**Package:** `@tanarchy/lotl` — npm (`@dev` tag for dev branch, `@fork` tag for stable)
 **Repo:** `github.com/tanarchytan/qmd` — `main` (stable) + `dev` (active development)
 **Branch:** Work on `dev`, merge to `main` when stable.
 
@@ -453,14 +451,14 @@ Bypass the pipeline entirely. Call `AutoTokenizer` +
 | "mountains are tall geological formations" | **−10.99** |
 | "the apple is on the table" | **−11.32** |
 
-Range = 20.05 logit-units. Plenty of signal for the existing qmd
+Range = 20.05 logit-units. Plenty of signal for the existing lotl
 score-blend at `memoryRecall` line 1244 to produce meaningful rank
 changes.
 
 ### Regression test shipped (`test/transformers-rerank.test.ts`)
 
 Asserts `relevant - irrelevant > 5` logit-units. Gated behind
-`QMD_RUN_TRANSFORMERS_TEST=1` env var so CI doesn't pull the 23MB model
+`LOTL_RUN_TRANSFORMERS_TEST=1` env var so CI doesn't pull the 23MB model
 on every PR. Passes locally in 4.3s. **This is the test commit
 `773b079` should have shipped** — it would have caught the softmax bug
 instantly. Wired into the existing vitest CI run path via the env gate.
@@ -541,7 +539,7 @@ Reproduction recipe in `project_session_handoff_20260415.md`.
   shell script. Caught by AMB smoke test.
 - `f8e4e9d` — `src/llm/remote.ts:400` was importing
   `evaluate/_shared/llm-cache.ts`, which expanded tsc's auto-detected
-  rootDir to the repo root and mapped `src/cli/qmd.ts` to
+  rootDir to the repo root and mapped `src/cli/lotl.ts` to
   `dist/src/cli/qmd.js` on fresh Linux clones. Moved llm-cache into
   `src/llm/cache.ts`, pinned `tsconfig.build.json` `rootDir: "src"`.
   **This was the "fresh clone doesn't build" puzzle.**
@@ -563,8 +561,8 @@ Reproduction recipe in `project_session_handoff_20260415.md`.
   move the needle on n=100 — the actual bottleneck was tokenization
   on long text, which chunking addresses.
 - `cf8c7f6` — `INDEX_PATH` per-provider isolation. The AMB adapter
-  was setting `QMD_CACHE_DIR` (which qmd doesn't read); all 3 configs
-  in the sweep were sharing `~/.cache/qmd/index.sqlite` and producing
+  was setting `LOTL_CACHE_DIR` (which qmd doesn't read); all 3 configs
+  in the sweep were sharing `~/.cache/lotl/index.sqlite` and producing
   near-identical cross-config results via state leakage. Real bug.
 
 ---
@@ -671,7 +669,7 @@ hindsight) are preserved or queued for the bench cycle.
   systems we haven't reproduced yet.
 
 Metrics renamed 2026-04-16: `sr5` → `recall_any@5` (binary session-id
-recall), `r5` → `Cov@5` (content-overlap). See `docs/notes/metrics.md`.
+recall), `r5` → `Cov@5` (content-overlap). See `devnotes/metrics/metric-discipline.md`.
 
 | Config | rAny@5 | rAny@5 pref | rAny@5 multi | rAny@5 temp | R@5 (frac) | MRR | NDCG@10 | wall | Notes |
 |---|---|---|---|---|---|---|---|---|---|
@@ -703,9 +701,9 @@ run a generation+judge step in our pipeline (see methodological caveat above).
 
 `(a)` MemPalace raw n=500 was re-run on 2026-04-14 against the same `longmemeval_s_cleaned.json` we use. Overall R@5 **96.6% — exact match to their published headline.** Per-category cells are actual per-question hit counts parsed from the bench stdout log and joined with `question_type` via `evaluate/mempalace-per-cat.py`. MemPalace's bench computes session-level `recall_any` — apples-to-apples with our `sr5`. **The cloned mempalace repo at `~/qmd-eval/baselines/mempalace/` was deleted 2026-04-14 after the bench landed; the metric tooling and per-question logs are preserved.**
 
-`(b)` mem0 cloned to `~/qmd-baselines/mem0/` 2026-04-14, will be benched against the same `longmemeval_s_cleaned.json` via the AMB cross-bench (`docs/notes/amb-bench-prep.md`) to populate this row. **mem0's published 67.6% on LME-S is an end-to-end QA accuracy with their own LLM judge, NOT session-id recall** — `R@5 published` column is context only. **Hindsight is excluded** from the cross-bench: their adapter (`amb/src/memory_bench/memory/hindsight.py`) talks to Vectorize's paid cloud service via `hindsight_client_api`; there is no local install path. We're not pursuing a Vectorize trial. Their published 91.4% LME number stays in the table for reference only, marked n/a.
+`(b)` mem0 cloned to `~/qmd-baselines/mem0/` 2026-04-14, will be benched against the same `longmemeval_s_cleaned.json` via the AMB cross-bench (`devnotes/archive/amb-bench-prep.md`) to populate this row. **mem0's published 67.6% on LME-S is an end-to-end QA accuracy with their own LLM judge, NOT session-id recall** — `R@5 published` column is context only. **Hindsight is excluded** from the cross-bench: their adapter (`amb/src/memory_bench/memory/hindsight.py`) talks to Vectorize's paid cloud service via `hindsight_client_api`; there is no local install path. We're not pursuing a Vectorize trial. Their published 91.4% LME number stays in the table for reference only, marked n/a.
 
-`(d)` L1 (user-turns-only session ingest) — `QMD_INGEST_USER_ONLY=on` in the eval ingest path, filters `turns` to `t.role === "user"` before joining the session-level memory text. Mechanism: improves the embedding centroid of each session by removing assistant verbosity, so the user's preference statement carries the centroid weight. Result n=500 (commit `fc8ee25`): preference sr5 **90.0% → 96.7% (+6.7pp)**, exact parity with MemPalace's 96.7%. **Trade:** single-session-assistant drops 100% → 96.4% (−3.6pp) because answers in the assistant's response are now stripped from the centroid; multi-session, temporal, single-session-user each lose ~1pp. Net overall sr5 **−0.8pp (98.4 → 97.6)**. The trade isn't free, but the preference fix is real and reproduces Schift's L# claim. Next step: **L# blend** (parallel L0+L1 indexes, score-fused per Schift's `0.5×L1 + 0.3×L2 + 0.2×L0`) to keep L0 signal for the assistant-side bucket.
+`(d)` L1 (user-turns-only session ingest) — `LOTL_INGEST_USER_ONLY=on` in the eval ingest path, filters `turns` to `t.role === "user"` before joining the session-level memory text. Mechanism: improves the embedding centroid of each session by removing assistant verbosity, so the user's preference statement carries the centroid weight. Result n=500 (commit `fc8ee25`): preference sr5 **90.0% → 96.7% (+6.7pp)**, exact parity with MemPalace's 96.7%. **Trade:** single-session-assistant drops 100% → 96.4% (−3.6pp) because answers in the assistant's response are now stripped from the centroid; multi-session, temporal, single-session-user each lose ~1pp. Net overall sr5 **−0.8pp (98.4 → 97.6)**. The trade isn't free, but the preference fix is real and reproduces Schift's L# claim. Next step: **L# blend** (parallel L0+L1 indexes, score-fused per Schift's `0.5×L1 + 0.3×L2 + 0.2×L0`) to keep L0 signal for the assistant-side bucket.
 
 `(e)` r5 column re-added 2026-04-14 after the L1 r5 collapse exposed the metric's real meaning. Originally we tracked r5 as the "retrieval headline" and were mortified when it dropped from 94.2% → 65.6%. The metric audit had already established sr5 as the correct retrieval metric, but r5 isn't useless — it tracks **answer-text availability in retrieved memory text**, which is what an LLM running on top of qmd would actually consume as context. The L1 collapse is mechanical: stripping assistant turns from the session-level memory text removes most of the answer tokens that token-overlap was matching, even though the session-id retrieval still hits. **Treat r5 as a hard requirement on L# blend:** the blend must keep r5 within ~5pp of the L0 baseline (94.2%) while preserving the L1 sr5-preference lift. If L# blend lands sr5 preference ≥95% AND r5 overall ≥89%, ship it. If r5 stays collapsed, the blend isn't returning enough text content per recall and we have a deeper L1-shipping problem to solve before promoting it.
 
@@ -715,7 +713,7 @@ run a generation+judge step in our pipeline (see methodological caveat above).
 
 **Cross-table observation worth noting (carefully).** Hindsight's best system (Gemini-3) scores **80.0% LLM-judged accuracy on single-session-preference**, while qmd's bare loose-floor baseline scores **90.0% sr5 (retrieval recall)** on the same bucket. **These are not directly comparable** (different metrics, see methodological caveat) but the spread is suggestive: even in the absolute best case where qmd's retrieval feeds a perfect generator + judge, qmd is shipping at least 10pp more correct preference *sessions* into the LLM context than Hindsight's full pipeline manages to score correctly. The L1 result (96.7% sr5 preference) widens that retrieval lead to ~16pp. **None of this proves qmd would beat Hindsight end-to-end** — generation + judge could lose all of it — but it does say the retrieval pipeline is not the constraint on this bucket. The constraint, if there is one, is downstream.
 
-**Direct apples-to-apples delta** (qmd `mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1` minus MemPalace raw live):
+**Direct apples-to-apples delta** (qmd `mxbai-xs q8` + `LOTL_VEC_MIN_SIM=0.1` minus MemPalace raw live):
 
 | Category | qmd | MemPalace | Δ |
 |---|---|---|---|
@@ -731,7 +729,7 @@ qmd wins on 5 of 6 categories + overall. MemPalace wins on two, but knowledge-up
 
 **Critical re-read of the night cycle:**
 
-- **The actual winner is `QMD_VEC_MIN_SIM=0.1`** — we dismissed it as "just +0.8pp R@10" because we were reading r5. On sr5 it's **+0.2pp over the already-beat-MemPalace-by-1.6pp baseline**. It's the only config that scored higher than the prior default. Ship it as a default.
+- **The actual winner is `LOTL_VEC_MIN_SIM=0.1`** — we dismissed it as "just +0.8pp R@10" because we were reading r5. On sr5 it's **+0.2pp over the already-beat-MemPalace-by-1.6pp baseline**. It's the only config that scored higher than the prior default. Ship it as a default.
 - **mxbai-xs q8 ≥ MemPalace on every category except preference.** Overall 98.2% vs 96.6% is +1.6pp. We were already winning, we just didn't know it.
 - **arctic-s q8 is a hard downgrade** on sr5. The −10pp preference regression is the biggest single-category loss of the night. The "+2.2pp multi-session" on r5 was illusory (r5 multi-session moved 82 → 84.2, but sr5 multi-session dropped from 100 → 98.5). Do NOT promote.
 - **Every mxbai-xs lever variant (expand, loose, MMR, combinations)** converges on 98.0-98.4% sr5 — tight cluster. The levers aren't noise, but they're also not moving the big gaps.
@@ -739,7 +737,7 @@ qmd wins on 5 of 6 categories + overall. MemPalace wins on two, but knowledge-up
 - Every n=100 run collapses to ~98-99% sr5 multi-session with only 2 categories populated (user + multi-session). n=100 is even more metric-saturated on sr5 than on r5. **Ignore n=100 sr5 for ranking decisions.**
 
 **Shipping decision:**
-- **New production default: `mxbai-xs q8` with `QMD_VEC_MIN_SIM=0.1`** (98.4% sr5 overall, 100% multi, beats MemPalace by 1.8pp)
+- **New production default: `mxbai-xs q8` with `LOTL_VEC_MIN_SIM=0.1`** (98.4% sr5 overall, 100% multi, beats MemPalace by 1.8pp)
 - **Document arctic-s as a NON-recommendation** — strictly worse on the correct metric
 - **Document the metric lesson** in UPSTREAM/ROADMAP so future audits don't regress on it
 
@@ -795,7 +793,7 @@ side. The remaining 5 misses break into:
 **What this validates (with a sharper mechanism):**
 
 - ✅ **L1 (user-turns-only) ingest** — Schift's "L# cache hierarchy" lever
-  from `docs/notes/random-findings-online.md`. The mechanism isn't candidate
+  from `devnotes/archive/random-findings-online.md`. The mechanism isn't candidate
   widening — it's **embedding-centroid quality**. When a session is embedded
   as full text (L0), the assistant's 500-token verbose response dominates
   the centroid. When embedded as user-turns-only (L1), the user's 1-2 line
@@ -851,7 +849,7 @@ PER-TYPE BREAKDOWN (session recall_any@10):
 
 | System | n=500 R@5 (session-ID) | Wall | Notes |
 |---|---|---|---|
-| **qmd `mxbai-xs q8` + `QMD_VEC_MIN_SIM=0.1`** | **98.4%** ✅ | ~15 min | night winner, +1.8pp over MemPalace |
+| **qmd `mxbai-xs q8` + `LOTL_VEC_MIN_SIM=0.1`** | **98.4%** ✅ | ~15 min | night winner, +1.8pp over MemPalace |
 | qmd `mxbai-xs q8` baseline | 98.2% | 15m12s | prior production default, already beats MP |
 | MemPalace raw (live reproduction) | **96.6%** | 12m59s | their published headline, reproduced |
 | MemPalace raw (published) | 96.6% | 12m30s | reference |
@@ -859,7 +857,7 @@ PER-TYPE BREAKDOWN (session recall_any@10):
 **Takeaways:**
 - Hardware reproduces MemPalace cleanly — no "our hardware is different" excuse.
 - qmd was already beating MemPalace on their headline metric before tonight (baseline 98.2% vs 96.6% = +1.6pp).
-- Tonight's `QMD_VEC_MIN_SIM=0.1` adds another +0.2pp, taking the lead to 1.8pp.
+- Tonight's `LOTL_VEC_MIN_SIM=0.1` adds another +0.2pp, taking the lead to 1.8pp.
 - MemPalace is faster per-question (1.56s vs our ~1.8s with workers=2) but they're running on simpler ChromaDB EphemeralClient per question; we're running against a production-shaped sqlite-vec + FTS5 + partition-key table.
 - We should consider whether the R@5/R@10 gap (we win R@5 by 1.8pp but probably lose R@10 by ~0.8pp — need to verify) is meaningful for downstream answer quality.
 
@@ -914,12 +912,12 @@ session-to-session deltas.
 
 ### Code shipped
 
-- **Multi-query expansion** — `QMD_MEMORY_EXPAND=entities` and `QMD_MEMORY_EXPAND=keywords`. Zero-LLM sub-query fanout. +1pp multi-session on mxbai-xs q8; **−0.7pp regression on arctic-s q8**. Model-specific. Off by default.
-- **Scope-normalized scoring** — `QMD_MEMORY_SCOPE_NORM=rank`. Noop on LME (single-scope per question). Shipped for multi-project qmd deployments.
-- **Dialog-diversity MMR RAW-compatible gate** — `QMD_MEMORY_MMR=session`. Reuses existing `applyDialogDiversity()`. Null signal on LME because the candidate pool is already session-diverse at session granularity.
-- **KG-in-recall RAW-compatible gate** — `QMD_RECALL_KG_RAW=on`. Mirror of the existing `QMD_RECALL_KG=on` for RAW eval mode. Untested at scale due to quota/crash constraints; ships alongside.
-- **Gemini embed provider** — `QMD_EMBED_PROVIDER=gemini` with matryoshka `QMD_EMBED_DIMENSIONS`, Google `RetryInfo`-aware backoff, cross-worker throttle via Promise chain. Produces healthy embeddings (confirmed at 1024d n=100: 97% R@5 / 93% multi in 2m46s). See "What didn't work" for the rate-limit story.
-- **Fixed: MMR metadata parse bug** — the initial `QMD_MEMORY_MMR=session` implementation dereferenced `mem.metadata.source_session_id` but stored `metadata` is a JSON string. Replaced with reuse of the pre-existing `memoryDialogKey()` helper.
+- **Multi-query expansion** — `LOTL_MEMORY_EXPAND=entities` and `LOTL_MEMORY_EXPAND=keywords`. Zero-LLM sub-query fanout. +1pp multi-session on mxbai-xs q8; **−0.7pp regression on arctic-s q8**. Model-specific. Off by default.
+- **Scope-normalized scoring** — `LOTL_MEMORY_SCOPE_NORM=rank`. Noop on LME (single-scope per question). Shipped for multi-project qmd deployments.
+- **Dialog-diversity MMR RAW-compatible gate** — `LOTL_MEMORY_MMR=session`. Reuses existing `applyDialogDiversity()`. Null signal on LME because the candidate pool is already session-diverse at session granularity.
+- **KG-in-recall RAW-compatible gate** — `LOTL_RECALL_KG_RAW=on`. Mirror of the existing `LOTL_RECALL_KG=on` for RAW eval mode. Untested at scale due to quota/crash constraints; ships alongside.
+- **Gemini embed provider** — `LOTL_EMBED_PROVIDER=gemini` with matryoshka `LOTL_EMBED_DIMENSIONS`, Google `RetryInfo`-aware backoff, cross-worker throttle via Promise chain. Produces healthy embeddings (confirmed at 1024d n=100: 97% R@5 / 93% multi in 2m46s). See "What didn't work" for the rate-limit story.
+- **Fixed: MMR metadata parse bug** — the initial `LOTL_MEMORY_MMR=session` implementation dereferenced `mem.metadata.source_session_id` but stored `metadata` is a JSON string. Replaced with reuse of the pre-existing `memoryDialogKey()` helper.
 - **Upstream cherry-picks** (commit `87424b0`): 4 tobi/qmd fixes — USERPROFILE fallback for Windows MCP, `enableProductionMode()` at MCP init, sqlite-vec error UX, JSON `--json` line field. 3 more already applied via the 2026-04-07 v2.1.0 merge. Provenance log in `docs/UPSTREAM.md`.
 
 ### What didn't work
@@ -936,7 +934,7 @@ session-to-session deltas.
 - **Background task lifecycle is fragile** — claude-code `run_in_background` tasks can be reaped, and when they are, the WSL child processes die. Use **short one-at-a-time jobs** instead of long orchestrated chains for critical eval work.
 - **Matryoshka sweep on Gemini was confounded by quota cool-downs** — the first run of a sweep after a 429 burst is still inside the sliding 1-min window and gets 429s even at 1-sec throttle. Respect Google's `RetryInfo.retryDelay` (implemented), but accept that sweeps need wider spacing than back-to-back launches.
 - **Expansion is model-specific** — +1pp on mxbai-xs q8, −0.7pp on arctic-s q8. Models with wider spread already have the diversity expansion provides; tight-cluster models benefit most.
-- **WSL .env precedence is inverted** — `~/.config/qmd/.env` overrides shell env vars. Tonight's Gemini run was silently hitting ZeroEntropy because of a stale .env. **Move the .env out of the way for eval runs that need clean env.**
+- **WSL .env precedence is inverted** — `~/.config/lotl/.env` overrides shell env vars. Tonight's Gemini run was silently hitting ZeroEntropy because of a stale .env. **Move the .env out of the way for eval runs that need clean env.**
 
 ### Commits landed tonight (chronological)
 
@@ -956,7 +954,7 @@ session-to-session deltas.
 
 1. **Cross-encoder rerank** via transformers.js — biggest untested lever for the multi-session ceiling. `mixedbread-ai/mxbai-rerank-base-v1` ONNX, ~80 lines mirroring `TransformersEmbedBackend`.
 2. **Per-turn ingest with concurrency-safe write path** — the hypothesis is still untested and the WSL crash is an infrastructure issue, not a design flaw. Needs workers=1 or batched-write mode.
-3. **`QMD_VEC_FLOOR_RATIO` per-model calibration** — mxbai-xs q8 has tight cosines → the 0.5 default floor reject most candidates → MMR has nothing to diversify. Per-model calibration is a one-flag fix that could unlock MMR for tight-cluster models.
+3. **`LOTL_VEC_FLOOR_RATIO` per-model calibration** — mxbai-xs q8 has tight cosines → the 0.5 default floor reject most candidates → MMR has nothing to diversify. Per-model calibration is a one-flag fix that could unlock MMR for tight-cluster models.
 4. **Gemini benchmarking with paid-tier capacity** — the provider code works, the RetryInfo handler is solid; just needs a quota window wide enough to run n=500 cleanly. Tomorrow's work.
 5. **§0 shipped-but-untested features** in `docs/TODO.md` — Hindsight reflect pass, periodic reflection, Push Pack, KG-in-recall, tier-grouped recall. Each is one eval run from a verdict.
 
@@ -979,12 +977,12 @@ session-to-session deltas.
 
 Surfaced 2026-04-13. The LME _s multi-session gap (81% vs MemPalace 100% at R@5) is now a **ranking** problem — full top-K per scope is being retrieved, but MiniLM's 384-dim embeddings don't put the right multi-hop answer in the top-5 often enough. The targeted fix is a stronger embed model.
 
-**Plan:** ship two integrations of Qwen3-Embedding-0.6B as opt-in alternatives, picked by `QMD_EMBED_BACKEND`:
+**Plan:** ship two integrations of Qwen3-Embedding-0.6B as opt-in alternatives, picked by `LOTL_EMBED_BACKEND`:
 
 - **Path A — `@huggingface/transformers`**: pure Node, native Qwen3 support via `pipeline("feature-extraction", "onnx-community/Qwen3-Embedding-0.6B-ONNX")`. Same shape as `src/llm/fastembed.ts`. ~120 lines. Works in any Node env including OpenClaw plugin path that disables native builds.
-- **Path B — `node-llama-cpp` GGUF**: zero new code — re-enable `QMD_LOCAL=yes` in the eval env and set `QMD_EMBED_MODEL=hf:Qwen/Qwen3-Embedding-0.6B-GGUF/...`. The existing `LlamaCpp` class handles it. Native cmake-built ORT, fastest on CPU/GPU.
+- **Path B — `node-llama-cpp` GGUF**: zero new code — re-enable `LOTL_LOCAL=yes` in the eval env and set `LOTL_EMBED_MODEL=hf:Qwen/Qwen3-Embedding-0.6B-GGUF/...`. The existing `LlamaCpp` class handles it. Native cmake-built ORT, fastest on CPU/GPU.
 
-Both ship as first-class options. Different infrastructure constraints select different paths. Full analysis + activation snippets + test plan in [`docs/notes/qwen3-embedding-paths.md`](notes/qwen3-embedding-paths.md).
+Both ship as first-class options. Different infrastructure constraints select different paths. Full analysis + activation snippets + test plan in [`devnotes/embedders/qwen3-paths.md`](../devnotes/embedders/qwen3-paths.md).
 
 **Trigger:** revisit if BGE A/B (in flight at session close) doesn't close the multi-session gap. BGE-base is the cheapest experiment to try first — if it lands at 95%+ R@5 on multi-session, Qwen3 is unnecessary. If it doesn't, both Qwen3 paths are queued ready to implement.
 
@@ -992,26 +990,26 @@ Both ship as first-class options. Different infrastructure constraints select di
 
 ## 🅿 Parked: pluggable storage backend
 
-Surfaced 2026-04-13. Question was: should QMD migrate to Postgres + pgvector now, like Mem0 / Zep / Letta? Honest answer captured in [`docs/notes/pluggable-storage.md`](notes/pluggable-storage.md).
+Surfaced 2026-04-13. Question was: should Lotl migrate to Postgres + pgvector now, like Mem0 / Zep / Letta? Honest answer captured in [`devnotes/architecture/pluggable-storage.md`](../devnotes/architecture/pluggable-storage.md).
 
-**TL;DR:** not now. SQLite + sqlite-vec is the right call for QMD's local-first positioning (CLI, MCP server, OpenClaw plugin all assume zero ops). The right architecture if/when scale demands it is a pluggable backend layer (`MemoryBackend` interface) so sqlite-vec and pgvector can both ship as first-class options. Triggers that would move this from parked to scheduled: multi-tenant deployment, 1M+ memories per scope, concurrent write contention, or a customer running their own Postgres. None of those are real today.
+**TL;DR:** not now. SQLite + sqlite-vec is the right call for Lotl's local-first positioning (CLI, MCP server, OpenClaw plugin all assume zero ops). The right architecture if/when scale demands it is a pluggable backend layer (`MemoryBackend` interface) so sqlite-vec and pgvector can both ship as first-class options. Triggers that would move this from parked to scheduled: multi-tenant deployment, 1M+ memories per scope, concurrent write contention, or a customer running their own Postgres. None of those are real today.
 
 ---
 
 ## 🔬 LME _s n=500 — full distribution diagnosis (2026-04-13 late session)
 
-The earlier "QMD 97.0% R@5" win was on n=100 (first 100 questions) which happened to be all single-session-user — the easy categories. Running on the full n=500 dataset exposed the real picture and a real bug.
+The earlier "Lotl 97.0% R@5" win was on n=100 (first 100 questions) which happened to be all single-session-user — the easy categories. Running on the full n=500 dataset exposed the real picture and a real bug.
 
 ### The n=500 baseline (broken — pre-fix)
 
 | Pipeline | n | R@5 | R@10 | MRR | Time |
 |---|---|---|---|---|---|
 | MemPalace raw + fastembed | 500 | 96.6% | 98.2% | — | 12.5 min |
-| **QMD raw + fastembed (broken)** | **500** | **89.4%** | **89.4%** | **0.838** | 22.7 min |
+| **Lotl raw + fastembed (broken)** | **500** | **89.4%** | **89.4%** | **0.838** | 22.7 min |
 
 7-pp gap. Per-category breakdown showed it concentrated in two specific types:
 
-| Category | n | QMD R@5 | MemPalace R@5 | Δ |
+| Category | n | Lotl R@5 | MemPalace R@5 | Δ |
 |---|---|---|---|---|
 | single-session-user | 70 | 99% | 97% | +2 ✓ |
 | single-session-assistant | 56 | 98% | 96% | +2 ✓ |
@@ -1047,13 +1045,13 @@ MemPalace doesn't have this problem because they create a fresh `ChromaDB.Epheme
   - Focused haystack (top1 ≈ 0.32 → floor 0.16): keeps low-cosine legitimate matches.
   - Weak signal (everything < absFloor): minKeep keeps top-5 + BM25 fills the gap.
 - 7 unit tests in `test/pick-vector-matches.test.ts` lock the algorithm down.
-- `QMD_VEC_MIN_SIM=adaptive|0|<number>` env override.
+- `LOTL_VEC_MIN_SIM=adaptive|0|<number>` env override.
 - **Quality fix that helps real production**, not a benchmark hack.
 
 **Workaround — K-multiplier bump** (`f360a2b`):
-- `vecK = max(limit*3, limit * QMD_VEC_K_MULTIPLIER)` (default multiplier 20)
+- `vecK = max(limit*3, limit * LOTL_VEC_K_MULTIPLIER)` (default multiplier 20)
 - Default K=1000 instead of 150 → ~2 hits per scope on average → most queries get full top-50 after filter.
-- `QMD_VEC_K_MULTIPLIER=200` for K=10000 (~40% of 23k index, near-guarantee of full scope coverage)
+- `LOTL_VEC_K_MULTIPLIER=200` for K=10000 (~40% of 23k index, near-guarantee of full scope coverage)
 - **This is a workaround, not the proper fix.** Linear scan cost grows with K. Won't scale to large vaults.
 
 **Proper fix (shipped `a7c1eaf`) — `scope` partition key on `memories_vec`:**
@@ -1107,7 +1105,7 @@ Three-way sweep at n=100 with partition fix in place:
 
 **Conclusive null result:** all three score within 1pp of each other on R@5/R@10. Multi-session R@5 is **identical at 93%** across all three — the BGE family doesn't shift the bottleneck. BGE-base is **6× slower** than MiniLM for zero gain.
 
-**Implication:** the multi-session ranking gap is not a BGE-class problem. Different architectures (Qwen3-Embedding-0.6B, e5-mistral, jina-v3) or different scoring layers (cross-encoder rerank, BM25 weight tuning) are the next experiments. **Qwen3 hybrid plan** documented in `docs/notes/qwen3-embedding-paths.md` is the queued experiment.
+**Implication:** the multi-session ranking gap is not a BGE-class problem. Different architectures (Qwen3-Embedding-0.6B, e5-mistral, jina-v3) or different scoring layers (cross-encoder rerank, BM25 weight tuning) are the next experiments. **Qwen3 hybrid plan** documented in `devnotes/embedders/qwen3-paths.md` is the queued experiment.
 
 **Skipped n=500 BGE confirmation** because n=100 was already definitive — no signal to chase.
 
@@ -1117,7 +1115,7 @@ Two important learnings beyond "BGE doesn't help":
 
 **1. Dimension is not the lever.** BGE-base (768-dim) ≈ BGE-small (384-dim) ≈ MiniLM (384-dim) — all three score 97-98% R@5 with identical multi-session 93%. Doubling the embedding dimension changed nothing. The bottleneck isn't representational capacity; it's training objective / data.
 
-**2. BGE-base is too big for QMD's use case.**
+**2. BGE-base is too big for Lotl's use case.**
 
 | Model | Dim | Size | Wall (n=100) | per-Q time |
 |---|---|---|---|---|
@@ -1157,32 +1155,32 @@ This shipped as adaptive cosine threshold (universal quality improvement) + K-bu
 
 ---
 
-## 🏆 LME _s head-to-head: QMD matches MemPalace's 96.6%
+## 🏆 LME _s head-to-head: Lotl matches MemPalace's 96.6%
 
-**2026-04-13:** QMD + local fastembed backend + raw mode hits **R@5 = 97.0%** on `longmemeval_s_cleaned` first 100 questions. MemPalace's published 96.6% headline is retrieval-only on the same 500-question dataset. We're at parity on the benchmark that defines "state of the art" for LongMemEval retrieval.
+**2026-04-13:** Lotl + local fastembed backend + raw mode hits **R@5 = 97.0%** on `longmemeval_s_cleaned` first 100 questions. MemPalace's published 96.6% headline is retrieval-only on the same 500-question dataset. We're at parity on the benchmark that defines "state of the art" for LongMemEval retrieval.
 
 | Pipeline | n | R@5 | R@10 | F1 | EM | Per-Q time |
 |---|---|---|---|---|---|---|
 | MemPalace raw + fastembed | 500 | 96.6% | 98.2% | — | — | 1.5s |
-| **QMD raw + fastembed** | **100** | **97.0%** | **97.0%** | **64.9%** | **48.0%** | 3.1s (incl. LLM answer) |
+| **Lotl raw + fastembed** | **100** | **97.0%** | **97.0%** | **64.9%** | **48.0%** | 3.1s (incl. LLM answer) |
 
 Caveats:
-- QMD n=100 is the first 100 questions; MemPalace n=500 is the full run. Full n=500 QMD run in flight — will confirm or revise.
-- MemPalace reports retrieval-only; QMD layers an LLM answer pass on top (F1/EM/SH) that their benchmark doesn't produce.
-- Per-Q time includes ~1.5s for our LLM answer call; strip that and QMD retrieval is within noise of MemPalace's speed.
+- Lotl n=100 is the first 100 questions; MemPalace n=500 is the full run. Full n=500 Lotl run in flight — will confirm or revise.
+- MemPalace reports retrieval-only; Lotl layers an LLM answer pass on top (F1/EM/SH) that their benchmark doesn't produce.
+- Per-Q time includes ~1.5s for our LLM answer call; strip that and Lotl retrieval is within noise of MemPalace's speed.
 
 **Stack that produced this result:**
 
 ```
-QMD_EMBED_BACKEND=fastembed   # local ONNX, all-MiniLM-L6-v2
-QMD_RECALL_RAW=on             # skip boosts, rerank, expansion
-QMD_INGEST_EXTRACTION=off     # raw verbatim storage
-QMD_INGEST_SYNTHESIS=off      # no entity profiles
-QMD_INGEST_PER_TURN=off       # session-granularity only
-QMD_ZE_COLLECTIONS=off        # no remote embed fallback
+LOTL_EMBED_BACKEND=fastembed   # local ONNX, all-MiniLM-L6-v2
+LOTL_RECALL_RAW=on             # skip boosts, rerank, expansion
+LOTL_INGEST_EXTRACTION=off     # raw verbatim storage
+LOTL_INGEST_SYNTHESIS=off      # no entity profiles
+LOTL_INGEST_PER_TURN=off       # session-granularity only
+LOTL_ZE_COLLECTIONS=off        # no remote embed fallback
 ```
 
-No API keys for retrieval. Only the answer-generation Gemini key. MemPalace-level simplicity + QMD's answer quality.
+No API keys for retrieval. Only the answer-generation Gemini key. MemPalace-level simplicity + Lotl's answer quality.
 
 ---
 
@@ -1194,18 +1192,18 @@ Instead of relying on their published numbers + our reimplementation of their me
 
 | Benchmark | Pipeline | Metric | Score | Notes |
 |---|---|---|---|---|
-| **LoCoMo conv-26+30 (n=304)** | **QMD v15.1** | **DR@50** | **74.9%** | dialog-level fractional recall |
+| **LoCoMo conv-26+30 (n=304)** | **Lotl v15.1** | **DR@50** | **74.9%** | dialog-level fractional recall |
 | | **MemPalace own run** | **DR@50** | **74.8%** | same metric, their pipeline |
 | LoCoMo conv-26+30 | MemPalace own run | session recall@any | 100% | 19 docs × top-50 = every session always in top-K |
-| LME oracle n=200 | QMD v15.1 | R@5 / R@10 | 87.0% / 93.0% | token overlap |
+| LME oracle n=200 | Lotl v15.1 | R@5 / R@10 | 87.0% / 93.0% | token overlap |
 | | MemPalace own run | Recall@1 / @5 / @50 | 100% / 100% / 100% | ceilinged |
-| | QMD v15.1 | SR@5 | 100% | also ceilinged |
+| | Lotl v15.1 | SR@5 | 100% | also ceilinged |
 
 **Takeaways:**
 
-1. **On the one metric that discriminates — LoCoMo dialog-level DR@50 — QMD v15.1 matches MemPalace's own pipeline to within 0.1pp on the same data (74.9 vs 74.8).** Parity.
+1. **On the one metric that discriminates — LoCoMo dialog-level DR@50 — Lotl v15.1 matches MemPalace's own pipeline to within 0.1pp on the same data (74.9 vs 74.8).** Parity.
 2. **SR@K on LME oracle is useless as a discriminator** — MemPalace's own benchmark scores 100% because the haystack is pre-filtered to relevant sessions. The metric is ceilinged at 100% by construction. Our previous "v15.1 SR@5 = 100%" was not a win, just a ceiling.
-3. **MemPalace's published 96.6% is on `longmemeval_s_cleaned`**, not oracle. That dataset has the full unfiltered haystack with distractor sessions. Comparing QMD to their 96.6% requires a future run on `_s`.
+3. **MemPalace's published 96.6% is on `longmemeval_s_cleaned`**, not oracle. That dataset has the full unfiltered haystack with distractor sessions. Comparing Lotl to their 96.6% requires a future run on `_s`.
 
 ### New metric hierarchy
 
@@ -1236,10 +1234,10 @@ See `docs/EVAL.md` "Metric hierarchy" section for the full definitions and why e
 **Recommended default stack going forward:**
 
 ```
-QMD_RECALL_DIVERSIFY=on   # small consistent retrieval win
-QMD_RECALL_KG=on          # strictly gated, costs nothing when FTS is strong
-QMD_RECALL_REFLECT=off    # defer until smart-gating per question type lands
-QMD_PROMPT_RULES=v11.1    # LME temporal win, small LoCoMo cost
+LOTL_RECALL_DIVERSIFY=on   # small consistent retrieval win
+LOTL_RECALL_KG=on          # strictly gated, costs nothing when FTS is strong
+LOTL_RECALL_REFLECT=off    # defer until smart-gating per question type lands
+LOTL_PROMPT_RULES=v11.1    # LME temporal win, small LoCoMo cost
 ```
 
 ---
@@ -1248,7 +1246,7 @@ QMD_PROMPT_RULES=v11.1    # LME temporal win, small LoCoMo cost
 
 **Two changes from v15-final, validated on LME oracle:**
 
-1. **Answer prompt v11 → v11.1** (env-gated via `QMD_PROMPT_RULES=v11.1`). Adds three rules addressing the failure modes found in the first LME baseline analysis: ordering ("which came first"), no-refuse duration arithmetic, enumerate-then-count.
+1. **Answer prompt v11 → v11.1** (env-gated via `LOTL_PROMPT_RULES=v11.1`). Adds three rules addressing the failure modes found in the first LME baseline analysis: ordering ("which came first"), no-refuse duration arithmetic, enumerate-then-count.
 2. **MemPalace-aligned recall metric** — the published 96.6% is session-id `recall_any`, not token-overlap. We now store `source_session_id` / `source_dialog_id` metadata at ingest and report SR@K (LME) / DR@K + SR@K (LoCoMo) alongside the legacy R@K.
 
 ### LME A/B on oracle, n=50 (temporal-reasoning subset)
@@ -1262,7 +1260,7 @@ QMD_PROMPT_RULES=v11.1    # LME temporal win, small LoCoMo cost
 | F1 | 51.4% | 52.9% | **+1.5pp** |
 | EM | 22.0% | 28.0% | **+6.0pp** |
 
-**Headline:** SR@5 = 100% on both runs. The 80% R@5 in the first baseline was a pure metric artifact (token-overlap fails on short numeric answers — "27" vs "27 years old" scores 0). **QMD retrieval was already apples-to-apples with MemPalace; we'd been chasing a phantom gap.**
+**Headline:** SR@5 = 100% on both runs. The 80% R@5 in the first baseline was a pure metric artifact (token-overlap fails on short numeric answers — "27" vs "27 years old" scores 0). **Lotl retrieval was already apples-to-apples with MemPalace; we'd been chasing a phantom gap.**
 
 v11.1 prompt delivers a real but modest F1 (+1.5pp) and clearer EM (+6pp) improvement. Ships as the default once LoCoMo cross-check confirms no regression.
 
@@ -1281,7 +1279,7 @@ Following MemPalace's `benchmarks/locomo_bench.py` verbatim:
 1. **LoCoMo conv-30 run** with DR@K/SR@K — in flight (bg `bq2g25djf`, ~10 min wall, fresh ingest required for new metadata schema)
 2. **LoCoMo conv-26 cross-check** after conv-30 lands
 3. **LME full distribution** — current `--limit 50` is all `temporal-reasoning` due to dataset ordering. Need `--limit 200` or a shuffled sample for the four other question types (single-hop, multi-hop, knowledge-update, abstention)
-4. **Raw-mode LME** (`QMD_RECALL_RAW=on`, extraction off) — closest replica of MemPalace's ChromaDB recipe; tests whether our pipeline complexity helps or hurts
+4. **Raw-mode LME** (`LOTL_RECALL_RAW=on`, extraction off) — closest replica of MemPalace's ChromaDB recipe; tests whether our pipeline complexity helps or hurts
 5. **v16 candidates** (Hindsight-inspired, post-v15.1 ship): smart KG-in-recall, post-retrieval reflect synthesis, cross-encoder rerank, separate temporal retrieval path
 
 ### Side issue to fix
@@ -1332,7 +1330,7 @@ See `~/.claude/projects/.../memory/project_session_handoff_20260412.md` for full
 
 ## 🧬 Techniques By Category
 
-Cross-cutting view: every technique appears in multiple systems. This shows overlap and reveals which categories QMD is strong/weak in.
+Cross-cutting view: every technique appears in multiple systems. This shows overlap and reveals which categories Lotl is strong/weak in.
 
 **Legend:** ✓ complete · ~ partial · ✗ missing
 
@@ -1343,11 +1341,11 @@ Closed as part of the v16 cycle (all opt-in or additive, no baseline regression)
 | Cat | Closeout | Entry point |
 |-----|----------|-------------|
 | 1 | Tier-aware recall API | `memoryRecall({tier})` + `memoryRecallTiered(db, opts)` — behavioral closeout; full per-tier table rewrite parked |
-| 2 (partial) | Dialog-aware diversity in top-K recall | `QMD_RECALL_DIVERSIFY=on` → `applyDialogDiversity` in `memoryRecall` |
+| 2 (partial) | Dialog-aware diversity in top-K recall | `LOTL_RECALL_DIVERSIFY=on` → `applyDialogDiversity` in `memoryRecall` |
 | 6 | Scheduled cleanup hook | `runCleanupPass(db, opts)` → wired into OpenClaw dream gate |
 | 7 | 4-component importance scoring | `estimateImportance` now adds entityDensity + decisionSignal |
-| 10 | Smart KG-in-recall with strict gating | `QMD_RECALL_KG=on` → `queryKGForEntities` in `memoryRecall` |
-| 11 | Post-retrieval reflect synthesis | `memoryReflect(question, memories)` + `QMD_RECALL_REFLECT=on` in evals |
+| 10 | Smart KG-in-recall with strict gating | `LOTL_RECALL_KG=on` → `queryKGForEntities` in `memoryRecall` |
+| 11 | Post-retrieval reflect synthesis | `memoryReflect(question, memories)` + `LOTL_RECALL_REFLECT=on` in evals |
 | 16 | Push Pack (hot-state bundle) | `memoryPushPack(db, opts)` — zero-LLM SQL |
 | 17 | Backward-K LRU sparing in eviction | `runEvictionPass` + `lruWindowDays` option |
 | 18 | Periodic reflection over memory streams | `runReflectionPass(db, opts)` → wired into OpenClaw dream gate |
@@ -1356,7 +1354,7 @@ Remaining open: **cat 19** (multi-agent identity tier hierarchy) and **cat 20** 
 
 ### 1. Tiered / Hierarchical Storage — **~ partial**
 
-| System | Approach | QMD |
+| System | Approach | Lotl |
 |--------|----------|-----|
 | Zep | 3-tier subgraph (episode + entity + community) | ✗ |
 | Letta/MemGPT | 2-tier (recall + archival) | ✗ |
@@ -1364,117 +1362,117 @@ Remaining open: **cat 19** (multi-agent identity tier hierarchy) and **cat 20** 
 | memory-lancedb-pro | 3-tier promotion (peripheral/working/core) | ✓ via decay.ts |
 | Sleep Consolidation | Use-case folders (lessons/bugs/knowledge) | ✗ |
 
-**QMD honest:** decay TIER labels only (peripheral/working/core). All memories live in same table — no storage-level separation. v12 dual-pass split-rank simulates two tiers at retrieval time, doesn't restructure storage.
+**Lotl honest:** decay TIER labels only (peripheral/working/core). All memories live in same table — no storage-level separation. v12 dual-pass split-rank simulates two tiers at retrieval time, doesn't restructure storage.
 
 ### 2. Multi-Pass / Hybrid Retrieval — **~ partial**
 
-| System | Approach | QMD |
+| System | Approach | Lotl |
 |--------|----------|-----|
 | MemPalace | BM25 + vec + RRF + reranker | ✓ |
 | MemPalace | 2-pass assistant retrieval ("you suggested X") | ✗ |
 | Letta | Agent self-directed (recall_search vs archival_search) | ~ |
 | Zep | Query each subgraph separately, merge | ~ |
 | **Hindsight** | **4 parallel paths: semantic + BM25 + entity graph + temporal filter + cross-encoder rerank** | ~ (2 of 4 paths) |
-| QMD v15-final | BM25 + vec + RRF + LLM rerank + temporal boost | ~ |
+| Lotl v15-final | BM25 + vec + RRF + LLM rerank + temporal boost | ~ |
 
-**QMD honest:** Have 2 parallel paths (BM25 + vector). **Missing: entity graph traversal in recall** (the KG exists but isn't queried — was rolled back in v8 because generic entries dominated; smart gating could fix). Also using LLM rerank instead of cross-encoder. **This is the biggest gap vs Hindsight (91.4% LongMemEval).**
+**Lotl honest:** Have 2 parallel paths (BM25 + vector). **Missing: entity graph traversal in recall** (the KG exists but isn't queried — was rolled back in v8 because generic entries dominated; smart gating could fix). Also using LLM rerank instead of cross-encoder. **This is the biggest gap vs Hindsight (91.4% LongMemEval).**
 
 ### 3. Atomic Fact Extraction — **✓ complete**
 
-| System | Approach | QMD |
+| System | Approach | Lotl |
 |--------|----------|-----|
 | Mem0 | LLM extraction, atomic facts ONLY (deletes chunks) | n/a |
 | MemPalace | NO extraction, raw chunks only | n/a |
 | Tinkerclaw Instant Recall | Importance-scored extraction | ~ |
-| QMD v10+ | Mem0-style atomic + raw chunks dual-stored | ✓ |
+| Lotl v10+ | Mem0-style atomic + raw chunks dual-stored | ✓ |
 
-**QMD honest:** Mem0-style LLM extraction (extractor.ts) + raw chunks. v12 dual-pass surfaces both during retrieval.
+**Lotl honest:** Mem0-style LLM extraction (extractor.ts) + raw chunks. v12 dual-pass surfaces both during retrieval.
 
 ### 4. Chunking Strategy — **✓ complete**
 
-| System | Chunk size | QMD |
+| System | Chunk size | Lotl |
 |--------|-----------|-----|
 | MemPalace | 800 chars, 100 overlap, paragraph break | ✗ |
 | Tinkerclaw Instant Recall | 256-512 tokens | ✗ |
 | Mem0 | None (atomic facts only) | n/a |
-| QMD memory | Turn-level (~50 tok) AND full session (~500+) | ✓ both |
-| QMD docs | AST-aware (tree-sitter) + markdown break-points | ✓ |
+| Lotl memory | Turn-level (~50 tok) AND full session (~500+) | ✓ both |
+| Lotl docs | AST-aware (tree-sitter) + markdown break-points | ✓ |
 
-**QMD honest:** Different sizing strategy than MemPalace/Tinkerclaw but valid. Could test 800-char as v13+ experiment.
+**Lotl honest:** Different sizing strategy than MemPalace/Tinkerclaw but valid. Could test 800-char as v13+ experiment.
 
 ### 5. Temporal / Time-Aware Retrieval — **✓ complete**
 
-| System | Technique | QMD |
+| System | Technique | Lotl |
 |--------|-----------|-----|
 | MemPalace | Temporal distance boost (40% time-proximate) | ✓ |
 | Zep | Bitemporal validity windows on facts | ✓ via knowledge.ts |
 | Mem0 | Auto-invalidation of conflicting facts | ✓ |
 | Tinkerclaw Total Recall | Time-range markers replacing evicted content | ✗ |
-| QMD | Date reasoning prompt + valid_from/until + temporal boost | ✓ |
+| Lotl | Date reasoning prompt + valid_from/until + temporal boost | ✓ |
 | Custom | Adversarial date scoring fix | ✓ |
 
-**QMD honest:** All major techniques present. Temporal F1 still 39.1% in v10 — bottleneck is retrieval ranking, not temporal logic.
+**Lotl honest:** All major techniques present. Temporal F1 still 39.1% in v10 — bottleneck is retrieval ranking, not temporal logic.
 
 ### 6. Decay / Lifecycle Management — **~ partial**
 
-| System | Algorithm | QMD |
+| System | Algorithm | Lotl |
 |--------|-----------|-----|
 | memory-lancedb-pro | Weibull (recency × frequency × intrinsic, β per tier) | ✓ |
 | MemoryBank | Ebbinghaus forgetting curve | ✗ |
 | Sleep Consolidation | Cleaning Lady cron, 14-day archival, 50KB budgets | ✗ |
 | Total Recall | LRU-K type-weighted eviction | ✓ via cat 17 |
-| QMD | Weibull + 3-tier promotion + composite score | ~ |
+| Lotl | Weibull + 3-tier promotion + composite score | ~ |
 
-**QMD honest:** Decay scoring + tier promotion complete. Missing: scheduled automated enforcement of storage budgets (Cleaning Lady cron). `runDecayPass` evaluates tiers; `runEvictionPass` deletes on demand only.
+**Lotl honest:** Decay scoring + tier promotion complete. Missing: scheduled automated enforcement of storage budgets (Cleaning Lady cron). `runDecayPass` evaluates tiers; `runEvictionPass` deletes on demand only.
 
 ### 7. Importance / Prioritization Scoring — **~ partial**
 
-| System | Formula | QMD |
+| System | Formula | Lotl |
 |--------|---------|-----|
 | Tinkerclaw Instant Recall | `effective = cos_sim × (1 + α·log(importance))`, α=0.15 | ✓ via v12 |
 | Tinkerclaw Instant Recall | 4-component: entity_density + decision + engagement + recency | ~ |
-| QMD | importance ∈ [0,1] from category + length | ~ |
-| QMD | composite score = 0.4 recency + 0.3 freq + 0.3 intrinsic | ✓ |
+| Lotl | importance ∈ [0,1] from category + length | ~ |
+| Lotl | composite score = 0.4 recency + 0.3 freq + 0.3 intrinsic | ✓ |
 
-**QMD honest:** v12 added log-modulation in recall. Importance estimation simpler than Tinkerclaw's 4-component (we use category + length only, no entity density / engagement signals).
+**Lotl honest:** v12 added log-modulation in recall. Importance estimation simpler than Tinkerclaw's 4-component (we use category + length only, no entity density / engagement signals).
 
 ### 8. Diversity / MMR — **✓ complete**
 
-| System | Technique | QMD |
+| System | Technique | Lotl |
 |--------|-----------|-----|
 | Tinkerclaw Total Recall | MMR for retrieval, λ ∈ [0.5, 0.8] | ✓ via v12 |
 | Standard IR | Carbonell & Goldstein 1998 | ✓ via v12 |
-| QMD v12 | Greedy MMR with Jaccard token similarity, λ=0.7 | ✓ |
+| Lotl v12 | Greedy MMR with Jaccard token similarity, λ=0.7 | ✓ |
 
-**QMD honest:** v12 added Jaccard-based MMR (cheap, no embeddings needed). Could upgrade to embedding-based similarity if precision becomes an issue.
+**Lotl honest:** v12 added Jaccard-based MMR (cheap, no embeddings needed). Could upgrade to embedding-based similarity if precision becomes an issue.
 
 ### 9. Deduplication — **✓ complete**
 
-| System | Approach | QMD |
+| System | Approach | Lotl |
 |--------|----------|-----|
 | Mem0 | Content hash MD5 + cosine ≥0.9 | ✓ |
 | Mem0 | LLM conflict resolution (ADD/UPDATE/DELETE/NONE) | ✓ |
-| QMD | Both layers + LLM resolution | ✓ |
+| Lotl | Both layers + LLM resolution | ✓ |
 
-**QMD honest:** Production-grade dedup, no gaps.
+**Lotl honest:** Production-grade dedup, no gaps.
 
 ### 10. Knowledge Graph / Entities — **~ partial**
 
-| System | Approach | QMD |
+| System | Approach | Lotl |
 |--------|----------|-----|
 | Zep / Graphiti | Temporal KG with bitemporal validity | ✓ |
 | Mem0 | Graph store alongside vector | ✓ |
 | GraphRAG | Community-based hierarchical KG | ~ via cat 11 synthesis |
 | MemPalace | SQLite KG | ✓ |
-| QMD | knowledge.ts with subject/predicate/object + valid_from/until | ✓ storage |
+| Lotl | knowledge.ts with subject/predicate/object + valid_from/until | ✓ storage |
 
-**QMD honest:** KG storage complete. KG NOT used directly in recall (hurt R@5 when injected). v12 cat 11 synthesis bridges this — entity facts become memory chunks via consolidateEntityFacts.
+**Lotl honest:** KG storage complete. KG NOT used directly in recall (hurt R@5 when injected). v12 cat 11 synthesis bridges this — entity facts become memory chunks via consolidateEntityFacts.
 
 ### 11. Synthesis / Abstraction / Compression — **~ partial**
 
 Two distinct synthesis flavors — pre-ingest (build summary memories) vs post-retrieval (reason across top-K before returning):
 
-| System | When | Approach | QMD |
+| System | When | Approach | Lotl |
 |--------|------|----------|-----|
 | RAPTOR | Pre-ingest | Recursive abstractive tree | ✗ |
 | GraphRAG | Pre-ingest | Community summaries | ~ via consolidateEntityFacts |
@@ -1482,34 +1480,34 @@ Two distinct synthesis flavors — pre-ingest (build summary memories) vs post-r
 | Mastra | Pre-ingest | 3-agent observer/reflector compression | ✗ |
 | Generative Agents | Background | Periodic reflection over memory streams | ✗ |
 | **Hindsight** | **Post-retrieval** | **`reflect` LLM call reasons across top-K before returning** | ✗ |
-| QMD v15-final | Pre-ingest | Per-entity profiles + timelines + reflection extraction (merged into single LLM call) | ~ |
+| Lotl v15-final | Pre-ingest | Per-entity profiles + timelines + reflection extraction (merged into single LLM call) | ~ |
 
-**QMD honest:** Pre-ingest synthesis present (✓ consolidation, ✓ reflection extraction merged). Missing: **post-retrieval synthesis** (Hindsight's reflect — runs 1 extra LLM call per recall, reasons across the top-K and returns synthesized answer context). This is a likely v16 candidate.
+**Lotl honest:** Pre-ingest synthesis present (✓ consolidation, ✓ reflection extraction merged). Missing: **post-retrieval synthesis** (Hindsight's reflect — runs 1 extra LLM call per recall, reasons across the top-K and returns synthesized answer context). This is a likely v16 candidate.
 
 ### 12. Caching — **✓ complete**
 
-| System | Technique | QMD |
+| System | Technique | Lotl |
 |--------|-----------|-----|
 | Mastra | Embedding LRU keyed by xxhash64 | ✓ MD5 variant |
 | Total Recall | LRU-K eviction | ✓ via cat 17 |
-| QMD | Embedding LRU (100 entries, MD5) + prepared statement cache | ✓ |
+| Lotl | Embedding LRU (100 entries, MD5) + prepared statement cache | ✓ |
 
-**QMD honest:** Embedding cache + prepared statement cache. Hash function differs (MD5 vs xxhash64) but functionally equivalent at our scale.
+**Lotl honest:** Embedding cache + prepared statement cache. Hash function differs (MD5 vs xxhash64) but functionally equivalent at our scale.
 
 ### 13. Auto-Capture / Hooks — **✓ complete**
 
-| System | Hooks | QMD |
+| System | Hooks | Lotl |
 |--------|-------|-----|
 | memory-lancedb-pro | before_prompt_build, agent_end | ✓ |
 | Mem0 | OpenClaw plugin pattern | ✓ |
 | MemPalace | Claude Code hooks (every 15 messages, PreCompact) | ✗ |
-| QMD | 6 OpenClaw hooks + dream consolidation | ✓ |
+| Lotl | 6 OpenClaw hooks + dream consolidation | ✓ |
 
-**QMD honest:** OpenClaw integration complete. Missing only Claude Code-specific hook patterns (message-count triggers, PreCompact emergency save).
+**Lotl honest:** OpenClaw integration complete. Missing only Claude Code-specific hook patterns (message-count triggers, PreCompact emergency save).
 
 ### 14. Score Boosts (Zero-LLM) — **✓ complete**
 
-| System | Boost | QMD |
+| System | Boost | Lotl |
 |--------|-------|-----|
 | MemPalace | Keyword overlap ×1.4 | ✓ |
 | MemPalace | Quoted phrase ×1.6 | ✓ |
@@ -1517,70 +1515,70 @@ Two distinct synthesis flavors — pre-ingest (build summary memories) vs post-r
 | MemPalace | Stop words for keyword extraction | ✓ |
 | MemPalace | Preference pattern ingest | ✓ |
 
-**QMD honest:** All 5 zero-LLM boosts integrated.
+**Lotl honest:** All 5 zero-LLM boosts integrated.
 
 ### 15. Query Expansion — **✓ complete**
 
-| System | Technique | QMD |
+| System | Technique | Lotl |
 |--------|-----------|-----|
-| QMD | Nebius Llama expansion + lex/vec/hyde modes | ✓ |
-| QMD | Strong signal detection (skip when FTS hits) | ✓ |
+| Lotl | Nebius Llama expansion + lex/vec/hyde modes | ✓ |
+| Lotl | Strong signal detection (skip when FTS hits) | ✓ |
 | MemPalace | Synonym/related-term expansion | ✓ |
 
-**QMD honest:** Production-grade with smart skip when FTS hits are strong.
+**Lotl honest:** Production-grade with smart skip when FTS hits are strong.
 
 ### 16. Push / Pull / Self-Directed Retrieval — **~ partial**
 
-| System | Technique | QMD |
+| System | Technique | Lotl |
 |--------|-----------|-----|
 | Tinkerclaw Total Recall | Hybrid push (Push Pack) + pull (recall tool) | ✗ |
 | Letta | Agent self-directed via tool calls | ~ |
 | Mem0 | OpenClaw before_prompt_build auto-recall | ✓ |
-| QMD | Auto-recall via plugin hooks + memory_recall MCP tool | ~ |
+| Lotl | Auto-recall via plugin hooks + memory_recall MCP tool | ~ |
 
-**QMD honest:** Push (auto-recall via hooks) + Pull (MCP recall tool) both present, but no proactive Push Pack injecting Task State / hot tail / time markers. Agent doesn't route between recall vs archival stores (because we don't have separate stores).
+**Lotl honest:** Push (auto-recall via hooks) + Pull (MCP recall tool) both present, but no proactive Push Pack injecting Task State / hot tail / time markers. Agent doesn't route between recall vs archival stores (because we don't have separate stores).
 
 ### 17. Eviction Policies — **~ partial**
 
-| System | Algorithm | QMD |
+| System | Algorithm | Lotl |
 |--------|-----------|-----|
 | Total Recall | LRU-K type-weighted (tools first, dialogue last) | ~ |
 | Total Recall | LIRS, Belady reference baselines | ✗ |
-| QMD v12 | runEvictionPass: age + importance + access count + tier/category protection | ~ |
+| Lotl v12 | runEvictionPass: age + importance + access count + tier/category protection | ~ |
 
-**QMD honest:** Strictly speaking we have LRU-1 (last_accessed only), not true LRU-K (which tracks K most recent access timestamps). Type weighting via category protection (reflection/decision spared) approximates Total Recall's "tools first, dialogue last". Good enough for cold-storage cleanup; not theoretically optimal.
+**Lotl honest:** Strictly speaking we have LRU-1 (last_accessed only), not true LRU-K (which tracks K most recent access timestamps). Type weighting via category protection (reflection/decision spared) approximates Total Recall's "tools first, dialogue last". Good enough for cold-storage cleanup; not theoretically optimal.
 
 ### 18. Reflection / Self-Improvement — **~ partial**
 
-| System | Approach | QMD |
+| System | Approach | Lotl |
 |--------|----------|-----|
 | Reflexion | Verbal RL on memory | ✗ |
 | Mem0 OpenClaw | Observation/reflection capture | ✓ |
 | Mastra | 3-agent reflection | ✗ |
 | Generative Agents | Periodic reflection over streams | ~ |
-| QMD v12 | LLM reflection extraction on conversation text → reflection-category memories at importance 0.75 | ~ |
+| Lotl v12 | LLM reflection extraction on conversation text → reflection-category memories at importance 0.75 | ~ |
 
-**QMD honest:** v12 extracts reflections from conversation TEXT at ingest. Missing: periodic reflection over already-stored memory streams (Generative Agents pattern), no verbal RL or self-improvement loop, no 3-agent observer/reflector pipeline.
+**Lotl honest:** v12 extracts reflections from conversation TEXT at ingest. Missing: periodic reflection over already-stored memory streams (Generative Agents pattern), no verbal RL or self-improvement loop, no 3-agent observer/reflector pipeline.
 
 ### 19. Identity / Scope / Multi-Agent — **~ partial**
 
-| System | Model | QMD |
+| System | Model | Lotl |
 |--------|-------|-----|
 | Tinkerclaw Identity Persistence | Per-agent persona maintenance | ✗ |
 | Mem0 | session / user / agent scopes | ~ |
-| QMD | scope field + agent:<name> via OpenClaw plugin | ~ |
+| Lotl | scope field + agent:<name> via OpenClaw plugin | ~ |
 
-**QMD honest:** Single-tier scope string (`global` / `agent:<name>`). Missing: distinct session vs user vs agent tier hierarchy (Mem0), persistent persona model (Tinkerclaw Identity).
+**Lotl honest:** Single-tier scope string (`global` / `agent:<name>`). Missing: distinct session vs user vs agent tier hierarchy (Mem0), persistent persona model (Tinkerclaw Identity).
 
 ### 20. Cross-Session Routing — **~ partial**
 
-| System | Technique | QMD |
+| System | Technique | Lotl |
 |--------|-----------|-----|
 | Tinkerclaw Round Table | Cross-session signal routing | ✗ |
 | Mastra | Thread/resource isolation | ~ |
-| QMD | Per-scope memory boundaries via scope field | ~ |
+| Lotl | Per-scope memory boundaries via scope field | ~ |
 
-**QMD honest:** Scope-based ISOLATION exists, but no active ROUTING of signals between sessions. Round Table-style cross-session promotion of patterns is missing.
+**Lotl honest:** Scope-based ISOLATION exists, but no active ROUTING of signals between sessions. Round Table-style cross-session promotion of patterns is missing.
 
 ---
 
@@ -1588,19 +1586,19 @@ Two distinct synthesis flavors — pre-ingest (build summary memories) vs post-r
 
 Source: vectorize.io/articles/best-ai-agent-memory-systems (8-system survey)
 
-| System | LME Score | Architecture key | Δ vs QMD target |
+| System | LME Score | Architecture key | Δ vs Lotl target |
 |--------|-----------|------------------|-----------------|
 | **Hindsight** ⭐ | **91.4%** | 4 parallel paths (semantic + BM25 + entity graph + temporal) + cross-encoder rerank + LLM `reflect` synthesis | architectural target |
-| **SuperMemory** | 81.6% | Memory graph + RAG + auto contradiction resolution | ~10pp above QMD aim |
+| **SuperMemory** | 81.6% | Memory graph + RAG + auto contradiction resolution | ~10pp above Lotl aim |
 | **Zep / Graphiti** | 63.8% | Temporal KG with bitemporal validity windows | closest peer |
 | **Mem0** | 49.0% | Vector + KG dual-store, atomic fact extraction | architecturally similar |
-| **QMD v15-final** | **TBD** (running) | BM25 + vec + RRF + LLM rerank + synthesis + merged reflections | — |
+| **Lotl v15-final** | **TBD** (running) | BM25 + vec + RRF + LLM rerank + synthesis + merged reflections | — |
 
 LoCoMo and LongMemEval both test conversational data only. Field needs task-execution benchmarks measuring whether agents actually improve performance over time with accumulated memory. Track this gap.
 
 ### Architectural deltas vs Hindsight (the SOTA target)
 
-| Component | Hindsight | QMD v15-final | Gap |
+| Component | Hindsight | Lotl v15-final | Gap |
 |-----------|-----------|---------------|-----|
 | Semantic vector search | ✓ | ✓ | — |
 | BM25 keyword | ✓ | ✓ | — |
@@ -1667,7 +1665,7 @@ LoCoMo and LongMemEval both test conversational data only. Field needs task-exec
 | ~ Partial | 10 | 1, 6, 7, 10, 11, 16, 17, 18, 19, 20 |
 | ✗ Missing | 0 | — |
 
-**QMD coverage: 50% complete, 50% partial, 0% missing.** No category is entirely absent.
+**Lotl coverage: 50% complete, 50% partial, 0% missing.** No category is entirely absent.
 
 **Strong (✓):** retrieval primitives — multi-pass, atomic extraction, chunking, temporal, MMR, dedup, caching, hooks, score boosts, query expansion.
 
@@ -1765,7 +1763,7 @@ Verified by code audit on 2026-04-12. Status: COMPLETE / PARTIAL / MISSING.
 
 ## 🔧 Open Optimization Opportunities
 
-### From competitive analysis (techniques other systems use, not yet in QMD)
+### From competitive analysis (techniques other systems use, not yet in Lotl)
 
 **From MemPalace (HYBRID_MODE.md):**
 
@@ -2034,30 +2032,30 @@ All available, all OFF or auto unless noted. See `docs/EVAL.md` for the full env
 | **`--shard N/M`** parallel sharding | LME eval | none | linear N× across processes |
 | **`--extract-model` / `--answer-model`** split | both evals | uses default | use lite for cheap extraction, full for answers |
 | **`--db-suffix`** auto-hashed cache | both evals | based on ingest config | prevents stale-cache foot-gun |
-| **LLM response cache** (file-backed) | `evaluate/_shared/llm-cache.ts` | on (`QMD_LLM_CACHE=off` to disable) | 100% reproducible re-runs |
+| **LLM response cache** (file-backed) | `evaluate/_shared/llm-cache.ts` | on (`LOTL_LLM_CACHE=off` to disable) | 100% reproducible re-runs |
 | **`seed=42`** in all LLM calls | `src/llm.ts`, both evals | always | best-effort reproducibility |
-| **`QMD_RECALL_RAW=on`** | `src/memory/index.ts` | off | disable boosts/decay/temporal/expansion/rerank — pure BM25+vec+RRF |
+| **`LOTL_RECALL_RAW=on`** | `src/memory/index.ts` | off | disable boosts/decay/temporal/expansion/rerank — pure BM25+vec+RRF |
 
 **Combined: 50-min sequential LME oracle → ~3-5 min wall** with sharding+workers+lite-extract.
 For 500Q LME-s: ~10 hours → ~1.5 hours.
 
 ### Removed env-var toggles (lost in v15 ablation)
 
-- `QMD_RECALL_DUAL_PASS` — dual-pass split, hurt F1
-- `QMD_RECALL_LOG_MOD` — importance log-modulation, neutral
-- `QMD_RECALL_MMR` + `QMD_RECALL_MMR_LAMBDA` — MMR diversity, hurt single-hop F1
+- `LOTL_RECALL_DUAL_PASS` — dual-pass split, hurt F1
+- `LOTL_RECALL_LOG_MOD` — importance log-modulation, neutral
+- `LOTL_RECALL_MMR` + `LOTL_RECALL_MMR_LAMBDA` — MMR diversity, hurt single-hop F1
 
 ---
 
 ## 📐 SR@K vs R@K — apples-to-apples with MemPalace
 
-QMD's R@K = **answer-token overlap** with retrieved memory text.
+Lotl's R@K = **answer-token overlap** with retrieved memory text.
 MemPalace's `recall_any` = **session-id intersection** with `answer_session_ids`.
 
 **These are different metrics.** MemPalace's published 96.6% LongMemEval is session-id-based.
 
 LME ingest now stores `metadata.source_session_id` on every memory. The eval reports BOTH:
-- `R@5 / R@10` — token-overlap (QMD's original)
+- `R@5 / R@10` — token-overlap (Lotl's original)
 - `SR@5 / SR@10` — session-id (MemPalace-comparable, used for cross-system claims)
 
 ---
@@ -2085,13 +2083,13 @@ hit = any(sid in top5 for sid in answer_session_ids)
 | Knowledge graph | NONE in retrieval (separate SQLite layer for time queries) |
 | Recall metric | `recall_any` — session-id intersection |
 
-**Their hierarchical/extraction modes (Wings/Halls/Rooms, AAAK) score LOWER than raw.** Adding complexity hurt them. Strong signal that v15-final's complexity may be hurting LME — to be tested via QMD_RECALL_RAW=on + extraction-off.
+**Their hierarchical/extraction modes (Wings/Halls/Rooms, AAAK) score LOWER than raw.** Adding complexity hurt them. Strong signal that v15-final's complexity may be hurting LME — to be tested via LOTL_RECALL_RAW=on + extraction-off.
 
 ---
 
-## 🕸️ Graphify (knowledge graph of QMD itself)
+## 🕸️ Graphify (knowledge graph of Lotl itself)
 
-Installed `graphifyy` 0.4.6 (PyPI). Built initial QMD code graph.
+Installed `graphifyy` 0.4.6 (PyPI). Built initial Lotl code graph.
 
 **Graph stats:** 547 nodes · 928 edges · 35 communities · 10 god nodes · 77.5× token reduction per query vs naive corpus
 
@@ -2104,7 +2102,7 @@ Installed `graphifyy` 0.4.6 (PyPI). Built initial QMD code graph.
 
 **Insight:** LLM/embedding plumbing in `src/llm.ts` dominates centrality. Half the god nodes are LLM-side.
 
-**Refactor candidate flagged:** `src/cli/qmd.ts` is the lowest-cohesion large community (cohesion 0.08, 63 functions). Long-known monolith, now objectively confirmed.
+**Refactor candidate flagged:** `src/cli/lotl.ts` is the lowest-cohesion large community (cohesion 0.08, 63 functions). Long-known monolith, now objectively confirmed.
 
 **Outputs:** `graphify-out/{graph.html, graph.json, GRAPH_REPORT.md, manifest.json, cost.json}` (gitignored)
 
@@ -2133,10 +2131,10 @@ Sequenced after v15-final ships. Each phase has cheap exit criteria — only pro
 ### Phase 2: LME ablation matrix (cached DB, ~10 min wall, parallel)
 
 After LME baseline DB is built, test these toggles **against the cached DB**:
-- `QMD_INGEST_EXTRACTION=off` (cat C — does extraction help LME?)
-- `QMD_INGEST_BATCH_EXTRACT=off` (cat B — per-session vs batch extraction)
+- `LOTL_INGEST_EXTRACTION=off` (cat C — does extraction help LME?)
+- `LOTL_INGEST_BATCH_EXTRACT=off` (cat B — per-session vs batch extraction)
 - `--model gemini-2.5-flash-lite` (cat D — A-B test cheaper model)
-- `QMD_RECALL_DUAL_PASS=on` (would dual-pass help LME, where it didn't help LoCoMo?)
+- `LOTL_RECALL_DUAL_PASS=on` (would dual-pass help LME, where it didn't help LoCoMo?)
 
 **Expected output:** which knobs improve LME without hurting LoCoMo.
 
@@ -2211,10 +2209,10 @@ Only ship if winner holds across **at least 2 conversations × 2 benchmarks**.
 
 ```sh
 # Full 199Q (honest score, ~25 min)
-wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd ~/qmd-eval && QMD_ZE_COLLECTIONS=off npx tsx evaluate/locomo/eval.mts --conv conv-26 --llm gemini'
+wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd ~/qmd-eval && LOTL_ZE_COLLECTIONS=off npx tsx evaluate/locomo/eval.mts --conv conv-26 --llm gemini'
 
 # Full 105Q conv-30 (current eval baseline)
-wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd ~/qmd-eval && QMD_ZE_COLLECTIONS=off npx tsx evaluate/locomo/eval.mts --conv conv-30 --llm gemini'
+wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd ~/qmd-eval && LOTL_ZE_COLLECTIONS=off npx tsx evaluate/locomo/eval.mts --conv conv-30 --llm gemini'
 
 # Quick 20Q sample (~2 min, but overestimates by ~20pp)
 wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd ~/qmd-eval && npx tsx evaluate/locomo/eval.mts --conv conv-30 --limit 20 --llm gemini'
@@ -2237,9 +2235,9 @@ wsl -d Ubuntu -- bash -lc 'rm -rf ~/qmd-eval/evaluate/locomo/dbs && mkdir -p ~/q
 | Zep | Three-tier graph: episodes + entities + communities | SOTA on DMR | github.com/getzep/graphiti |
 | Letta/MemGPT | Two-tier: recall (chunks) + archival (atomic), agent self-directed | — | github.com/letta-ai/letta |
 | memory-lancedb-pro | LanceDB + cross-encoder rerank + Weibull decay | — | github.com/CortexReach/memory-lancedb-pro |
-| **QMD v10** | **sqlite-vec + FTS5 + Mem0-style extraction + ZE rerank + expansion** | **67.6%** | this repo |
+| **Lotl v10** | **sqlite-vec + FTS5 + Mem0-style extraction + ZE rerank + expansion** | **67.6%** | this repo |
 
-Gap vs MemPalace: 21.3pp on R@10. Main difference: MemPalace stores 800-char chunks; QMD stores both individual dialog turns AND extracted atomic facts. Dual-pass retrieval (Zep-style) is the proposed bridge.
+Gap vs MemPalace: 21.3pp on R@10. Main difference: MemPalace stores 800-char chunks; Lotl stores both individual dialog turns AND extracted atomic facts. Dual-pass retrieval (Zep-style) is the proposed bridge.
 
 ---
 
@@ -2292,7 +2290,7 @@ Gap vs MemPalace: 21.3pp on R@10. Main difference: MemPalace stores 800-char chu
 - **Tinkerclaw** (globalcaos, 2025-2026) — github.com/globalcaos/tinkerclaw.
   OpenClaw fork with 21,504 commits. Internal design docs (NOT peer-reviewed
   papers, despite the README calling them "research papers"). Techniques already
-  extracted into QMD: importance log-modulation (Instant Recall doc), LRU-K
+  extracted into Lotl: importance log-modulation (Instant Recall doc), LRU-K
   eviction (Total Recall doc), Push Pack pattern (Total Recall doc), cleaning-
   lady cron (Sleep Consolidation doc). Remaining Tinkerclaw-specific techniques
   in §2: Identity Persistence (persona maintenance, Category 19), Round Table
@@ -2303,7 +2301,7 @@ Gap vs MemPalace: 21.3pp on R@10. Main difference: MemPalace stores 800-char chu
 
 - ~~A-MEM (Xu 2025, arXiv:2502.12110)~~ — NeurIPS 2025 poster. Zettelkasten-
   inspired dynamic memory organization. Architecturally interesting but targets
-  memory organization, not retrieval ranking. QMD's preference gap is a
+  memory organization, not retrieval ranking. Lotl's preference gap is a
   centroid/ranking problem. Keep as awareness; not actionable for v17.
 - ~~MemoryBank / Ebbinghaus~~ — Weibull decay works; decay not the bottleneck.
 - ~~Collins & Loftus 1975~~ — superseded by SYNAPSE (2026) which implements
