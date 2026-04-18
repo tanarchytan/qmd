@@ -81,15 +81,9 @@ export class TransformersRerankBackend implements LLM {
   }
 
   static async create(
-    // Default dtype is "fp32" — NOT because we want fp32, but because
-    // transformers.js v3 appends `_quantized` to the model_file_name when
-    // dtype is a quantized alias (q8/int8/uint8/etc). For explicit file
-    // names like `model_quint8_avx2`, we pass dtype="fp32" to suppress
-    // the suffix logic and let the explicit file name resolve cleanly.
-    // The actual quantization is baked into the file itself.
     modelId: string = "cross-encoder/ms-marco-MiniLM-L6-v2",
-    dtype: string = "fp32",
-    fileName: string | undefined = "model_quint8_avx2",
+    dtype?: string,
+    fileName?: string,
   ): Promise<TransformersRerankBackend> {
     const cacheKey = `${modelId}:${dtype}:${fileName ?? ""}`;
     const cached = backends.get(cacheKey);
@@ -108,12 +102,14 @@ export class TransformersRerankBackend implements LLM {
         (tf as any).env.allowLocalModels = false;
       }
 
-      // Same dtype/file name handling as the embed backend: when a fileName
-      // is set, omit dtype to avoid the v3 _quantized suffix munging.
+      // Mirror the embed backend's rule: an explicit fileName suppresses the
+      // transformers.js v3 `_quantized` suffix munging, so it wins if set.
+      // Otherwise pass dtype (if provided) and let transformers.js resolve
+      // the ONNX variant from the repo's /onnx/ folder.
       const modelOpts: Record<string, unknown> = {};
       if (fileName) {
         modelOpts.model_file_name = fileName;
-      } else {
+      } else if (dtype) {
         modelOpts.dtype = dtype;
       }
 
@@ -249,12 +245,17 @@ export function createTransformersRerankBackend(
     ?? envModel
     ?? process.env.LOTL_TRANSFORMERS_RERANK_MODEL
     ?? "cross-encoder/ms-marco-MiniLM-L6-v2";
+  // Legacy cross-encoder ships model_quint8_avx2 explicitly; newer rerankers
+  // (jina-v1, mxbai-rerank-*, modernbert-based) don't use that filename and
+  // silently fail to load if we force it. Only inherit the legacy file/dtype
+  // defaults when the user hasn't changed the model.
+  const isLegacyDefault = m === "cross-encoder/ms-marco-MiniLM-L6-v2";
   const d = dtype
     ?? process.env.LOTL_TRANSFORMERS_RERANK_DTYPE
-    ?? "fp32";
+    ?? (isLegacyDefault ? "fp32" : "q8");
   const f = fileName
     ?? envFile
     ?? process.env.LOTL_TRANSFORMERS_RERANK_FILE
-    ?? "model_quint8_avx2";
+    ?? (isLegacyDefault ? "model_quint8_avx2" : undefined);
   return TransformersRerankBackend.create(m, d, f);
 }
