@@ -1,0 +1,11 @@
+# Stage 13: LLM-judge A/B for flags that look retrieval-null but plausibly
+# change which memories reach the generator. n=100, gemini-2.5-flash gen+judge.
+# Judge-Acc is the discriminating metric — rAny@5/MRR will likely stay flat.
+
+baseline
+expand-keywords      LOTL_MEMORY_EXPAND=keywords
+expand-entities      LOTL_MEMORY_EXPAND=entities
+mmr-session          LOTL_MEMORY_MMR=session
+synonyms             LOTL_MEMORY_SYNONYMS=on
+scope-norm           LOTL_MEMORY_SCOPE_NORM=on
+all-content          LOTL_MEMORY_MMR=session LOTL_MEMORY_EXPAND=entities LOTL_MEMORY_SYNONYMS=on LOTL_MEMORY_SCOPE_NORM=on

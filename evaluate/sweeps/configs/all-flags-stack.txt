@@ -1,0 +1,9 @@
+# Stage 12: stack-everything test.
+# Single-flag ablations were null; test if stacking surfaces hidden interactions.
+# Drop LHASH + DIVERSIFY (strongest Phase 4 kill candidates).
+
+baseline
+all-content-flags         LOTL_MEMORY_MMR=session LOTL_MEMORY_EXPAND=entities LOTL_MEMORY_SYNONYMS=on LOTL_MEMORY_SCOPE_NORM=on LOTL_VEC_MIN_SIM=0.0
+all-content-flags-w73     LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_MMR=session LOTL_MEMORY_EXPAND=entities LOTL_MEMORY_SYNONYMS=on LOTL_MEMORY_SCOPE_NORM=on LOTL_VEC_MIN_SIM=0.0
+all-flags-including-weak  LOTL_MEMORY_MMR=session LOTL_MEMORY_EXPAND=entities LOTL_MEMORY_SYNONYMS=on LOTL_MEMORY_SCOPE_NORM=on LOTL_VEC_MIN_SIM=0.0 LOTL_MEMORY_LHASH=on LOTL_RECALL_DIVERSIFY=on
+expand-kw-plus-entities   LOTL_MEMORY_EXPAND=entities LOTL_MEMORY_SYNONYMS=on

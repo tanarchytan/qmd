@@ -93,13 +93,43 @@ fi
 record stage11 $S11 "$D11"
 
 # ---------------------------------------------------------------------------
+# Stage 12: all-flags-stacked test (LME + LoCoMo)
+# ---------------------------------------------------------------------------
+stage "stage12" "All-flags stacked (LME n=500)"
+bash evaluate/scripts/sweep-flags.sh \
+  evaluate/sweeps/configs/all-flags-stack.txt \
+  --corpus lme --limit 500 --name all-flags-stack-lme \
+  > "$FOLLOW_ROOT/12-all-flags-stack-lme.log" 2>&1
+S12=$?; D12=$(ls -d evaluate/sweeps/all-flags-stack-lme-*/ 2>/dev/null | tail -1)
+record stage12 $S12 "$D12"
+
+stage "stage12b" "All-flags stacked (LoCoMo)"
+bash evaluate/scripts/sweep-flags.sh \
+  evaluate/sweeps/configs/all-flags-stack.txt \
+  --corpus locomo --name all-flags-stack-locomo \
+  > "$FOLLOW_ROOT/12b-all-flags-stack-locomo.log" 2>&1
+S12B=$?; D12B=$(ls -d evaluate/sweeps/all-flags-stack-locomo-*/ 2>/dev/null | tail -1)
+record stage12b $S12B "$D12B"
+
+# ---------------------------------------------------------------------------
+# Stage 13: LLM-judge A/B for content-sensitive flags (n=100 LME, gemini)
+# ---------------------------------------------------------------------------
+stage "stage13" "LLM-judge A/B — content flags (n=100 LME, gemini gen+judge)"
+bash evaluate/scripts/sweep-flags-llm.sh \
+  evaluate/sweeps/configs/judge-ab-content-flags.txt \
+  --corpus lme --limit 100 --name judge-ab-content \
+  > "$FOLLOW_ROOT/13-judge-ab-content.log" 2>&1
+S13=$?; D13=$(ls -d evaluate/sweeps/judge-ab-content-*/ 2>/dev/null | tail -1)
+record stage13 $S13 "$D13"
+
+# ---------------------------------------------------------------------------
 # Recap
 # ---------------------------------------------------------------------------
 echo "" | tee -a "$MASTER"
 echo "===== FOLLOW-UP DONE — $(date +%H:%M:%S) =====" | tee -a "$MASTER"
 echo "" | tee -a "$MASTER"
 echo "## Sweep outputs" >> "$MASTER"
-for d in "$D7" "$D8" "$D9" "$D10" "$D11"; do
+for d in "$D7" "$D8" "$D9" "$D10" "$D11" "$D12" "$D12B" "$D13"; do
   [[ -n "$d" && -f "$d/SUMMARY.md" ]] && echo "- \`$d/SUMMARY.md\`" >> "$MASTER"
 done
 echo "" | tee -a "$MASTER"
