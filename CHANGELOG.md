@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.0.0] — 2026-04-18 — 🦎 Lotl
+## [1.0.0-rc1] - 2026-04-18 — 🦎 Lotl
 
 **First stable release under the new name.** Previously `@tanarchy/lotl` — rebranded
 to `@tanarchy/lotl` (Living-off-the-Land) to communicate the actual product
