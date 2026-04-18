@@ -1,4 +1,4 @@
-# Upstream cherry-pick log — tobi/qmd → tanarchytan/qmd
+# Upstream cherry-pick log — tobi/qmd → tanarchytan/lotl
 
 **Why this file exists.** We forked tobi/qmd to build the memory layer.
 The fork has diverged enough that a straight merge is no longer practical
@@ -23,7 +23,7 @@ where the last one left off.
 4. Cherry-pick the picks, update the table below, commit with `chore(upstream): sync N commits` style
 
 **Upstream remote:** `https://github.com/tobi/qmd.git`
-**Our remote:** `https://github.com/tanarchytan/qmd.git`
+**Our remote:** `https://github.com/tanarchytan/lotl.git`
 
 ---
 

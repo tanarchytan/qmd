@@ -22,6 +22,9 @@
   },
   "exclude": [
     "node_modules",
-    "dist"
+    "dist",
+    "devnotes",
+    "evaluate/legacy",
+    "finetune"
   ]
 }

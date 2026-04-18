@@ -20,7 +20,7 @@ allowed-tools: Bash(lotl:*), mcp__lotl__*
 ### Quick Setup (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tanarchytan/qmd/dev/setup/setup-qmd.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tanarchytan/lotl/dev/setup/setup-lotl.sh | bash
 ```
 
 Detects your environment, picks a provider, writes config, and verifies. Works for both OpenClaw and standalone.

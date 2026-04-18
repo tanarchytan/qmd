@@ -410,7 +410,7 @@ elsewhere. Next investigation target.
 ---
 
 **Package:** `@tanarchy/lotl` — npm (`@dev` tag for dev branch, `@fork` tag for stable)
-**Repo:** `github.com/tanarchytan/qmd` — `main` (stable) + `dev` (active development)
+**Repo:** `github.com/tanarchytan/lotl` — `main` (stable) + `dev` (active development)
 **Branch:** Work on `dev`, merge to `main` when stable.
 
 ---
