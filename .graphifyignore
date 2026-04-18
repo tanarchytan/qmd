@@ -1,0 +1,58 @@
+# graphify exclusions for QMD
+# gitignore syntax — patterns relative to repo root.
+# Goal: graph only the production source (src/), not tests, evals, or vendored stuff.
+
+# Build output / dependencies
+node_modules/
+dist/
+build/
+*.log
+
+# Tests + benchmarks (separate concern from architecture graph)
+test/
+src/bench-*.ts
+*.test.ts
+
+# Eval pipelines (LoCoMo, LongMemEval — these are throwaway harnesses, not source)
+evaluate/
+
+# Finetune subproject (Python ML training, separate codebase)
+finetune/
+
+# Setup tooling (one-shot installer scripts)
+setup/
+
+# Generated / vendored docs
+docs/
+skills/
+
+# Editor / IDE
+.claude/
+.cursor/
+.github/
+.git/
+
+# OS / misc
+.DS_Store
+*.tmp
+*.cache
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Big data files
+*.json
+!package.json
+!tsconfig*.json
+!openclaw.plugin.json
+!example-index.yml
+!.mcp.json
+*.jsonl
+*.ndjson
+*.csv
+
+# Lock files
+package-lock.json
+uv.lock
+yarn.lock
+pnpm-lock.yaml

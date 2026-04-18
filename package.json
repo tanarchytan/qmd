@@ -1,0 +1,137 @@
+{
+  "name": "@tanarchy/lotl",
+  "version": "1.0.0-rc1",
+  "description": "Lotl — Living-off-the-Land memory for AI agents. BM25 + vector RRF fusion + LLM rerank + temporal knowledge graph, on top of SQLite-vec and local ONNX. No infra, no LLM required.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "bin": {
+    "lotl": "bin/lotl"
+  },
+  "files": [
+    "index.ts",
+    "bin/",
+    "dist/",
+    "src/",
+    "hooks/",
+    "skills/",
+    "setup/",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "prepare": "node -e \"try{require('child_process').execSync('bash ./scripts/install-hooks.sh',{stdio:'ignore'})}catch{}\"",
+    "build": "node scripts/build.mjs",
+    "test": "vitest run --reporter=verbose test/",
+    "typecheck": "tsc --noEmit",
+    "lotl": "tsx src/cli/lotl.ts",
+    "index": "tsx src/cli/lotl.ts index",
+    "vector": "tsx src/cli/lotl.ts vector",
+    "search": "tsx src/cli/lotl.ts search",
+    "vsearch": "tsx src/cli/lotl.ts vsearch",
+    "rerank": "tsx src/cli/lotl.ts rerank",
+    "inspector": "npx @modelcontextprotocol/inspector tsx src/cli/lotl.ts mcp",
+    "release": "./scripts/release.sh"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tanarchytan/lotl.git"
+  },
+  "homepage": "https://github.com/tanarchytan/lotl#readme",
+  "bugs": {
+    "url": "https://github.com/tanarchytan/lotl/issues"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.1.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "better-sqlite3": "^12.9.0",
+    "fast-glob": "3.3.3",
+    "picomatch": "4.0.4",
+    "sqlite-vec": "0.1.9",
+    "web-tree-sitter": "^0.26.8",
+    "yaml": "2.8.3",
+    "zod": "^4.3.6"
+  },
+  "optionalDependencies": {
+    "sqlite-vec-darwin-arm64": "0.1.9",
+    "sqlite-vec-darwin-x64": "0.1.9",
+    "sqlite-vec-linux-arm64": "0.1.9",
+    "sqlite-vec-linux-x64": "0.1.9",
+    "sqlite-vec-windows-x64": "0.1.9",
+    "tree-sitter-go": "0.23.4",
+    "tree-sitter-python": "0.23.4",
+    "tree-sitter-rust": "0.24.0",
+    "tree-sitter-typescript": "0.23.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "^22.0.0",
+    "@types/picomatch": "^4.0.3",
+    "tsx": "4.21.0",
+    "vitest": "3.2.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild",
+      "tree-sitter-go",
+      "tree-sitter-javascript",
+      "tree-sitter-python",
+      "tree-sitter-rust",
+      "tree-sitter-typescript"
+    ]
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.0",
+    "typescript": "^5.9.3"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "lotl",
+    "living-off-the-land",
+    "agent-memory",
+    "memory",
+    "search",
+    "fts",
+    "bm25",
+    "vector",
+    "semantic-search",
+    "rrf",
+    "sqlite",
+    "sqlite-vec",
+    "embeddings",
+    "rag",
+    "mcp",
+    "reranking",
+    "knowledge-graph",
+    "openclaw",
+    "local-ai",
+    "llm",
+    "markdown"
+  ],
+  "author": "David Gillot <admin@tanarchy.org>",
+  "license": "MIT"
+}

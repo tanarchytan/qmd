@@ -1,0 +1,96 @@
+{
+  "id": "tanarchy-lotl",
+  "name": "Lotl",
+  "description": "Lotl — Living-off-the-Land memory for AI agents. BM25 + vector RRF fusion, LLM reranking, Weibull decay, temporal knowledge graph. On SQLite + local ONNX — no new infra.",
+  "version": "1.0.0-rc1",
+  "skills": [
+    "skills/lotl"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "autoRecall": {
+        "type": "boolean",
+        "default": true
+      },
+      "autoCapture": {
+        "type": "boolean",
+        "default": true
+      },
+      "topK": {
+        "type": "number",
+        "default": 5
+      },
+      "scope": {
+        "type": "string",
+        "default": "global"
+      },
+      "dbPath": {
+        "type": "string",
+        "description": "Override path to the Lotl SQLite database"
+      },
+      "embed": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "api | url | siliconflow | openai | zeroentropy"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "number"
+          }
+        }
+      },
+      "rerank": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "api | url | siliconflow | openai | zeroentropy | dashscope | gemini"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "description": "rerank | llm"
+          }
+        }
+      },
+      "queryExpansion": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "api | url | siliconflow | openai | gemini"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
