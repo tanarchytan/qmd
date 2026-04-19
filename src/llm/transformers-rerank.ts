@@ -146,10 +146,17 @@ export class TransformersRerankBackend implements LLM {
     // the model's max length (512 tokens for ms-marco-MiniLM-L6-v2).
     const queries = documents.map(() => query);
     const docTexts = documents.map(d => d.text);
+    // Cap tokenized length. Without max_length, transformers.js truncates
+    // to the model's max position embeddings — 8192 for ModernBERT — which
+    // blew through 67 GB RAM on a FusedMatMul node during the Phase 3
+    // reranker sweep (chain-20260419-002219 Stage 7). 512 is the standard
+    // reranker input length; override via LOTL_TRANSFORMERS_RERANK_MAXLEN.
+    const maxLen = Number(process.env.LOTL_TRANSFORMERS_RERANK_MAXLEN ?? 512);
     const inputs = this.tokenizer(queries, {
       text_pair: docTexts,
       padding: true,
       truncation: true,
+      max_length: maxLen,
     });
     // Forward pass returns { logits: Tensor of shape [N, 1] } for the
     // single-output cross-encoder head. .data is a Float32Array of length
