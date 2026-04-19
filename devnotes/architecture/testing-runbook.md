@@ -121,6 +121,20 @@ bash evaluate/scripts/watch-rerankers.sh --name rerank-ab &
 # Log streams to stdout; a SUMMARY.md diff prints on each new config landing.
 ```
 
+**One-shot snapshot** (any time during or after sweep):
+
+```sh
+bash evaluate/scripts/summarize-rerankers-now.sh --name rerank-ab
+# Writes SUMMARY.md in-place and prints the current table.
+```
+
+**Ghost-row bug in `summarize-sweep.mjs`:** when a sweep config has a
+multi-var env overlay (e.g. `LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_RERANK_BACKEND=transformers ...`), the parser sometimes
+displays the tag as the first env var (e.g. `LOTL_MEMORY_RRF_W_BM25=0.7`)
+instead of the actual tag (e.g. `jina-turbo-w73`). Cosmetic only — the
+data in the per-config JSON is correct. Check `config.txt` to identify
+which reranker that ghost row actually maps to.
+
 **Interpret results:**
 - Baseline (no-rerank) R@5 ≈ 52.0%, MRR ≈ 0.411 (on `7/3` weights).
 - A reranker is a **keeper** if it lifts MRR by ≥0.01 AND doesn't regress
@@ -217,7 +231,12 @@ evaluate/
 │   ├── probe-rerankers.mts               ← load-test rerank candidates before sweep
 │   ├── mrr-drift-bisect.sh               ← git-bisect MRR regressions
 │   ├── sweep-locomo-full.sh              ← standalone LoCoMo runner
-│   └── sweep-locomo-convs.sh             ← subset LoCoMo (conv-26 + 30)
+│   ├── sweep-locomo-convs.sh             ← subset LoCoMo (conv-26 + 30)
+│   ├── smoke-all-lmstudio.sh             ← LM Studio 4-pair smoke (Recipe 8)
+│   ├── smoke-resume-full.sh              ← LM Studio mid-flight resume (cache replay)
+│   ├── smoke-resume-locomo.sh            ← LM Studio LoCoMo-only resume
+│   ├── smoke-gemma-validate.sh           ← LM Studio gemma-4 A/B vs llama+qwen
+│   └── rejudge-failed.sh                 ← LM Studio rejudge-only pass (after ctx overflow)
 ├── sweeps/
 │   ├── configs/                          ← version-controlled sweep recipes
 │   │   ├── flag-sweep-phase1.txt
@@ -298,67 +317,139 @@ After any sweep, check:
   open file descriptor at loop start. Editing the config file mid-sweep
   is unreliable — kill and restart cleanly instead.
 
-## LM Studio harness (local LLM-as-judge / FC baselines)
+## Recipe 8 — LM Studio local LLM-as-judge (full workflow)
 
-Scripts live at `evaluate/scripts/smoke-all-lmstudio.sh` (baseline smoke),
-`evaluate/scripts/smoke-resume-full.sh` (mid-flight resume with cache replay),
-plus per-benchmark two-pass wrappers at
-`evaluate/{longmemeval,locomo}/lmstudio-two-pass.sh`.
+Everything we built 2026-04-19 for running LLM-as-judge against a local
+LM Studio server (OpenAI-compatible `/v1/*` + native `/api/v1/models/*`
+admin endpoints). Zero per-call cost vs Poe/Gemini; full reproducibility
+via llm-cache + deterministic temp=0 + seed=42.
 
-### Key gotchas locked in
+### Defaults wired into the harness
+
+- **Host:** `http://10.0.0.105:1234` (override via `LOTL_LMSTUDIO_HOST`)
+- **Generator:** `meta-llama-3.1-8b-instruct` Q4_K_M (override via `LOTL_LMSTUDIO_GEN_MODEL`)
+- **Judge:** `qwen/qwen3.6-35b-a3b` Q4_K_M (override via `LOTL_LMSTUDIO_JUDGE_MODEL`)
+- **Alternative stack:** `google/gemma-4-e4b` (gen) + `google/gemma-4-26b-a4b` (judge) — 4–5 parallel judge slots fit, materially faster judge pass. See `evaluate/scripts/smoke-gemma-validate.sh`.
+
+### The scripts, in order of typical use
+
+| Script | Purpose | Wall |
+|---|---|---|
+| `evaluate/scripts/smoke-all-lmstudio.sh` | Baseline 4-pair smoke (LME v11, LME v14, LoCoMo v11 lenient, LoCoMo v14 strict). Parallel-aware. | ~50–90 min |
+| `evaluate/scripts/smoke-resume-full.sh` | Mid-flight resume after a kill. Replays cached predictions, fresh-gens the rest. | ~20–30 min |
+| `evaluate/scripts/smoke-resume-locomo.sh` | LoCoMo-only resume (pairs 3+4 only) | ~15 min |
+| `evaluate/scripts/smoke-gemma-validate.sh` | Same 4 pairs with gemma-4 gen+judge, separate tags for A/B vs llama+qwen baseline | ~15 min |
+| `evaluate/scripts/rejudge-failed.sh` | Re-run judge pass only on a prior tag after judge failures (ctx overflow, unparseable). Uses llm-cache for free gen replay. | 5–10 min |
+| `evaluate/longmemeval/lmstudio-two-pass.sh` | LME-only two-pass (gen → swap → judge) | variable |
+| `evaluate/locomo/lmstudio-two-pass.sh` | LoCoMo-only two-pass | variable |
+
+### Gotchas locked in (learned the hard way 2026-04-19)
 
 1. **`context_length` on `/api/v1/models/load` is TOTAL across parallel slots,
    not per-slot.** Per-slot ctx = `context_length / parallel`. Size it as
    `desired_per_slot × parallel`. v11 prompts fit in ~4k per slot, v14 CoT
-   needs ~12k per slot (8k prompt + 2560 output). Verified 2026-04-19 —
-   `ctx=16384 parallel=8` gave 2k per slot and threw "Context size has been
-   exceeded" on every v14 question.
-2. **Single-instance guarantee.** Every `load_model` helper unloads `:2`..`:8`
-   suffix variants first. LM Studio routes bare-name requests
-   non-deterministically when multiple instances exist → transient fetch-fails.
-3. **Never run two smoke scripts concurrently.** They issue conflicting
-   load/unload to the same LM Studio → cascading "Operation canceled" errors.
-   Kill old runs before launching a new one.
-4. **Workers must match `parallel`.** `LOTL_LME_WORKERS` / `LOTL_LOCOMO_WORKERS`
-   = the parallel slot count you loaded with. Client-side concurrency is what
-   actually fills the slots — llama.cpp batches forward passes across active
-   slots, so idle slots = idle GPU.
-5. **llm-cache survives kills.** `evaluate/{longmemeval,locomo}/llm-cache.json`
-   is written on every successful call. Replaying the same eval with same
-   seed+temp hits the cache for all prior successes; only fresh questions
-   cost real GPU time. Used the full-resume pattern to recover mid-run.
+   needs ~12k per slot (8k prompt + 2560 output). `ctx=16384 parallel=8`
+   gives 2k per slot and throws "Context size has been exceeded" on every
+   v14 question.
+2. **Cross-model unload before load.** LM Studio does NOT auto-evict when
+   you call `/api/v1/models/load` — it tries to load the new model on top
+   of the existing one. qwen (22 GB) + llama (5 GB + kv) fits barely, but
+   partial CPU fallback makes qwen unreliable with transient fetch-fails.
+   Every `load_llama` must unload qwen first; `load_qwen` must unload llama.
+3. **Single-instance guarantee.** Each `load_model` helper unloads `:2`..`:8`
+   suffix variants first. Multiple loaded instances of the same model →
+   bare-name request routes non-deterministically → transient fetch-fails.
+4. **Never run two smoke scripts concurrently.** Each issues its own
+   load/unload → cascading "Operation canceled" errors. Kill old runs first.
+5. **Workers must match `parallel`.** `LOTL_LME_WORKERS` /
+   `LOTL_LOCOMO_WORKERS` = the parallel slot count loaded. Client-side
+   concurrency is what fills the slots; llama.cpp batches forward passes
+   across active slots.
+6. **Thinking models need bigger judge token budget.** qwen3.6 burns ~150
+   reasoning tokens before emitting the JSON verdict. Judge `max_tokens`
+   bumps to 768 automatically when `--judge lmstudio`. Gemma doesn't think,
+   so 96 tokens is enough if you switch.
+7. **qwen ctx=32768 for judge of long v14 CoT predictions.** Extracted
+   v14 answers can push judge input past 16k (we hit `n_keep=18904 > 16384`).
+   All scripts default to 32k now.
+8. **llm-cache survives kills.** `evaluate/{longmemeval,locomo}/llm-cache.json`
+   persists every successful `askLLM` call keyed by `{model, prompt, seed,
+   temperature}`. A re-run at the same seed hits the cache for every prior
+   success; only new questions cost GPU time. Used by `smoke-resume-full.sh`
+   and `rejudge-failed.sh`.
 
 ### VRAM budget (3090, 24 GB)
 
-| Model | Weights | kv/slot (ctx/slot × 131 KB) | Good default |
+| Model | Weights | kv/slot (tokens × ~131 KB GQA) | Suggested config |
 |---|---|---|---|
 | llama-3.1-8B Q4_K_M | 4.92 GB | 4096t × 131 KB ≈ 0.54 GB | parallel=16, ctx=65536 (v11) |
 | " | " | 12288t × 131 KB ≈ 1.61 GB | parallel=8, ctx=98304 (v14 CoT) |
-| qwen3.6-35B-a3b Q4_K_M | 22.07 GB | 16384t × 131 KB ≈ 2.15 GB | parallel=1, ctx=16384 (solo) |
+| qwen3.6-35B-a3b Q4_K_M | 22.07 GB | 16384t × 131 KB ≈ 2.15 GB | parallel=1, ctx=32768 (solo) |
+| gemma-4-26b-a4b Q4_K_M | ~17 GB | 16384t × 131 KB ≈ 1.54 GB | parallel=4, ctx=65536 (faster judge) |
+| gemma-4-e4b Q4_K_M | ~3 GB | 4096t × ~80 KB ≈ 0.33 GB | parallel=16, ctx=65536 (v11) |
 
-Never hold llama + qwen concurrent — they don't fit. Swap between them at
-each pair's gen→judge boundary.
+Never hold two heavy models concurrent — swap between them at each pair
+boundary.
 
 ### Typical commands
 
 ```sh
-# Clean baseline (all 4 pairs, ~60 min total with parallelism):
+# First-time baseline (all 4 pairs):
 bash evaluate/scripts/smoke-all-lmstudio.sh
 
-# Pick up from mid-flight after a kill (cache hits for completed q's):
+# Resume after kill (cache hits for completed q's):
 bash evaluate/scripts/smoke-resume-full.sh
 
-# Single-benchmark runs (use LOTL_LME_LIMIT / LOTL_LOCOMO_LIMIT to scope):
+# Single-benchmark runs:
 LOTL_LME_LIMIT=100 bash evaluate/longmemeval/lmstudio-two-pass.sh
 LOTL_LOCOMO_LIMIT=10 bash evaluate/locomo/lmstudio-two-pass.sh
+
+# A/B against gemma stack (runs after llama+qwen baseline lands):
+bash evaluate/scripts/smoke-gemma-validate.sh
+
+# Rejudge after ctx overflow / unparseable verdicts:
+bash evaluate/scripts/rejudge-failed.sh locomo smoke-v14-strict --rules v14 --judge strict
 ```
 
-Override sizing per prompt:
+Override sizing per prompt version:
 ```sh
 LOTL_LMSTUDIO_CTX_V11=81920 LOTL_LMSTUDIO_PARALLEL_V11=20 \
 LOTL_LMSTUDIO_CTX_V14=131072 LOTL_LMSTUDIO_PARALLEL_V14=8 \
   bash evaluate/scripts/smoke-all-lmstudio.sh
 ```
+
+### Prompt versions (both benchmarks)
+
+- **v11** (default) — rule-list + "Short answer:" constraint. Baseline since
+  2026-04-16. Lower ceiling on LLM-judge because unconstrained-length
+  systems score ~10pp higher per the locomo-audit methodology.
+- **v13** (LME only) — minimal, no rules, recommended for Gemini-judge runs
+  where rule lists constrain phrasing. Use via `LOTL_PROMPT_RULES=v13`.
+- **v14** — audit's 7-step CoT, ported from dial481/locomo-audit
+  `answer_prompt_cot`. No word limit. Output extracted via `extractFinalAnswer()`
+  that strips the scaffold (gold tokens leak through STEP 2 / STEP 6 otherwise).
+  Full-context baseline in the audit lifted 81.95% → 92.62% with this
+  prompt alone. `LOTL_PROMPT_RULES=v14`.
+
+### LoCoMo judge modes
+
+LoCoMo defaults to **lenient** judge ("touches on topic = CORRECT") for
+back-compat with prior Gemini-judge numbers. The audit identified this as
+producing a 6.9× leniency ratio (62.8% of vague-but-topical wrong answers
+scored CORRECT). Switch to the audit-corrected strict judge via
+`LOTL_LOCOMO_JUDGE=strict` — same prompt shape as the LME judge, keeps
+temporal format leniency ("May 7th" vs "7 May" still CORRECT).
+
+LME judge is already strict (no leniency bug there).
+
+### Interpreting smoke results
+
+Files saved at `evaluate/{longmemeval,locomo}/results-smoke-<tag>-pass{1,2}.json`:
+- pass1 = gen, pass2 = judge. pass2's `Judge` field is the binary LLM-as-judge
+  accuracy; pass1 has F1/EM/R@K retrieval numbers.
+- Small n (20 LME, 50 LoCoMo) is for wiring validation, not publishable
+  numbers. For real signal, scale to LME n=500 / LoCoMo `--limit 20`
+  (~200 questions) in Phase B.
 
 ## When to NOT run a sweep
 

@@ -41,7 +41,9 @@ CTX_V11="${LOTL_LMSTUDIO_CTX_V11:-65536}"    # 4096 per slot × 16 slots
 PARALLEL_V11="${LOTL_LMSTUDIO_PARALLEL_V11:-16}"
 CTX_V14="${LOTL_LMSTUDIO_CTX_V14:-98304}"    # 12288 per slot × 8 slots (v14 CoT needs ~10k)
 PARALLEL_V14="${LOTL_LMSTUDIO_PARALLEL_V14:-8}"
-CTX_QWEN="${LOTL_LMSTUDIO_CTX_QWEN:-16384}"
+# qwen ctx bumped to 32k — v14 CoT predictions can make judge input exceed
+# 16k with some LoCoMo questions (caught 2026-04-19, n_keep=18904 > 16384).
+CTX_QWEN="${LOTL_LMSTUDIO_CTX_QWEN:-32768}"
 PARALLEL_QWEN="${LOTL_LMSTUDIO_PARALLEL_QWEN:-1}"
 
 LME_LIMIT="${LOTL_LME_LIMIT:-20}"
@@ -65,6 +67,9 @@ unload_all_instances() {
 }
 load_llama() {
   local ctx="$1" parallel="$2"
+  # Cross-model unload: qwen weights (22 GB) + llama (5 GB + kv) exceeds 24 GB.
+  # LM Studio doesn't auto-evict on load — must unload the OTHER model explicitly.
+  unload_all_instances "$JUDGE_MODEL"
   unload_all_instances "$GEN_MODEL"
   curl -fsS -X POST "http://$HOST/api/v1/models/load" \
     -H "Content-Type: application/json" \
@@ -72,6 +77,7 @@ load_llama() {
   echo "[loaded] $GEN_MODEL ctx=$ctx parallel=$parallel" >&2
 }
 load_qwen() {
+  unload_all_instances "$GEN_MODEL"
   unload_all_instances "$JUDGE_MODEL"
   curl -fsS -X POST "http://$HOST/api/v1/models/load" \
     -H "Content-Type: application/json" \

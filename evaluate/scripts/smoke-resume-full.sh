@@ -34,7 +34,9 @@ CTX_V11=65536     # 4096 per slot × 16 slots — v11 prompts stay under 4k
 PARALLEL_V11=16
 CTX_V14=98304     # 12288 per slot × 8 slots — v14 CoT needs ~10k (8k prompt + 2560 output)
 PARALLEL_V14=8
-CTX_QWEN=16384
+# 32k for qwen — judge input on long v14 CoT predictions can exceed 16k
+# (caught 2026-04-19 with n_keep=18904 > 16384 during LoCoMo v14 strict).
+CTX_QWEN=32768
 PARALLEL_QWEN=1
 
 TS=$(date +%Y%m%d-%H%M%S)
@@ -53,6 +55,9 @@ unload_all_instances() {
 }
 load_llama() {
   local ctx="$1" parallel="$2"
+  # Cross-model unload: qwen (~22 GB) + llama (~5 GB + kv) exceeds 24 GB VRAM.
+  # LM Studio doesn't auto-evict on load — must unload the OTHER model explicitly.
+  unload_all_instances "$JUDGE_MODEL"
   unload_all_instances "$GEN_MODEL"
   curl -fsS -X POST "http://$HOST/api/v1/models/load" \
     -H "Content-Type: application/json" \
@@ -60,6 +65,7 @@ load_llama() {
   echo "[loaded] $GEN_MODEL ctx=$ctx parallel=$parallel" >&2
 }
 load_qwen() {
+  unload_all_instances "$GEN_MODEL"
   unload_all_instances "$JUDGE_MODEL"
   curl -fsS -X POST "http://$HOST/api/v1/models/load" \
     -H "Content-Type: application/json" \

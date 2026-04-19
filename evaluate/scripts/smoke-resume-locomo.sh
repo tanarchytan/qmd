@@ -25,7 +25,7 @@ PARALLEL_V11=16
 CTX_V14=98304     # 12288 per slot × 8 slots
 PARALLEL_V14=8
 PARALLEL_QWEN=1
-CTX_QWEN=16384
+CTX_QWEN=32768
 
 TS=$(date +%Y%m%d-%H%M%S)
 LOG_DIR="/tmp/smoke-resume-$TS"
@@ -43,6 +43,7 @@ unload_all_instances() {
 }
 load_llama() {
   local ctx="$1" parallel="$2"
+  unload_all_instances "$JUDGE_MODEL"
   unload_all_instances "$GEN_MODEL"
   curl -fsS -X POST "http://$HOST/api/v1/models/load" \
     -H "Content-Type: application/json" \
@@ -50,6 +51,7 @@ load_llama() {
   echo "[loaded] $GEN_MODEL ctx=$ctx parallel=$parallel" >&2
 }
 load_qwen() {
+  unload_all_instances "$GEN_MODEL"
   unload_all_instances "$JUDGE_MODEL"
   curl -fsS -X POST "http://$HOST/api/v1/models/load" \
     -H "Content-Type: application/json" \
