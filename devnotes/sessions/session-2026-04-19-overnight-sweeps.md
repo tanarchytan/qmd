@@ -5,18 +5,30 @@
 
 ## Key findings (tomorrow's triage order)
 
-### 🔴 MRR drift is deterministic — bisect tomorrow
+### 🟢 MRR drift — investigated, closed as phantom
 
 Stage 5 of main chain ran 5 identical LME n=500 baseline passes. Every single
 run produced **MRR 0.907 / rAny@5 97.8% / R@5 93.4%** — byte-identical.
 
-SNAPSHOTS.md pinned 0.917 MRR on this exact corpus / embed config. Drift is
-**real code drift**, not bench noise.
+SNAPSHOTS.md pinned 0.917 MRR. Initial read: ~1pp drift. **Investigated in a
+worktree at `/c/Users/DavidGillot/Projects/qmd-bisect` (since cleaned up):**
 
-**Action:** `git bisect` between the SNAPSHOTS commit and current HEAD using
-`evaluate/scripts/mrr-drift-bisect.sh`. Helper is ready, needs a good commit
-hash (the one that produced 0.917 on the SNAPSHOTS pin). Probable window:
-the 8-commit "refactor(cli)" series or the qmd→lotl rename commit.
+| Commit | MRR (n=100) | rAny@5 | R@5 |
+|---|---|---|---|
+| `53ad895` (pre-rename) | 0.881 | 92.0% | 86.2% |
+| `9af176c` (SNAPSHOTS commit) | 0.908 | 98.0% | 94.5% |
+| `ba4f062` (current dev) | 0.908 | 98.0% | 94.5% |
+
+**Finding: no drift exists.** Current code at `ba4f062` produces the same
+metrics as the commit that added SNAPSHOTS.md (`9af176c`). SNAPSHOTS' claim
+of 0.917 was likely measured on a different DB state, different machine
+(WSL?), or was cherry-picked from a favorable run.
+
+Pre-rename code (`53ad895`) actually scored ~2.7pp LOWER MRR. The rename
+era IMPROVED retrieval, not regressed it.
+
+**Action:** SNAPSHOTS.md needs the 0.917 values corrected to 0.907-0.908 to
+match reproducible measurements. Hold until follow-up chain completes.
 
 ### 🔴 All reranker data is INVALID — fixed, needs rerun
 
