@@ -211,6 +211,17 @@ export function initializeDatabase(db: Database): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_hash ON memories(content_hash)`);
 
+  // Phase 5 migration — fact-augmented embedding keys (design doc:
+  // devnotes/architecture/phase5-kg-and-fact-aug-design.md). Adds two
+  // nullable columns so pre-Phase-5 DBs upgrade in place. NULL means the
+  // extraction pass hasn't run yet → LOTL_MEMORY_EMBED_SOURCE=fact falls
+  // back to content embedding automatically.
+  const memCols = db.prepare(`PRAGMA table_info(memories)`).all() as Array<{ name: string }>;
+  const haveFactText = memCols.some((c) => c.name === "fact_text");
+  const haveFactEmbed = memCols.some((c) => c.name === "fact_embedding");
+  if (!haveFactText) db.exec(`ALTER TABLE memories ADD COLUMN fact_text TEXT`);
+  if (!haveFactEmbed) db.exec(`ALTER TABLE memories ADD COLUMN fact_embedding BLOB`);
+
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
       text, category, scope,
