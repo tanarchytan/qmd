@@ -1,6 +1,20 @@
 # Lotl TODO — Optimization Phases
 
-> Last updated: 2026-04-17 late night (Phase 7 diagnostic — char-cap bug identified; fix in place, retest queued).
+> Last updated: 2026-04-19 morning.
+>
+> **2026-04-19 session summary** — Phase 0-6 optimization infrastructure
+> shipped; rerun chain in flight. See
+> `devnotes/sessions/session-2026-04-19-morning-triage.md` for triage order
+> and `devnotes/sessions/v1.0.0-ga-release-checklist.md` for the release
+> path after data lands. Key corrections since last update:
+>
+> - MRR "drift" 0.917 → 0.907 is a phantom — code unchanged since SNAPSHOTS
+>   commit, original number likely measured on different DB state. No bisect.
+> - Reranker data in the first sweeps is INVALID (silent no-op fixed in
+>   `9cba9bc`) + ModernBERT OOM fixed in `f766f9d`. Reruns landing today.
+> - `LOTL_RECALL_NO_TOUCH` guard added — eval A/B hygiene for shared DBs.
+> - 5 flag polarity bugs documented in
+>   `devnotes/architecture/env-flag-polarity-reference.md`.
 >
 > **Reading order:** Current best → completed → pending → backlog → parked.
 > Each pending phase has pass/fail gates.
