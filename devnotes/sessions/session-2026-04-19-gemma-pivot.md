@@ -88,11 +88,78 @@ Running on the local workstation (not the LM Studio box). Last observed:
 - 3 bigger rerankers (mxbai-base, gte-modernbert, tomaarsen) queued,
   will grind through the night per prior decision to let them run.
 
+## Phase B actual results (landed 2026-04-19 20:11, wall 2h10m)
+
+### LME n=500 gemma v14 CoT strict
+
+| Metric | Value |
+|---|---|
+| Judge accuracy | **40.3%** (176/437 judged) |
+| Dropouts | 63 (12.6%) |
+| F1 | 13.3% |
+| rAny@5 | 97.4% |
+| R@5 | 88.4% |
+
+### LoCoMo n=200 gemma v14 CoT strict
+
+| Metric | Value |
+|---|---|
+| Judge accuracy | **44.7%** (80/179 judged) |
+| Dropouts | 21 (10.5%) |
+| F1 | 13.9% |
+| rAny@5 | 73.5% |
+| R@5 | 49.5% |
+
+### Smoke-vs-scale regression (critical finding)
+
+| Config | Smoke n | Smoke % | Phase B n | Phase B % | Δ |
+|---|---|---|---|---|---|
+| LME gemma v14 | 20 | 80.0 | 437 | 40.3 | **−39.7pp** |
+| LoCoMo gemma v14 strict | 43 | 51.2 | 179 | 44.7 | −6.5pp |
+
+LME smoke landed on an unusually-easy subset (temporal-reasoning only —
+`longmemeval_oracle.json` first 20 are all temporal). At real scale the
+question-type mix brings it down. LoCoMo less dramatic because 50
+questions span all 10 convs already.
+
+### Fair at-scale comparison (LoCoMo v14 strict, only same-n match we have)
+
+| Stack | n | Judge % |
+|---|---|---|
+| Llama+qwen | 39 | 38.5 |
+| **Gemma+gemma** | **179** | **44.7** |
+
+Gemma wins ~6pp at scale on LoCoMo. Margin smaller than the smoke
+suggested (was ~15pp). LME needs a llama+qwen n=500 run for a fair
+cross-stack comparison — we don't have that yet.
+
+### Retrieval findings
+
+- **LME rAny@5 = 97.4%** at n=500 — retrieval ceiling-bound. Audit's
+  point exactly: LME doesn't discriminate systems at retrieval layer.
+- **LoCoMo R@5 = 49.5%** — matches baseline from rerank sweep (52%).
+  Room to discriminate here.
+- **F1 ~13% on both** — predictions phrase things differently from gold
+  tokens. Judge catches equivalence at ~40–45%. F1 is a noisy proxy;
+  judge is the real metric.
+
+## Takeaways
+
+1. **Smoke must be ≥100 questions per cell.** Anything smaller is
+   unreliable. Audit's methodology validated empirically.
+2. **Gemma wins LoCoMo by ~6pp at scale** (not 15pp). Still real.
+3. **Gemma judge drops 10–13% at scale** — retry pass or schema-forcing
+   prompt needed.
+4. **LME retrieval is ceiling-bound** (97.4% rAny@5). Future LME
+   improvement must come from answer-gen.
+5. **LME llama+qwen at n=500 still needed** for fair cross-stack claim.
+
 ## Open tasks after Phase B
 
 1. Compile final report + update `devnotes/metrics/`
 2. Patch gemma judge JSON dropouts (retry pass or schema-forcing prompt)
-3. Decide whether to retire qwen/llama stack entirely or keep as
-   reproducibility reference
+3. Run llama+qwen LME n=500 for fair cross-stack comparison on LME
 4. Update published LoCoMo baselines — current numbers are lenient-inflated
+5. Decide whether to retire qwen/llama stack entirely or keep as
+   reproducibility reference
 
