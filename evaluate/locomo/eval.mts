@@ -21,6 +21,11 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { openCache } from "../../src/llm/cache.js";
 
+// Default LOTL_RECALL_NO_TOUCH=on for eval — must be set before memory imports
+// so recall never bumps access_count. Opt-out for production-like runs:
+// LOTL_RECALL_NO_TOUCH=off. See evaluate/longmemeval/eval.mts for context.
+if (process.env.LOTL_RECALL_NO_TOUCH === undefined) process.env.LOTL_RECALL_NO_TOUCH = "on";
+
 // Quality fix C: response cache for reproducible re-runs
 // Path overridable via LOTL_LLM_CACHE_PATH — useful for running alternative
 // model stacks (gemma, etc.) without polluting the canonical llama/qwen cache.

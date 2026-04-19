@@ -19,6 +19,16 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { openCache } from "../../src/llm/cache.js";
 
+// Default LOTL_RECALL_NO_TOUCH=on for the whole eval module. This MUST be set
+// before src/memory/index.ts is imported (below) so the first recall also
+// sees it. Without this, memoryRecall bumps access_count each call which
+// shifts Weibull-decay ranking → changes retrieved memories → changes the
+// prompt → invalidates llm-cache keys → re-runs cache-miss and try to
+// regenerate. Caught 2026-04-19, cost 3+ LM Studio crashes. Scripts already
+// export this but setting it here is belt+suspenders for new scripts.
+// Explicit opt-out (production behavior): LOTL_RECALL_NO_TOUCH=off.
+if (process.env.LOTL_RECALL_NO_TOUCH === undefined) process.env.LOTL_RECALL_NO_TOUCH = "on";
+
 // Cache path is overridable — lets alternative model stacks (gemma, etc.)
 // keep their own cache without polluting the canonical llama/qwen cache.
 const LLM_CACHE_PATH = process.env.LOTL_LLM_CACHE_PATH || join(process.cwd(), "evaluate/longmemeval/llm-cache.json");
