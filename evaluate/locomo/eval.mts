@@ -14,9 +14,11 @@
  */
 
 import { readFileSync, writeFileSync, renameSync, rmSync, mkdtempSync, existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { join, dirname, resolve as pathResolve } from "path";
 import { tmpdir } from "os";
 import { pathToFileURL } from "url";
+import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
 import { openCache } from "../../src/llm/cache.js";
 
 // Quality fix C: response cache for reproducible re-runs
@@ -50,7 +52,7 @@ type Database = ReturnType<typeof openDatabase>;
 // LLM providers
 // ---------------------------------------------------------------------------
 
-type LLMProvider = "gemini" | "minimax" | "poe";
+type LLMProvider = "gemini" | "minimax" | "poe" | "lmstudio";
 
 // Pinned model versions (quality fix B) — prevents silent rolling updates.
 const LLM_CONFIG: Record<LLMProvider, { url: string; model: string; keyEnv: string }> = {
@@ -69,6 +71,13 @@ const LLM_CONFIG: Record<LLMProvider, { url: string; model: string; keyEnv: stri
     url: "https://api.poe.com/v1/chat/completions",
     model: process.env.LOTL_POE_MODEL || "gpt-4o-mini",
     keyEnv: "POE_API_KEY",
+  },
+  // LM Studio (local OpenAI-compatible). Same wiring as evaluate/longmemeval/eval.mts.
+  // See evaluate/longmemeval/lmstudio-two-pass.sh for model-swap orchestration.
+  lmstudio: {
+    url: `http://${process.env.LOTL_LMSTUDIO_HOST || "10.0.0.105:1234"}/v1/chat/completions`,
+    model: process.env.LOTL_LMSTUDIO_GEN_MODEL || "meta-llama-3.1-8b-instruct",
+    keyEnv: "LOTL_LMSTUDIO_KEY",
   },
 };
 
@@ -93,6 +102,7 @@ async function askLLM(
   if (provider === "gemini") return askGemini(prompt, apiKey);
   if (provider === "minimax") return askMiniMax(prompt, apiKey);
   if (provider === "poe") return askOpenAICompat(prompt, apiKey, cfg.url, model, maxTokens);
+  if (provider === "lmstudio") return askOpenAICompat(prompt, apiKey || "lm-studio", cfg.url, model, maxTokens);
   throw new Error(`LLM provider not supported: ${provider}`);
 }
 
@@ -124,9 +134,18 @@ async function askOpenAICompat(
   return text;
 }
 
-// LLM-as-judge (Mem0-style "generous on topic" grading, see HYBRID_HARNESS.md).
-// Returns 1 if CORRECT, 0 if WRONG, null if judge disabled or errored.
-const JUDGE_SYSTEM_PROMPT =
+// LLM-as-judge — two modes, selected via LOTL_LOCOMO_JUDGE=strict|lenient (default: lenient for back-compat).
+//
+//   "lenient" (legacy) — Mem0/HYBRID_HARNESS.md style, "touches on topic = CORRECT".
+//     Produces the 6.9× leniency ratio the locomo-audit repo identified
+//     (62.8% false-CORRECT rate on adversarial vague-but-topical answers).
+//     Kept as default to preserve continuity with prior LoCoMo results.
+//
+//   "strict" (audit-corrected) — same prompt shape as evaluate/longmemeval/eval.mts.
+//     "same facts as gold" + "missing any required fact = INCORRECT". Temporal
+//     format leniency kept ("May 7th" vs "7 May" still CORRECT). Use this for
+//     trustworthy QA accuracy. Enable via LOTL_LOCOMO_JUDGE=strict.
+const JUDGE_SYSTEM_PROMPT_LENIENT =
   "You are a grader. You will be given a question, a gold answer, and a predicted answer.\n\n" +
   "Judge whether the predicted answer is CORRECT or WRONG.\n\n" +
   "Be generous: if the predicted answer touches the same topic/facts as the gold, mark CORRECT — " +
@@ -135,6 +154,17 @@ const JUDGE_SYSTEM_PROMPT =
   "For adversarial questions (gold is a refusal like 'not mentioned' or 'no information available'), " +
   "mark CORRECT only if the prediction also refuses / says insufficient information.\n\n" +
   "Reply on one line with a JSON object: {\"correct\": true|false}";
+const JUDGE_SYSTEM_PROMPT_STRICT =
+  "You are a strict but fair grader. Given a question, a gold-standard answer, and a candidate answer, decide whether the candidate answer is factually equivalent to the gold. " +
+  "CORRECT if the candidate expresses the same facts as the gold (different wording or extra non-contradictory detail is fine). " +
+  "Temporal format variations like 'May 7th' vs '7 May' are CORRECT when they refer to the same date. " +
+  "INCORRECT if any required fact is missing, contradicted, or has a different value. " +
+  "For adversarial questions (gold is a refusal like 'not mentioned' or 'no information available'), mark CORRECT only if the prediction also refuses / says insufficient information. " +
+  "Respond on one line with a single JSON object: {\"correct\": true|false, \"reason\": \"<short sentence>\"}";
+const JUDGE_SYSTEM_PROMPT =
+  (process.env.LOTL_LOCOMO_JUDGE || "lenient") === "strict"
+    ? JUDGE_SYSTEM_PROMPT_STRICT
+    : JUDGE_SYSTEM_PROMPT_LENIENT;
 
 async function askJudge(question: string, predicted: string, gold: string): Promise<number | null> {
   if (!judgeProvider) return null;
@@ -145,7 +175,12 @@ async function askJudge(question: string, predicted: string, gold: string): Prom
     `Respond with the JSON object only.`;
   const fullPrompt = `${JUDGE_SYSTEM_PROMPT}\n\n${userMsg}`;
   try {
-    const raw = await askLLM(fullPrompt, judgeProvider, 96, judgeModelOverride ?? undefined);
+    // LM Studio thinking models (qwen3.6-35b-a3b) burn 150+ reasoning_tokens
+    // before emitting the verdict content. Bump cap to 768 so `content` isn't
+    // starved. Override via LOTL_JUDGE_MAX_TOKENS for other models.
+    const envCap = Number(process.env.LOTL_JUDGE_MAX_TOKENS ?? 0);
+    const judgeMaxTokens = envCap > 0 ? envCap : (judgeProvider === "lmstudio" ? 768 : 96);
+    const raw = await askLLM(fullPrompt, judgeProvider, judgeMaxTokens, judgeModelOverride ?? undefined);
     // JSON path (preferred, Poe/gpt-4o).
     const m = raw.match(/\{[\s\S]*?\}/);
     if (m) {
@@ -238,10 +273,145 @@ async function askMiniMax(prompt: string, apiKey: string): Promise<string> {
   return text;
 }
 
+/**
+ * Extract the FINAL ANSWER section from a v14 CoT response.
+ * The 7-step scaffold embeds gold tokens verbatim in STEP 2 / STEP 6, so F1/EM
+ * on the raw response is ~100% regardless of correctness. Strip everything
+ * except the text after "## FINAL ANSWER:". Fallback: last non-empty paragraph.
+ */
+function extractFinalAnswer(raw: string): string {
+  if (!raw) return "";
+  const s = raw.replace(/\r\n/g, "\n");
+  const m = s.match(/(?:^|\n)\s*#{0,3}\s*FINAL ANSWER:?\s*\n?([\s\S]*?)\s*$/i);
+  if (m && m[1]) return m[1].trim().replace(/^\[|\]$/g, "").trim();
+  const paras = s.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  return (paras[paras.length - 1] || s).trim();
+}
+
+/**
+ * Persist {question_id, prompt, raw, extracted, model, provider, hash} to
+ * disk so a later judge pass can rescore without regenerating answers.
+ * Best-effort — swallow fs errors to keep the eval loop resilient.
+ */
+async function persistAnswer(
+  questionId: string,
+  question: string,
+  prompt: string,
+  raw: string,
+  extracted: string,
+  provider: LLMProvider,
+): Promise<void> {
+  if (process.env.LOTL_ANSWER_CACHE === "off") return;
+  const model = LLM_CONFIG[provider].model;
+  const hash = createHash("sha256")
+    .update(`${questionId}\u0001${model}\u0001${provider}\u0001${prompt}`)
+    .digest("hex").slice(0, 16);
+  const dir = pathResolve(process.env.LOTL_ANSWER_CACHE_DIR || "evaluate/locomo/answer-cache");
+  const path = `${dir}/${provider}-${hash}.json`;
+  const payload = {
+    question_id: questionId,
+    question,
+    model,
+    provider,
+    prompt_rules: process.env.LOTL_PROMPT_RULES || "v11",
+    prompt_hash: createHash("sha256").update(prompt).digest("hex").slice(0, 16),
+    raw,
+    extracted,
+    ts: new Date().toISOString(),
+  };
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(payload, null, 2));
+}
+
 function buildAnswerPrompt(question: string, memories: string[], category: number, groundTruthIsNull: boolean = false): string {
   const context = memories.map((m, i) => `[${i + 1}] ${m}`).join("\n");
   const contextBlock = context;
   const promptVer = process.env.LOTL_PROMPT_RULES || "v11";
+
+  // v14: 7-step CoT — ported verbatim from dial481/locomo-audit's answer_prompt_cot.
+  // Audit showed this prompt alone (no memory system, just full context) lifts
+  // GPT-4.1-mini from 81.95% (memos 5-6 word limit) to 92.62% on LoCoMo. The
+  // expected output is ~2000 completion tokens; the FINAL ANSWER tag is
+  // required for extractFinalAnswer() to strip the scaffold. Adversarial
+  // (cat 5 / null gold) answers must still return "undefined" via the
+  // instruction appended below.
+  if (promptVer === "v14") {
+    const abstentionRule = (category === 5 || groundTruthIsNull)
+      ? "\n\nIMPORTANT: If the memories do not contain information to answer this question, FINAL ANSWER must be exactly: undefined"
+      : "";
+    return `You are an intelligent memory assistant tasked with retrieving accurate information from episodic memories.
+
+# CONTEXT:
+You have access to episodic memories from conversations between two speakers. These memories contain
+timestamped information that may be relevant to answering the question.
+
+# INSTRUCTIONS:
+Your goal is to synthesize information from all relevant memories to provide a comprehensive and accurate answer.
+You MUST follow a structured Chain-of-Thought process to ensure no details are missed.
+Actively look for connections between people, places, and events to build a complete picture. Synthesize information from different memories to answer the user's question.
+It is CRITICAL that you move beyond simple fact extraction and perform logical inference. When the evidence strongly suggests a connection, you must state that connection. Do not dismiss reasonable inferences as "speculation." Your task is to provide the most complete answer supported by the available evidence.
+
+# CRITICAL REQUIREMENTS:
+1. NEVER omit specific names - use "Amy's colleague Rob" not "a colleague"
+2. ALWAYS include exact numbers, amounts, prices, percentages, dates, times
+3. PRESERVE frequencies exactly - "every Tuesday and Thursday" not "twice a week"
+4. MAINTAIN all proper nouns and entities as they appear${abstentionRule}
+
+# RESPONSE FORMAT (You MUST follow this structure):
+
+## STEP 1: RELEVANT MEMORIES EXTRACTION
+[List each memory that relates to the question, with its timestamp]
+- Memory 1: [timestamp] - [content]
+- Memory 2: [timestamp] - [content]
+...
+
+## STEP 2: KEY INFORMATION IDENTIFICATION
+[Extract ALL specific details from the memories]
+- Names mentioned: [list all person names, place names, company names]
+- Numbers/Quantities: [list all amounts, prices, percentages]
+- Dates/Times: [list all temporal information]
+- Frequencies: [list any recurring patterns]
+- Other entities: [list brands, products, etc.]
+
+## STEP 3: CROSS-MEMORY LINKING
+[Identify entities that appear in multiple memories and link related information. Make reasonable inferences when entities are strongly connected.]
+- Shared entities: [list people, places, events mentioned across different memories]
+- Connections found: [e.g., "Memory 1 mentions A moved from hometown → Memory 2 mentions A's hometown is LA → Therefore A moved from LA"]
+- Inferred facts: [list any facts that require combining information from multiple memories]
+
+## STEP 4: TIME REFERENCE CALCULATION
+[If applicable, convert relative time references]
+- Original reference: [e.g., "last year" from May 2022]
+- Calculated actual time: [e.g., "2021"]
+
+## STEP 5: CONTRADICTION CHECK
+[If multiple memories contain different information]
+- Conflicting information: [describe]
+- Resolution: [explain which is most recent/reliable]
+
+## STEP 6: DETAIL VERIFICATION CHECKLIST
+- [ ] All person names included: [list them]
+- [ ] All locations included: [list them]
+- [ ] All numbers exact: [list them]
+- [ ] All frequencies specific: [list them]
+- [ ] All dates/times precise: [list them]
+- [ ] All proper nouns preserved: [list them]
+
+## STEP 7: ANSWER FORMULATION
+[Explain how you're combining the information to answer the question]
+
+## FINAL ANSWER:
+[Provide the concise answer with ALL specific details preserved]
+
+---
+
+Memories:
+${contextBlock}
+
+Question: ${question}
+
+Now, follow the Chain-of-Thought process above to answer the question:`;
+  }
 
   if (category === 5 || groundTruthIsNull) {
     // Adversarial — answer "undefined" for events that never happened
@@ -894,7 +1064,19 @@ async function main() {
         const t1 = Date.now();
         try {
           const prompt = buildAnswerPrompt(qa.question, answerMemories, qa.category, qa.answer == null);
-          prediction = await askLLM(prompt);
+          // v14 CoT emits ~1500–2500 output tokens (7-step scaffold + final answer).
+          // Other prompt versions stay at the default (256) because they explicitly
+          // instruct "Short answer:" — no reason to pay for longer output.
+          const answerMaxTokens = process.env.LOTL_PROMPT_RULES === "v14" ? 2560 : 256;
+          const raw = await askLLM(prompt, activeLLM, answerMaxTokens);
+          // For v14 strip the CoT scaffold and keep only the FINAL ANSWER.
+          // Scoring the raw scaffold is ~100% F1 because STEP 2 / STEP 6 echo
+          // the gold tokens verbatim.
+          const extracted = process.env.LOTL_PROMPT_RULES === "v14" ? extractFinalAnswer(raw) : raw;
+          prediction = extracted;
+          // Persist {question, prompt, raw, extracted, model, hash} for replay
+          // with a different judge without regenerating answers.
+          try { await persistAnswer(`${conv.sample_id}-q${i}`, qa.question, prompt, raw, extracted, activeLLM); } catch { /* best-effort */ }
         } catch (e) {
           prediction = memories.map(m => m.text).join(" "); // fallback to raw memories
           process.stderr.write(`\n    [warn] MiniMax failed for q${i}: ${e}\n`);

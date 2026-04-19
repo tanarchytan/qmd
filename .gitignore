@@ -46,6 +46,7 @@ evaluate/locomo/results.json
 evaluate/locomo/results-*.json
 evaluate/locomo/locomo10.json
 evaluate/locomo/llm-cache.json
+evaluate/locomo/answer-cache/
 evaluate/locomo/**/*.log
 evaluate/longmemeval/longmemeval_*.json
 evaluate/longmemeval/dbs/
