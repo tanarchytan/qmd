@@ -2,7 +2,7 @@
  * Shared LLM response cache for evaluation reproducibility.
  *
  * Quality fix C: 100% reproducible re-runs of identical configs.
- * Cache key = sha256(model + temperature + seed + prompt)
+ * Cache key = sha256(model + temperature + seed + max_tokens + prompt)
  * Persistence = JSON file (atomic write per insert)
  *
  * Usage:
@@ -23,6 +23,13 @@ export type CacheKey = {
   model: string;
   temperature: number;
   seed?: number;
+  /**
+   * Optional token budget. Added to the hash so thinking-model empty-content
+   * entries cached at a smaller budget don't shadow valid results at a larger
+   * budget. When omitted, defaults to "default" string so older callers still
+   * work (backward compat with existing cache entries).
+   */
+  max_tokens?: number;
   prompt: string;
 };
 
@@ -36,7 +43,11 @@ export type LLMCache = {
 
 function makeHash(key: CacheKey): string {
   const h = createHash("sha256");
-  h.update(`${key.model}|${key.temperature}|${key.seed ?? "noseed"}|${key.prompt}`);
+  // Include max_tokens in the hash. Caught 2026-04-19 with gemma-4-e4b:
+  // thinking models cache empty content when the budget is consumed by
+  // reasoning; a subsequent call with a larger budget would hit that stale
+  // empty entry without this field in the hash.
+  h.update(`${key.model}|${key.temperature}|${key.seed ?? "noseed"}|${key.max_tokens ?? "default"}|${key.prompt}`);
   return h.digest("hex").slice(0, 16);
 }
 
