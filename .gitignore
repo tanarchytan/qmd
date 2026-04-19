@@ -18,11 +18,12 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Tool working state — vexp MCP server, pi config, serena. All auto-regenerated
-# by the local tools; tracking them pollutes PRs with tool noise.
+# Tool working state — vexp MCP server, pi config, code-review-graph.
+# All auto-regenerated locally; tracking pollutes PRs with tool noise.
+# (.serena/, .claude/, .vscode/ already covered above)
 .vexp/
 .pi/
-.serena/
+.code-review-graph/
 
 # Markdown — only allow tracked top-level docs and curated subdirs.
 # (root *.md is ignored by default; explicitly track the ones below.)
