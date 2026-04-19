@@ -29,6 +29,11 @@ JUDGE_MODEL="google/gemma-4-26b-a4b"
 export LOTL_LMSTUDIO_HOST="$HOST"
 export LOTL_LMSTUDIO_KEY="${LOTL_LMSTUDIO_KEY:-lm-studio}"
 export LOTL_SKIP_PREFLIGHT=on
+# IMPORTANT: must export so eval.mts picks up gemma models, not the llama default.
+# Without these, LME defaults to meta-llama-3.1-8b-instruct which LM Studio
+# auto-loads at default ctx=4096 → every prompt overflows → fallback cascade.
+export LOTL_LMSTUDIO_GEN_MODEL="$GEN_MODEL"
+export LOTL_LMSTUDIO_JUDGE_MODEL="$JUDGE_MODEL"
 
 # Thinking-model token budgets (gemma-4-e4b burns ~300-500 reasoning tokens).
 export LOTL_ANSWER_MAX_TOKENS=1536
