@@ -21,8 +21,8 @@ export LOTL_SKIP_PREFLIGHT=on
 # concurrent slots = more throughput. Qwen solo uses ~24 GB so parallel=1.
 CTX_V11=8192
 PARALLEL_V11=16
-CTX_V14=10240
-PARALLEL_V14=12
+CTX_V14=16384
+PARALLEL_V14=8
 PARALLEL_QWEN=1
 CTX_QWEN=16384
 
