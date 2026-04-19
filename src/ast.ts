@@ -228,7 +228,7 @@ async function loadGrammar(language: SupportedLanguage): Promise<LanguageType | 
   } catch (err) {
     failedLanguages.add(language);
     grammarCache.delete(wasmKey);
-    console.warn(`[qmd] Failed to load tree-sitter grammar for ${language}: ${err}`);
+    console.warn(`[lotl] Failed to load tree-sitter grammar for ${language}: ${err}`);
     return null;
   }
 }
@@ -305,7 +305,7 @@ export async function getASTBreakPoints(
 
     return Array.from(seen.values()).sort((a, b) => a.pos - b.pos);
   } catch (err) {
-    console.warn(`[qmd] AST parse failed for ${filepath}, falling back to regex: ${err instanceof Error ? err.message : err}`);
+    console.warn(`[lotl] AST parse failed for ${filepath}, falling back to regex: ${err instanceof Error ? err.message : err}`);
     return [];
   }
 }

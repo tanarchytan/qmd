@@ -187,10 +187,10 @@ async function fetchWithRetry(
 
       const status = resp.status;
       const snippet = await readBodySnippet(resp);
-      const hint = status === 401 ? ' — check your QMD_*_API_KEY'
+      const hint = status === 401 ? ' — check your LOTL_*_API_KEY'
         : status === 403 ? ' — API key may lack permissions'
-        : status === 404 ? ' — check your QMD_*_URL (endpoint not found)'
-        : status === 422 ? ' — check your QMD_*_MODEL (invalid model name)'
+        : status === 404 ? ' — check your LOTL_*_URL (endpoint not found)'
+        : status === 422 ? ' — check your LOTL_*_MODEL (invalid model name)'
         : '';
       const msg = `[${provider}] ${operation} failed (HTTP ${status}${hint}) ${url}${snippet ? ` — ${snippet}` : ""}`;
 

@@ -366,7 +366,7 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
 
   // No per-store LLM instantiation post-cleanup. Local embed loads on first
   // use inside store/embeddings.ts via createTransformersEmbedBackend(); rerank
-  // and generate route through RemoteLLM (configured via QMD_*_PROVIDER env).
+  // and generate route through RemoteLLM (configured via LOTL_*_PROVIDER env).
 
   const store: QMDStore = {
     internal,

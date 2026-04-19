@@ -80,7 +80,7 @@ async function downloadToFile(url: string, dest: string, quiet: boolean): Promis
   if (!res.ok) throw new Error(`HF download ${res.status} ${res.statusText}: ${url}`);
   if (!res.body) throw new Error(`HF download empty body: ${url}`);
   mkdirSync(dirname(dest), { recursive: true });
-  if (!quiet) process.stderr.write(`[qmd.embed-direct] fetching ${url}\n`);
+  if (!quiet) process.stderr.write(`[lotl.embed-direct] fetching ${url}\n`);
   const out = createWriteStream(dest);
   await streamPipeline(res.body as any, out);
 }
@@ -105,7 +105,7 @@ async function ensureOnnxCached(
     try {
       await downloadToFile(`${baseUrl}/${variant}.onnx_data`, dataFile, quiet);
     } catch {
-      if (!quiet) process.stderr.write(`[qmd.embed-direct] no external data for ${variant} (ok if inline)\n`);
+      if (!quiet) process.stderr.write(`[lotl.embed-direct] no external data for ${variant} (ok if inline)\n`);
     }
   }
   return onnxFile;
@@ -174,7 +174,7 @@ export class TransformersEmbedDirectBackend implements LLM {
       const outputName = (session.outputNames[0]) as string;
       if (!quiet) {
         process.stderr.write(
-          `[qmd.embed-direct] loaded ${modelId}/${variant} pool=${pooling} output=${outputName} inputs=${session.inputNames.join(",")}\n`,
+          `[lotl.embed-direct] loaded ${modelId}/${variant} pool=${pooling} output=${outputName} inputs=${session.inputNames.join(",")}\n`,
         );
       }
       return new TransformersEmbedDirectBackend(modelId, session, tokenizer, outputName, pooling, (ort as any).Tensor);
