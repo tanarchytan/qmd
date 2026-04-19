@@ -61,19 +61,23 @@ export const MEMORY_L0_WEIGHT = 0.2;
 export const MEMORY_L1_WEIGHT = 0.5;
 export const MEMORY_L2_WEIGHT = 0.3;
 export const MEMORY_L2_FIRST_N_USER_TURNS = 3;
-// Rerank blend: swept 0.0/1.0 through 0.6/0.4 at n=500 LME (2026-04-16).
-// 0.1/0.9 is optimal: 98.6% rAny@5, 94.7% R@5, 0.937 MRR, 0.761 pref MRR.
-// 0.0/1.0 crashes (s-user 100→77%) — 10% original weight is critical tiebreaker.
-// 0.4/0.6 through 0.2/0.8 are monotonically worse as original weight increases.
-// Cross-encoder logits are min-max normalized before blending.
-// Rerank blend on RRF pipeline: RRF scores (~0.01-0.03) are too small
-// relative to min-max normalized rerank scores (0-1). Any blend gives
-// rerank near-total dominance regardless of weight. Score normalization
-// before blending is unimplemented; current default ships without rerank.
-// On old additive pipeline: 0.1/0.9 was optimal (MRR 0.937).
-// On RRF pipeline: rerank regresses at every blend tested.
-// KNOWN LIMITATION: to re-enable rerank, implement min-max normalization
-// on BOTH sides before blending (tracked in docs/TODO.md Phase 8).
+// Rerank blend weights. Both sides are min-max normalized to [0,1] in
+// memoryRecall before the blend (src/memory/index.ts:1557-1600), so the
+// ratio below is meaningful — not a score-dominance artifact.
+//
+// History:
+//   Old additive pipeline (pre-RRF): 0.1/0.9 was optimal (MRR 0.937 n=500).
+//   RRF pipeline (2026-04-16): the historical "rerank regresses on RRF"
+//     finding was measured on a buggy run where rerank silently no-op'd
+//     for every non-legacy model (filename hardcoded; fixed 2026-04-19 in
+//     commit 9cba9bc). Actual RRF + rerank blend behavior is an open
+//     question pending the clean reruns landing 2026-04-19.
+//   0.7/0.3 was conservative choice for v1 — favoring the RRF signal
+//     while still admitting rerank corrections. Revisit after reruns.
+//
+// Rerank still defaults OFF in memoryRecall (LOTL_MEMORY_RERANK=on to enable)
+// because cross-encoder per-query cost is 4-5 s on CPU — too slow for
+// production memory recall latency targets.
 export const MEMORY_RERANK_BLEND_ORIGINAL = 0.7;
 export const MEMORY_RERANK_BLEND_RERANK = 0.3;
 

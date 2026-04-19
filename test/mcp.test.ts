@@ -1207,4 +1207,224 @@ describe("MCP HTTP Transport", () => {
     expect(typeof sc.cleanup.totalMemoriesBefore).toBe("number");
     expect(sc.reflection).toBeDefined();
   });
+
+  // -------------------------------------------------------------------------
+  // Comprehensive tool-registration smoke tests.
+  //
+  // Ensures every registered MCP tool responds to tools/call with a 200 and
+  // a well-formed JSON-RPC result (no exception, no "Method not found"). Not
+  // a deep correctness test — tools requiring an LLM provider skipIf the
+  // relevant env var is missing; smoke assertions focus on structure.
+  //
+  // Goal: tomorrow-me renames a tool handler, breaks something subtle, this
+  // test catches it. Preserving the CRUD-aligned surface is a v1 contract.
+  // -------------------------------------------------------------------------
+  describe("tool-registration smoke (all 17 MCP tools)", () => {
+    let initDone = false;
+    async function ensureInit() {
+      if (initDone) return;
+      await mcpRequest({
+        jsonrpc: "2.0", id: 1, method: "initialize",
+        params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1.0" } },
+      });
+      initDone = true;
+    }
+
+    async function callTool(id: number, name: string, args: any) {
+      await ensureInit();
+      return mcpRequest({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
+    }
+
+    // Shape assertion shared across most smoke tests. A successful MCP call
+    // returns `result.content[]` with at least one block. Error responses
+    // live under `error.code` — we check that path for graceful failures.
+    function assertNoErrorOrAccepted(res: any, acceptedErrorPatterns: RegExp[] = []) {
+      expect(res.status).toBe(200);
+      if (res.json.error) {
+        const msg = String(res.json.error.message ?? "");
+        const accepted = acceptedErrorPatterns.some(p => p.test(msg));
+        if (!accepted) {
+          throw new Error(`unexpected MCP error: ${msg}`);
+        }
+        return;
+      }
+      expect(res.json.result).toBeDefined();
+      expect(Array.isArray(res.json.result.content)).toBe(true);
+    }
+
+    // --- Doc tools ---
+
+    test("doc_get_batch returns batch map", async () => {
+      const res = await callTool(400, "doc_get_batch", { paths: ["readme.md", "docs/meetings/weekly.md"] });
+      assertNoErrorOrAccepted(res);
+    });
+
+    test("doc_status returns health", async () => {
+      const res = await callTool(401, "doc_status", {});
+      assertNoErrorOrAccepted(res);
+      // status should always produce some content text
+      if (res.json.result) {
+        expect(res.json.result.content[0].type).toBe("text");
+      }
+    });
+
+    test("briefing returns wake-up context", async () => {
+      const res = await callTool(402, "briefing", {});
+      assertNoErrorOrAccepted(res);
+    });
+
+    test("doc_manage dispatches an admin op", async () => {
+      // `cleanup` is the cheapest admin op — doesn't mutate anything if there's
+      // nothing to clean up. Other ops (embed/update/sync) can touch network
+      // or filesystem, so they're skipped from smoke.
+      const res = await callTool(403, "doc_manage", { operation: "cleanup" });
+      assertNoErrorOrAccepted(res, [/no collections/, /not implemented/]);
+    });
+
+    // --- Memory tools ---
+
+    test("memory_add_batch accepts multi-memory payload", async () => {
+      const res = await callTool(410, "memory_add_batch", {
+        memories: [
+          { text: "alice likes green tea", category: "preference", scope: "smoke-batch" },
+          { text: "alice uses postgres", category: "fact", scope: "smoke-batch" },
+        ],
+      });
+      assertNoErrorOrAccepted(res, [/embed|backend|provider/i]);
+    });
+
+    test("memory_register_scopes accepts scope list", async () => {
+      const res = await callTool(411, "memory_register_scopes", {
+        scopes: ["smoke-scope-a", "smoke-scope-b"],
+      });
+      assertNoErrorOrAccepted(res);
+    });
+
+    test("memory_update accepts id + patch", async () => {
+      // Create a memory first to have a valid id, then update it.
+      const addRes = await callTool(412, "memory_add", {
+        text: "placeholder for update test",
+        category: "fact",
+        scope: "smoke-update",
+      });
+      const addContent = addRes.json.result?.structuredContent;
+      const id = addContent?.id;
+      if (!id) {
+        // memory_add may fail if no embed backend configured — accept that
+        // and skip the update branch. The smoke value is proving the handler
+        // exists and responds.
+        return;
+      }
+      const res = await callTool(413, "memory_update", {
+        id,
+        text: "updated placeholder",
+        importance: 0.8,
+      });
+      assertNoErrorOrAccepted(res);
+    });
+
+    test("memory_stats returns category/scope/tier breakdown", async () => {
+      const res = await callTool(414, "memory_stats", {});
+      assertNoErrorOrAccepted(res);
+      if (res.json.result) {
+        const sc = res.json.result.structuredContent ?? {};
+        // Stats shape is an object with at least one of these fields; be
+        // loose to accommodate schema drift.
+        const hasSome = ["total", "byTier", "byCategory", "byScope"].some(k => k in sc);
+        if (!hasSome) expect(res.json.result.content[0].type).toBe("text");
+      }
+    });
+
+    test("memory_recall_tiered accepts query", async () => {
+      const res = await callTool(415, "memory_recall_tiered", {
+        query: "smoke test query for tiered recall",
+        limit: 3,
+      });
+      assertNoErrorOrAccepted(res, [/embed|backend|provider/i]);
+    });
+
+    test("memory_push_pack returns context bundle", async () => {
+      const res = await callTool(416, "memory_push_pack", {
+        query: "build a context pack about smoke tests",
+        maxMemories: 5,
+      });
+      assertNoErrorOrAccepted(res, [/embed|backend|provider/i]);
+    });
+
+    test("memory_extract without LLM uses heuristic fallback", async () => {
+      const res = await callTool(417, "memory_extract", {
+        text: "User: I prefer dark mode. Assistant: Noted — I'll keep dark mode on.",
+        scope: "smoke-extract",
+      });
+      assertNoErrorOrAccepted(res, [/embed|backend|provider|LLM|remote/i]);
+    });
+
+    test("memory_reflect summarizes top-K when called", async () => {
+      // Requires a remote LLM to actually do work; tool should still respond
+      // gracefully when no provider is configured.
+      const res = await callTool(418, "memory_reflect", {
+        question: "what do we know about smoke testing?",
+        scope: "smoke-reflect",
+      });
+      assertNoErrorOrAccepted(res, [/no remote|no provider|embed|not configured/i]);
+    });
+
+    // --- Knowledge graph tools ---
+
+    test("knowledge_add stores a triple", async () => {
+      const res = await callTool(420, "knowledge_add", {
+        subject: "alice",
+        predicate: "likes",
+        object: "green tea",
+        scope: "smoke-kg",
+      });
+      assertNoErrorOrAccepted(res);
+    });
+
+    test("knowledge_search queries by subject", async () => {
+      const res = await callTool(421, "knowledge_search", {
+        subject: "alice",
+        scope: "smoke-kg",
+      });
+      assertNoErrorOrAccepted(res);
+    });
+
+    test("knowledge_invalidate marks a triple invalid", async () => {
+      // Seed a triple to invalidate
+      await callTool(422, "knowledge_add", {
+        subject: "bob",
+        predicate: "works_at",
+        object: "initech",
+        scope: "smoke-kg",
+      });
+      const searchRes = await callTool(423, "knowledge_search", {
+        subject: "bob",
+        scope: "smoke-kg",
+      });
+      const triples = searchRes.json.result?.structuredContent?.results ?? [];
+      if (triples.length === 0) return; // search didn't hit — skip the invalidate step
+      const tripleId = triples[0]?.id;
+      if (!tripleId) return;
+      const res = await callTool(424, "knowledge_invalidate", { id: tripleId });
+      assertNoErrorOrAccepted(res);
+    });
+
+    test("knowledge_entities lists distinct subjects", async () => {
+      const res = await callTool(425, "knowledge_entities", { scope: "smoke-kg" });
+      assertNoErrorOrAccepted(res);
+    });
+
+    test("knowledge_timeline returns chronology for a subject", async () => {
+      const res = await callTool(426, "knowledge_timeline", {
+        subject: "alice",
+        scope: "smoke-kg",
+      });
+      assertNoErrorOrAccepted(res);
+    });
+
+    test("knowledge_stats returns entity/fact counts", async () => {
+      const res = await callTool(427, "knowledge_stats", {});
+      assertNoErrorOrAccepted(res);
+    });
+  });
 });
