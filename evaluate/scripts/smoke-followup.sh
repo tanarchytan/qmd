@@ -43,6 +43,8 @@ load_qwen() {
   unload_all_instances "google/gemma-4-e4b"
   unload_all_instances "google/gemma-4-26b-a4b"
   unload_all_instances "$JUDGE_MODEL"
+  # 3s VRAM-release settle before loading qwen (~22 GB).
+  sleep 3
   curl -fsS -X POST "http://$HOST/api/v1/models/load" \
     -H "Content-Type: application/json" \
     -d "{\"model\":\"$JUDGE_MODEL\",\"context_length\":$CTX_QWEN,\"parallel\":$PARALLEL_QWEN}" >&2

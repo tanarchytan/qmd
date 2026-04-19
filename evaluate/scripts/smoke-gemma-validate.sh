@@ -71,9 +71,14 @@ unload_all() {
     done
   done
 }
+# 3s settle after unload — LM Studio sometimes needs time to fully release
+# VRAM before the next load. Without this, a ~20 GB load right after a
+# ~20 GB unload can oversubscribe the GPU during the brief overlap window
+# and crash the server (caught 2026-04-19 at pair 2 judge boundary).
 load_gen() {
   local ctx="$1" parallel="$2"
   unload_all
+  sleep 3
   curl -fsS -X POST "http://$HOST/api/v1/models/load" \
     -H "Content-Type: application/json" \
     -d "{\"model\":\"$GEN_MODEL\",\"context_length\":$ctx,\"parallel\":$parallel}" >&2
@@ -81,6 +86,7 @@ load_gen() {
 }
 load_judge() {
   unload_all
+  sleep 3
   curl -fsS -X POST "http://$HOST/api/v1/models/load" \
     -H "Content-Type: application/json" \
     -d "{\"model\":\"$JUDGE_MODEL\",\"context_length\":$CTX_JUDGE,\"parallel\":$PARALLEL_JUDGE}" >&2
