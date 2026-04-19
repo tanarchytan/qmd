@@ -129,6 +129,7 @@ async function askOpenAICompat(
   model: string,
   maxTokens: number = 256,
   callType: "gen" | "judge" = "gen",
+  responseFormat?: Record<string, unknown>,
 ): Promise<string> {
   // Include maxTokens in the cache key. Thinking models like qwen/gemma can
   // burn the whole budget on reasoning_content before emitting content — a
@@ -138,18 +139,20 @@ async function askOpenAICompat(
   const cacheKey = { model, temperature: 0, seed: LLM_SEED, max_tokens: maxTokens, prompt };
   const cached = llmCache.get(cacheKey);
   if (cached != null) return cached;
+  const body: Record<string, unknown> = {
+    model,
+    messages: [{ role: "user", content: prompt }],
+    temperature: 0,
+    // Pass seed so Poe/OpenAI can return deterministic outputs at temp=0 —
+    // identical inputs produce identical outputs → cache hits on re-run.
+    seed: LLM_SEED,
+    max_tokens: maxTokens,
+  };
+  if (responseFormat) body.response_format = responseFormat;
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0,
-      // Pass seed so Poe/OpenAI can return deterministic outputs at temp=0 —
-      // identical inputs produce identical outputs → cache hits on re-run.
-      seed: LLM_SEED,
-      max_tokens: maxTokens,
-    }),
+    body: JSON.stringify(body),
   });
   if (!resp.ok) throw new Error(`${model} ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
   const data = await resp.json() as any;
@@ -207,6 +210,7 @@ async function askLLM(
   maxTokens: number = 128,
   modelOverride?: string,
   callType: "gen" | "judge" = "gen",
+  responseFormat?: Record<string, unknown>,
 ): Promise<string> {
   const cfg = LLM_CONFIG[provider];
   const apiKey = process.env[cfg.keyEnv];
@@ -220,10 +224,32 @@ async function askLLM(
     }
     return askGemini(prompt, apiKey);
   }
-  if (provider === "poe") return askOpenAICompat(prompt, apiKey, cfg.url, model, maxTokens, callType);
-  if (provider === "lmstudio") return askOpenAICompat(prompt, apiKey || "lm-studio", cfg.url, model, maxTokens, callType);
+  if (provider === "poe") return askOpenAICompat(prompt, apiKey, cfg.url, model, maxTokens, callType, responseFormat);
+  if (provider === "lmstudio") return askOpenAICompat(prompt, apiKey || "lm-studio", cfg.url, model, maxTokens, callType, responseFormat);
   throw new Error(`LLM provider not supported: ${provider}`);
 }
+
+// JSON Schema for the judge verdict. LM Studio (llama.cpp backend) enforces
+// strict JSON output server-side when passed in response_format — eliminates
+// the 10-13% unparseable-verdict rate we saw with gemma-4-26b-a4b at n=500.
+// OpenAI/Poe also accept this format (json_schema is the newer API vs the
+// legacy json_object). Gemini doesn't support it so we skip there.
+const JUDGE_RESPONSE_SCHEMA = {
+  type: "json_schema",
+  json_schema: {
+    name: "verdict",
+    strict: true,
+    schema: {
+      type: "object",
+      properties: {
+        correct: { type: "boolean" },
+        reason: { type: "string" },
+      },
+      required: ["correct", "reason"],
+      additionalProperties: false,
+    },
+  },
+};
 
 // -----------------------------------------------------------------------------
 // LM Studio model-swap helpers
@@ -361,7 +387,11 @@ async function askJudge(question: string, predicted: string, gold: string): Prom
     // LOTL_JUDGE_MAX_TOKENS if you hit content-truncation on other models.
     const envCap = Number(process.env.LOTL_JUDGE_MAX_TOKENS ?? 0);
     const judgeMaxTokens = envCap > 0 ? envCap : (judgeProvider === "lmstudio" ? 768 : 96);
-    const raw = await askLLM(fullPrompt, judgeProvider, judgeMaxTokens, judgeModelOverride ?? undefined, "judge");
+    // Force structured JSON on lmstudio/poe paths. Gemma-4-26b-a4b without
+    // schema enforcement dropped 10-13% of verdicts at n=500 (unparseable).
+    // Gemini doesn't honor response_format so we pass undefined there.
+    const rf = (judgeProvider === "lmstudio" || judgeProvider === "poe") ? JUDGE_RESPONSE_SCHEMA : undefined;
+    const raw = await askLLM(fullPrompt, judgeProvider, judgeMaxTokens, judgeModelOverride ?? undefined, "judge", rf);
     // 1) JSON path — preferred, works for Poe/gpt-4o and well-behaved models.
     const m = raw.match(/\{[\s\S]*?\}/);
     if (m) {

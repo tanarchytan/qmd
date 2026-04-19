@@ -96,6 +96,7 @@ async function askLLM(
   provider: LLMProvider = activeLLM,
   maxTokens: number = 256,
   modelOverride?: string,
+  responseFormat?: Record<string, unknown>,
 ): Promise<string> {
   const cfg = LLM_CONFIG[provider];
   const apiKey = process.env[cfg.keyEnv];
@@ -103,10 +104,28 @@ async function askLLM(
   const model = modelOverride || cfg.model;
   if (provider === "gemini") return askGemini(prompt, apiKey);
   if (provider === "minimax") return askMiniMax(prompt, apiKey);
-  if (provider === "poe") return askOpenAICompat(prompt, apiKey, cfg.url, model, maxTokens);
-  if (provider === "lmstudio") return askOpenAICompat(prompt, apiKey || "lm-studio", cfg.url, model, maxTokens);
+  if (provider === "poe") return askOpenAICompat(prompt, apiKey, cfg.url, model, maxTokens, responseFormat);
+  if (provider === "lmstudio") return askOpenAICompat(prompt, apiKey || "lm-studio", cfg.url, model, maxTokens, responseFormat);
   throw new Error(`LLM provider not supported: ${provider}`);
 }
+
+// JSON Schema forcing valid judge output on schema-aware backends (lmstudio,
+// poe). Fixes the 10-13% unparseable rate observed with gemma-4-26b-a4b at
+// n=200. Gemini doesn't honor response_format so it falls back to the free-
+// form text parse.
+const JUDGE_RESPONSE_SCHEMA = {
+  type: "json_schema",
+  json_schema: {
+    name: "verdict",
+    strict: true,
+    schema: {
+      type: "object",
+      properties: { correct: { type: "boolean" } },
+      required: ["correct"],
+      additionalProperties: false,
+    },
+  },
+};
 
 async function askOpenAICompat(
   prompt: string,
@@ -114,22 +133,25 @@ async function askOpenAICompat(
   url: string,
   model: string,
   maxTokens: number = 256,
+  responseFormat?: Record<string, unknown>,
 ): Promise<string> {
   // Include maxTokens in the key so thinking-model empty-content entries
   // cached at a smaller budget don't shadow valid results at a larger budget.
   const cacheKey = { model, temperature: 0, seed: LLM_SEED, max_tokens: maxTokens, prompt };
   const cached = llmCache.get(cacheKey);
   if (cached != null) return cached;
+  const body: Record<string, unknown> = {
+    model,
+    messages: [{ role: "user", content: prompt }],
+    temperature: 0,
+    seed: LLM_SEED,
+    max_tokens: maxTokens,
+  };
+  if (responseFormat) body.response_format = responseFormat;
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0,
-      seed: LLM_SEED,
-      max_tokens: maxTokens,
-    }),
+    body: JSON.stringify(body),
   });
   if (!resp.ok) throw new Error(`${model} ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
   const data = await resp.json() as any;
@@ -184,7 +206,8 @@ async function askJudge(question: string, predicted: string, gold: string): Prom
     // starved. Override via LOTL_JUDGE_MAX_TOKENS for other models.
     const envCap = Number(process.env.LOTL_JUDGE_MAX_TOKENS ?? 0);
     const judgeMaxTokens = envCap > 0 ? envCap : (judgeProvider === "lmstudio" ? 768 : 96);
-    const raw = await askLLM(fullPrompt, judgeProvider, judgeMaxTokens, judgeModelOverride ?? undefined);
+    const rf = (judgeProvider === "lmstudio" || judgeProvider === "poe") ? JUDGE_RESPONSE_SCHEMA : undefined;
+    const raw = await askLLM(fullPrompt, judgeProvider, judgeMaxTokens, judgeModelOverride ?? undefined, rf);
     // JSON path (preferred, Poe/gpt-4o).
     const m = raw.match(/\{[\s\S]*?\}/);
     if (m) {
