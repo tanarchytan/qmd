@@ -31,12 +31,12 @@ export LOTL_SKIP_PREFLIGHT=on
 # applied as a floor in eval.mts (v14's 2560 default still wins over 1536).
 export LOTL_ANSWER_MAX_TOKENS="${LOTL_ANSWER_MAX_TOKENS:-1536}"
 
-# Disable llm-cache for gemma runs. The cache hash doesn't include max_tokens
-# (backward compat), so prior failed gemma runs with a smaller budget leave
-# empty-content entries that would cache-hit new runs at the bumped budget.
-# Fresh generation every time → slower but correct. Llama/qwen caches are
-# untouched because this only sets LOTL_LLM_CACHE=off for the gemma subshell.
-export LOTL_LLM_CACHE=off
+# Separate cache file for gemma runs — keeps stale empty-content entries
+# from previous gemma attempts out of the canonical llama/qwen cache, and
+# lets pass 2 (judge) cache-hit pass 1's (gen) predictions without needing
+# gemma-4-e4b to stay loaded during the judge pass. Path is eval-specific.
+export LOTL_LLM_CACHE_PATH="${LOTL_LLM_CACHE_PATH:-$PWD/evaluate/longmemeval/llm-cache-gemma.json}"
+# Locomo eval uses the same env var but a different default — override for LoCoMo pairs below.
 
 # Gemma budget — tuned after 2026-04-19 crash (LM Studio / driver OOM when
 # gemma-4-26b-a4b loaded at ctx=131072 parallel=4 = ~27.5 GB on 24 GB 3090).

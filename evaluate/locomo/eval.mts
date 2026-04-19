@@ -22,7 +22,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { openCache } from "../../src/llm/cache.js";
 
 // Quality fix C: response cache for reproducible re-runs
-const LLM_CACHE_PATH = join(process.cwd(), "evaluate/locomo/llm-cache.json");
+// Path overridable via LOTL_LLM_CACHE_PATH — useful for running alternative
+// model stacks (gemma, etc.) without polluting the canonical llama/qwen cache.
+const LLM_CACHE_PATH = process.env.LOTL_LLM_CACHE_PATH || join(process.cwd(), "evaluate/locomo/llm-cache.json");
 const llmCache = openCache(LLM_CACHE_PATH);
 // Tell extractAndStore (chatComplete in src/llm.ts) to use the same cache file
 process.env.LOTL_LLM_CACHE_PATH = LLM_CACHE_PATH;

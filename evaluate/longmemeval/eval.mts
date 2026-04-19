@@ -19,7 +19,9 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { openCache } from "../../src/llm/cache.js";
 
-const LLM_CACHE_PATH = join(process.cwd(), "evaluate/longmemeval/llm-cache.json");
+// Cache path is overridable — lets alternative model stacks (gemma, etc.)
+// keep their own cache without polluting the canonical llama/qwen cache.
+const LLM_CACHE_PATH = process.env.LOTL_LLM_CACHE_PATH || join(process.cwd(), "evaluate/longmemeval/llm-cache.json");
 const llmCache = openCache(LLM_CACHE_PATH);
 process.env.LOTL_LLM_CACHE_PATH = LLM_CACHE_PATH;
 
