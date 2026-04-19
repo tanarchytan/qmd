@@ -34,6 +34,12 @@ export LOTL_SKIP_PREFLIGHT=on
 # auto-loads at default ctx=4096 → every prompt overflows → fallback cascade.
 export LOTL_LMSTUDIO_GEN_MODEL="$GEN_MODEL"
 export LOTL_LMSTUDIO_JUDGE_MODEL="$JUDGE_MODEL"
+# Load-bearing — without this, memoryRecall bumps access_count each call, which
+# shifts Weibull-decay ranking, which changes retrieved memories, which changes
+# the prompt, which misses the llm-cache. Re-runs then try to regenerate via
+# auto-loaded models at default ctx=4096 and crash. Documented in
+# devnotes/architecture/testing-runbook.md recipe prereqs.
+export LOTL_RECALL_NO_TOUCH=on
 
 # Thinking-model token budgets (gemma-4-e4b burns ~300-500 reasoning tokens).
 export LOTL_ANSWER_MAX_TOKENS=1536

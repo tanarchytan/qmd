@@ -75,6 +75,10 @@ export LOTL_LMSTUDIO_KEY="${LOTL_LMSTUDIO_KEY:-lm-studio}"
 export LOTL_LMSTUDIO_GEN_MODEL="$GEN_MODEL"
 export LOTL_LMSTUDIO_JUDGE_MODEL="$JUDGE_MODEL"
 export LOTL_SKIP_PREFLIGHT=on
+# Load-bearing — recall must be read-only so the prompt for each question
+# is byte-identical to the original pass 1 run. Otherwise access_count bumps
+# shift Weibull decay → memory ranking → prompt → cache key all differ.
+export LOTL_RECALL_NO_TOUCH=on
 [[ -n "$CACHE_PATH_FLAG" ]] && export LOTL_LLM_CACHE_PATH="$CACHE_PATH_FLAG"
 
 unload_all_instances() {

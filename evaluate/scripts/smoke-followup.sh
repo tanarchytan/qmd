@@ -20,6 +20,7 @@ export LOTL_LMSTUDIO_HOST="$HOST"
 # Deliberately NOT exporting LOTL_LMSTUDIO_GEN_MODEL / JUDGE_MODEL (see above).
 export LOTL_LMSTUDIO_KEY="${LOTL_LMSTUDIO_KEY:-lm-studio}"
 export LOTL_SKIP_PREFLIGHT=on
+export LOTL_RECALL_NO_TOUCH=on  # load-bearing for cache-replay across pass1/pass2
 
 # qwen at 32k: fits long v14 CoT predictions in the judge input without overflow.
 CTX_QWEN=32768

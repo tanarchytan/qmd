@@ -33,6 +33,7 @@ export LOTL_LMSTUDIO_GEN_MODEL="$GEN_MODEL"
 export LOTL_LMSTUDIO_JUDGE_MODEL="$JUDGE_MODEL"
 export LOTL_LMSTUDIO_KEY="${LOTL_LMSTUDIO_KEY:-lm-studio}"
 export LOTL_SKIP_PREFLIGHT=on
+export LOTL_RECALL_NO_TOUCH=on  # load-bearing for cache-replay across pass1/pass2
 
 # VRAM-tuned per prompt version. Override via env.
 # LM Studio `context_length` is TOTAL ctx shared across parallel slots.

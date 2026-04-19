@@ -15,6 +15,7 @@ export LOTL_LMSTUDIO_GEN_MODEL="$GEN_MODEL"
 export LOTL_LMSTUDIO_JUDGE_MODEL="$JUDGE_MODEL"
 export LOTL_LMSTUDIO_KEY="${LOTL_LMSTUDIO_KEY:-lm-studio}"
 export LOTL_SKIP_PREFLIGHT=on
+export LOTL_RECALL_NO_TOUCH=on  # load-bearing for cache-replay across pass1/pass2
 
 # VRAM budget on the 3090 (24 GB): llama weights 4.92 GB, kv-cache 131 KB/token/slot.
 # Use a larger `parallel` when context can be smaller — same total kv-cache, more

@@ -23,6 +23,7 @@ export LOTL_LMSTUDIO_GEN_MODEL="$GEN_MODEL"
 export LOTL_LMSTUDIO_JUDGE_MODEL="$JUDGE_MODEL"
 export LOTL_LMSTUDIO_KEY="${LOTL_LMSTUDIO_KEY:-lm-studio}"
 export LOTL_SKIP_PREFLIGHT=on
+export LOTL_RECALL_NO_TOUCH=on  # load-bearing for cache-replay across pass1/pass2
 
 # Gemma-4-e4b is a thinking model — burns reasoning tokens before emitting
 # content. v11's default 128-token budget gets consumed by "Thinking Process:"
