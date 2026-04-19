@@ -18,9 +18,11 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Secrets / tokens
-.vexp/mcp.token
-.vexp/mcp.port
+# Tool working state — vexp MCP server, pi config, serena. All auto-regenerated
+# by the local tools; tracking them pollutes PRs with tool noise.
+.vexp/
+.pi/
+.serena/
 
 # Markdown — only allow tracked top-level docs and curated subdirs.
 # (root *.md is ignored by default; explicitly track the ones below.)

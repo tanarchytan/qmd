@@ -1,4 +1,4 @@
-# graphify exclusions for QMD
+# graphify exclusions for Lotl
 # gitignore syntax — patterns relative to repo root.
 # Goal: graph only the production source (src/), not tests, evals, or vendored stuff.
 
@@ -16,8 +16,8 @@ src/bench-*.ts
 # Eval pipelines (LoCoMo, LongMemEval — these are throwaway harnesses, not source)
 evaluate/
 
-# Finetune subproject (Python ML training, separate codebase)
-finetune/
+# Developer notes (research/archive/sessions, not production source)
+devnotes/
 
 # Setup tooling (one-shot installer scripts)
 setup/
@@ -26,11 +26,14 @@ setup/
 docs/
 skills/
 
-# Editor / IDE
+# Tool working state
 .claude/
 .cursor/
 .github/
 .git/
+.pi/
+.vexp/
+.serena/
 
 # OS / misc
 .DS_Store
