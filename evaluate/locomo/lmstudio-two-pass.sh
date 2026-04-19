@@ -28,13 +28,14 @@ export LOTL_SKIP_PREFLIGHT=on
 
 TAG="${1:-locomo-lmstudio-baseline-$(date +%Y%m%d-%H%M%S)}"
 
+CTX="${LOTL_LMSTUDIO_CTX:-16384}"
 load_model() {
   local model="$1"
   local resp
   resp=$(curl -fsS -X POST "http://$HOST/api/v1/models/load" \
     -H "Content-Type: application/json" \
-    -d "{\"model\":\"$model\"}")
-  echo "[load] $model: $resp" >&2
+    -d "{\"model\":\"$model\",\"context_length\":$CTX}")
+  echo "[load] $model (ctx=$CTX): $resp" >&2
   echo "$model"
 }
 

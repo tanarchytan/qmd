@@ -33,16 +33,14 @@ DS="${LOTL_LME_DS:-oracle}"
 
 TAG="${1:-lmstudio-$(date +%Y%m%d-%H%M%S)}"
 
+CTX="${LOTL_LMSTUDIO_CTX:-16384}"
 load_model() {
   local model="$1"
   local resp
   resp=$(curl -fsS -X POST "http://$HOST/api/v1/models/load" \
     -H "Content-Type: application/json" \
-    -d "{\"model\":\"$model\"}")
-  echo "[load] $model: $resp" >&2
-  # LM Studio accepts either instance_id=<model>:<N> or the bare model name on
-  # unload, so we skip JSON parsing and just echo the model. Keeps the script
-  # portable to Windows/macOS/Linux without jq/python dependency.
+    -d "{\"model\":\"$model\",\"context_length\":$CTX}")
+  echo "[load] $model (ctx=$CTX): $resp" >&2
   echo "$model"
 }
 
