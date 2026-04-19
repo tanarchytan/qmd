@@ -35,11 +35,11 @@ export LOTL_LMSTUDIO_KEY="${LOTL_LMSTUDIO_KEY:-lm-studio}"
 export LOTL_SKIP_PREFLIGHT=on
 
 # VRAM-tuned per prompt version. Override via env.
-CTX_V11="${LOTL_LMSTUDIO_CTX_V11:-8192}"
+# LM Studio `context_length` is TOTAL ctx shared across parallel slots.
+# Per-slot = context_length / parallel. Size context_length = desired_per_slot × parallel.
+CTX_V11="${LOTL_LMSTUDIO_CTX_V11:-65536}"    # 4096 per slot × 16 slots
 PARALLEL_V11="${LOTL_LMSTUDIO_PARALLEL_V11:-16}"
-# v14 CoT needs ~10k+ total (7-8k prompt + 2560 output). 16384 × 8 parallel
-# = 22.1 GB VRAM, fits 24 GB with slack. Dropping parallel below 8 wastes VRAM.
-CTX_V14="${LOTL_LMSTUDIO_CTX_V14:-16384}"
+CTX_V14="${LOTL_LMSTUDIO_CTX_V14:-98304}"    # 12288 per slot × 8 slots (v14 CoT needs ~10k)
 PARALLEL_V14="${LOTL_LMSTUDIO_PARALLEL_V14:-8}"
 CTX_QWEN="${LOTL_LMSTUDIO_CTX_QWEN:-16384}"
 PARALLEL_QWEN="${LOTL_LMSTUDIO_PARALLEL_QWEN:-1}"

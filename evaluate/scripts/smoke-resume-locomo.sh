@@ -19,9 +19,10 @@ export LOTL_SKIP_PREFLIGHT=on
 # VRAM budget on the 3090 (24 GB): llama weights 4.92 GB, kv-cache 131 KB/token/slot.
 # Use a larger `parallel` when context can be smaller — same total kv-cache, more
 # concurrent slots = more throughput. Qwen solo uses ~24 GB so parallel=1.
-CTX_V11=8192
+# LM Studio `context_length` is TOTAL ctx shared across parallel slots.
+CTX_V11=65536     # 4096 per slot × 16 slots
 PARALLEL_V11=16
-CTX_V14=16384
+CTX_V14=98304     # 12288 per slot × 8 slots
 PARALLEL_V14=8
 PARALLEL_QWEN=1
 CTX_QWEN=16384

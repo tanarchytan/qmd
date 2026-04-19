@@ -298,6 +298,68 @@ After any sweep, check:
   open file descriptor at loop start. Editing the config file mid-sweep
   is unreliable — kill and restart cleanly instead.
 
+## LM Studio harness (local LLM-as-judge / FC baselines)
+
+Scripts live at `evaluate/scripts/smoke-all-lmstudio.sh` (baseline smoke),
+`evaluate/scripts/smoke-resume-full.sh` (mid-flight resume with cache replay),
+plus per-benchmark two-pass wrappers at
+`evaluate/{longmemeval,locomo}/lmstudio-two-pass.sh`.
+
+### Key gotchas locked in
+
+1. **`context_length` on `/api/v1/models/load` is TOTAL across parallel slots,
+   not per-slot.** Per-slot ctx = `context_length / parallel`. Size it as
+   `desired_per_slot × parallel`. v11 prompts fit in ~4k per slot, v14 CoT
+   needs ~12k per slot (8k prompt + 2560 output). Verified 2026-04-19 —
+   `ctx=16384 parallel=8` gave 2k per slot and threw "Context size has been
+   exceeded" on every v14 question.
+2. **Single-instance guarantee.** Every `load_model` helper unloads `:2`..`:8`
+   suffix variants first. LM Studio routes bare-name requests
+   non-deterministically when multiple instances exist → transient fetch-fails.
+3. **Never run two smoke scripts concurrently.** They issue conflicting
+   load/unload to the same LM Studio → cascading "Operation canceled" errors.
+   Kill old runs before launching a new one.
+4. **Workers must match `parallel`.** `LOTL_LME_WORKERS` / `LOTL_LOCOMO_WORKERS`
+   = the parallel slot count you loaded with. Client-side concurrency is what
+   actually fills the slots — llama.cpp batches forward passes across active
+   slots, so idle slots = idle GPU.
+5. **llm-cache survives kills.** `evaluate/{longmemeval,locomo}/llm-cache.json`
+   is written on every successful call. Replaying the same eval with same
+   seed+temp hits the cache for all prior successes; only fresh questions
+   cost real GPU time. Used the full-resume pattern to recover mid-run.
+
+### VRAM budget (3090, 24 GB)
+
+| Model | Weights | kv/slot (ctx/slot × 131 KB) | Good default |
+|---|---|---|---|
+| llama-3.1-8B Q4_K_M | 4.92 GB | 4096t × 131 KB ≈ 0.54 GB | parallel=16, ctx=65536 (v11) |
+| " | " | 12288t × 131 KB ≈ 1.61 GB | parallel=8, ctx=98304 (v14 CoT) |
+| qwen3.6-35B-a3b Q4_K_M | 22.07 GB | 16384t × 131 KB ≈ 2.15 GB | parallel=1, ctx=16384 (solo) |
+
+Never hold llama + qwen concurrent — they don't fit. Swap between them at
+each pair's gen→judge boundary.
+
+### Typical commands
+
+```sh
+# Clean baseline (all 4 pairs, ~60 min total with parallelism):
+bash evaluate/scripts/smoke-all-lmstudio.sh
+
+# Pick up from mid-flight after a kill (cache hits for completed q's):
+bash evaluate/scripts/smoke-resume-full.sh
+
+# Single-benchmark runs (use LOTL_LME_LIMIT / LOTL_LOCOMO_LIMIT to scope):
+LOTL_LME_LIMIT=100 bash evaluate/longmemeval/lmstudio-two-pass.sh
+LOTL_LOCOMO_LIMIT=10 bash evaluate/locomo/lmstudio-two-pass.sh
+```
+
+Override sizing per prompt:
+```sh
+LOTL_LMSTUDIO_CTX_V11=81920 LOTL_LMSTUDIO_PARALLEL_V11=20 \
+LOTL_LMSTUDIO_CTX_V14=131072 LOTL_LMSTUDIO_PARALLEL_V14=8 \
+  bash evaluate/scripts/smoke-all-lmstudio.sh
+```
+
 ## When to NOT run a sweep
 
 - Without `LOTL_RECALL_NO_TOUCH=on`. Every number will be cross-contaminated.

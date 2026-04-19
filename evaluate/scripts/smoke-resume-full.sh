@@ -26,12 +26,13 @@ export LOTL_SKIP_PREFLIGHT=on
 #   → parallel=12 @ ctx=10240 fits v14 CoT (~8k prompt + 2560 output) with headroom
 #   → parallel=16 @ ctx=8192 fits v11 (shorter)
 #   qwen-35B weights: 22.07 GB; solo @ parallel=1 only
-CTX_V11=8192
+# IMPORTANT: LM Studio's `context_length` is TOTAL ctx shared across parallel
+# slots, NOT per-slot. Per-slot ctx = context_length / parallel. Verified
+# empirically: parallel=8 ctx=16384 → 2048 per slot → context-exceeded on
+# every v14 CoT prompt. Math below sizes context_length = desired_per_slot × parallel.
+CTX_V11=65536     # 4096 per slot × 16 slots — v11 prompts stay under 4k
 PARALLEL_V11=16
-# v14 CoT prompt: memories ~5-6k + CoT scaffolding ~2k = ~7-8k input. Plus
-# 2560-token answer budget = ~10k required. 10240 was too tight — bumped
-# to 16384 with parallel=8 (4.92 + 8×2.15 = 22.1 GB, fits 24 GB with slack).
-CTX_V14=16384
+CTX_V14=98304     # 12288 per slot × 8 slots — v14 CoT needs ~10k (8k prompt + 2560 output)
 PARALLEL_V14=8
 CTX_QWEN=16384
 PARALLEL_QWEN=1
