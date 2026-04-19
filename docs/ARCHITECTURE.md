@@ -598,10 +598,16 @@ broken first stage. Ship rerank as opt-in; default off.
 
 | System | recall_any@5 | MRR | NDCG@10 |
 |---|---|---|---|
-| **qmd (no rerank, default)** | **98.4%** | **0.917** | **0.913** |
-| qmd (with rerank) | 98.0% | 0.911 | 0.912 |
+| **Lotl (no rerank, default)** | **98.4%** | **0.917** | **0.913** |
+| Lotl (with rerank) ⁽*⁾ | 98.0% | 0.911 | 0.912 |
 | MemPalace raw | 96.6% | — | — |
 | agentmemory hybrid | 95.2% | 0.882 | 0.879 |
+
+⁽*⁾ The "with rerank" row was measured in the pre-2026-04-19 era when
+TransformersRerankBackend silently no-op'd for non-legacy models (fixed in
+commit `9cba9bc`) and uncapped tokenizer blew 67 GB on ModernBERT (fixed in
+commit `f766f9d`). Those measurements equal the baseline because rerank
+never actually ran. Real reranker A/B landing 2026-04-19 with clean fixes.
 
 ### Progress over time (LongMemEval _s n=500, mxbai-xs q8)
 
