@@ -29,7 +29,24 @@ echo "Log dir: $LOG_DIR"
 # plus the 2560-token v14 output budget. LM Studio's default is 4096 which fails
 # with "n_keep >= n_ctx" on any non-trivial memory-system prompt.
 CTX="${LOTL_LMSTUDIO_CTX:-16384}"
-load_model()    { curl -fsS -X POST "http://$HOST/api/v1/models/load"   -H "Content-Type: application/json" -d "{\"model\":\"$1\",\"context_length\":$CTX}" >&2; echo >&2; }
+# Unload every :N suffix variant of this model so we leave exactly one clean
+# instance after load. LM Studio routes bare-name requests non-deterministically
+# when multiple instances exist, which caused transient "fetch failed" mid-run.
+unload_all_instances() {
+  local model="$1"
+  for suffix in "" ":2" ":3" ":4" ":5" ":6" ":7" ":8"; do
+    curl -s -X POST "http://$HOST/api/v1/models/unload" \
+      -H "Content-Type: application/json" \
+      -d "{\"instance_id\":\"${model}${suffix}\"}" >/dev/null 2>&1 || true
+  done
+}
+load_model() {
+  unload_all_instances "$1"
+  curl -fsS -X POST "http://$HOST/api/v1/models/load" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"$1\",\"context_length\":$CTX}" >&2
+  echo >&2
+}
 unload_model()  { curl -fsS -X POST "http://$HOST/api/v1/models/unload" -H "Content-Type: application/json" -d "{\"instance_id\":\"$1\"}" >&2; echo >&2; }
 
 run_lme() {

@@ -29,8 +29,18 @@ export LOTL_SKIP_PREFLIGHT=on
 TAG="${1:-locomo-lmstudio-baseline-$(date +%Y%m%d-%H%M%S)}"
 
 CTX="${LOTL_LMSTUDIO_CTX:-16384}"
+# Unload every :N suffix first to prevent request routing to stale instances.
+unload_all_instances() {
+  local model="$1"
+  for suffix in "" ":2" ":3" ":4" ":5" ":6" ":7" ":8"; do
+    curl -s -X POST "http://$HOST/api/v1/models/unload" \
+      -H "Content-Type: application/json" \
+      -d "{\"instance_id\":\"${model}${suffix}\"}" >/dev/null 2>&1 || true
+  done
+}
 load_model() {
   local model="$1"
+  unload_all_instances "$model"
   local resp
   resp=$(curl -fsS -X POST "http://$HOST/api/v1/models/load" \
     -H "Content-Type: application/json" \
