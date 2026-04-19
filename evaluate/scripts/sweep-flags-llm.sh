@@ -50,6 +50,8 @@ export LOTL_TRANSFORMERS_DTYPE=q8
 export LOTL_EMBED_MAX_WORKERS=4
 export LOTL_EMBED_MICROBATCH=32
 export OMP_NUM_THREADS=4
+# A/B hygiene — see sweep-flags.sh
+export LOTL_RECALL_NO_TOUCH=on
 
 run_one_lme() {
   local tag=$1; local overlay=$2

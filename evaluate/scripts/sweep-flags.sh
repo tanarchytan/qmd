@@ -48,6 +48,10 @@ export LOTL_TRANSFORMERS_DTYPE=q8
 export LOTL_EMBED_MAX_WORKERS=4
 export LOTL_EMBED_MICROBATCH=32
 export OMP_NUM_THREADS=4
+# A/B hygiene: prevent access_count drift across configs sharing a DB
+# (caught 2026-04-19 when LoCoMo Stage 3 baseline and baseline-w91 diverged
+# by 4.5pp R@5 with identical config).
+export LOTL_RECALL_NO_TOUCH=on
 
 run_one_lme() {
   local tag=$1; local overlay=$2

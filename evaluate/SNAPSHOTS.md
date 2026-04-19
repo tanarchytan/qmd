@@ -30,6 +30,17 @@ Reproducer: `bash evaluate/scripts/sweep-n500-embedders.sh`
 
 Conclusion: **mxbai-xs stays default**. All 4 challengers tied or regressed on preference MRR — the metric that tracks Lotl's real workload (memory recall about a specific user).
 
+> **Repro note (2026-04-19):** the mxbai-xs row above doesn't fully reproduce
+> on the current `lme-s-mxbai-n500-v17.sqlite`. Re-running the winner config
+> at n=500 (5 identical passes, commit `ba4f062` + earlier, byte-identical
+> across passes) produces **rAny@5 97.8% / R@5 93.4% / MRR 0.907 / NDCG@10 0.904**.
+> Diff vs pinned: −0.6pp rAny@5, −0.3pp R@5, −0.010 MRR, −0.009 NDCG@10.
+> Probable cause: original numbers measured on a slightly different DB state
+> (the v17 DB has been reindexed since). Bisect across the 10 commits
+> between the SNAPSHOTS commit (`9af176c`) and current dev showed
+> identical code behavior — not a code regression.
+> See `devnotes/sessions/session-2026-04-19-overnight-sweeps.md`.
+
 ### Full LME with LLM judge — 2026-04-18
 
 Generator: gemini-2.5-flash. Judge: gemini-2.5-flash. (Poe gpt-4o run hit quota at q55, partial result.)

@@ -1670,14 +1670,20 @@ export async function memoryRecall(
 
   profileMark("rerank_and_post", rerankStart);
 
-  // Touch access counts for recalled memories (batched in transaction for performance)
-  const now = Date.now();
-  const touchStmt = db.prepare(`UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?`);
-  db.exec("BEGIN");
-  try {
-    for (const r of sorted) { touchStmt.run(now, r.id); }
-    db.exec("COMMIT");
-  } catch { db.exec("ROLLBACK"); }
+  // Touch access counts for recalled memories (batched in transaction for performance).
+  // Skip under LOTL_RECALL_NO_TOUCH=on — sweep A/Bs across a shared DB accumulate
+  // touches from earlier configs, which biases subsequent configs' decay-weighted
+  // scoring and produces false per-config signal (caught 2026-04-19 when Stage 3
+  // baseline and baseline-w91 — identical config — diverged by 4.5pp R@5 on LoCoMo).
+  if (process.env.LOTL_RECALL_NO_TOUCH !== "on") {
+    const now = Date.now();
+    const touchStmt = db.prepare(`UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?`);
+    db.exec("BEGIN");
+    try {
+      for (const r of sorted) { touchStmt.run(now, r.id); }
+      db.exec("COMMIT");
+    } catch { db.exec("ROLLBACK"); }
+  }
 
   if (PROFILE) {
     profile.total = Math.round(performance.now() - profileStart);
