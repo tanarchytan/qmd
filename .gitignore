@@ -12,6 +12,7 @@ texts/
 .vscode/
 .serena/
 graphify-out/
+**/graphify-out/
 
 # Python
 __pycache__/
