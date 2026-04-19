@@ -1111,8 +1111,13 @@ async function main() {
           process.stderr.write(`\n[warn] answer prompt ~${estTok} tokens (${answerMemories.length} memories). Consider lowering LOTL_ANSWER_TOP_K or LOTL_ANSWER_MAX_CHARS.\n`);
         }
         // v14 CoT produces ~1500–2500 output tokens (7-step scaffold + final answer).
-        // Other prompts stay at 128 default. askLLM uses 128 when maxTokens omitted.
-        const answerMaxTokens = process.env.LOTL_PROMPT_RULES === "v14" ? 2560 : 128;
+        // Other prompts stay at 128 default for paid providers. LOTL_ANSWER_MAX_TOKENS
+        // is a FLOOR — it bumps v11 up without capping v14 below its CoT need. Needed
+        // for local thinking models (gemma-4-e4b burns ~100+ reasoning tokens before
+        // emitting content even on v11 prompts).
+        const defaultMax = process.env.LOTL_PROMPT_RULES === "v14" ? 2560 : 128;
+        const envFloor = Number(process.env.LOTL_ANSWER_MAX_TOKENS ?? 0);
+        const answerMaxTokens = Math.max(envFloor, defaultMax);
         const raw = await askLLM(prompt, activeLLM, answerMaxTokens);
         // For v14 extract the FINAL ANSWER section; fall back to raw trailing text
         // if the model skipped the tag. F1/EM/SH scoring on the scaffold would

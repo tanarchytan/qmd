@@ -1077,7 +1077,12 @@ async function main() {
           // v14 CoT emits ~1500–2500 output tokens (7-step scaffold + final answer).
           // Other prompt versions stay at the default (256) because they explicitly
           // instruct "Short answer:" — no reason to pay for longer output.
-          const answerMaxTokens = process.env.LOTL_PROMPT_RULES === "v14" ? 2560 : 256;
+          // LOTL_ANSWER_MAX_TOKENS is a FLOOR — bumps v11 up for local thinking models
+          // (gemma-4-e4b burns 100+ reasoning tokens before emitting content) without
+          // capping v14's CoT budget below its need.
+          const defaultMax = process.env.LOTL_PROMPT_RULES === "v14" ? 2560 : 256;
+          const envFloor = Number(process.env.LOTL_ANSWER_MAX_TOKENS ?? 0);
+          const answerMaxTokens = Math.max(envFloor, defaultMax);
           const raw = await askLLM(prompt, activeLLM, answerMaxTokens);
           // For v14 strip the CoT scaffold and keep only the FINAL ANSWER.
           // Scoring the raw scaffold is ~100% F1 because STEP 2 / STEP 6 echo

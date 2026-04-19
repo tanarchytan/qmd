@@ -24,15 +24,24 @@ export LOTL_LMSTUDIO_JUDGE_MODEL="$JUDGE_MODEL"
 export LOTL_LMSTUDIO_KEY="${LOTL_LMSTUDIO_KEY:-lm-studio}"
 export LOTL_SKIP_PREFLIGHT=on
 
-# Gemma budget (empirically calibrate — adjust after first load):
-#   gemma-4-e4b:     ~3-4 GB → plenty of VRAM, parallel=16+ feasible
-#   gemma-4-26b-a4b: ~17 GB → parallel=4 @ ~16k per slot fits 24 GB
-CTX_V11_GEN="${LOTL_GEMMA_CTX_V11:-65536}"      # 4k per slot × 16 slots
+# Gemma-4-e4b is a thinking model — burns reasoning tokens before emitting
+# content. v11's default 128-token budget gets consumed by "Thinking Process:"
+# scaffolding, leaving 0 tokens for actual answer → all predictions empty.
+# Floor at 1536 so even thinking + answer fits. LOTL_ANSWER_MAX_TOKENS is
+# applied as a floor in eval.mts (v14's 2560 default still wins over 1536).
+export LOTL_ANSWER_MAX_TOKENS="${LOTL_ANSWER_MAX_TOKENS:-1536}"
+
+# Gemma budget — tuned after 2026-04-19 crash (LM Studio / driver OOM when
+# gemma-4-26b-a4b loaded at ctx=131072 parallel=4 = ~27.5 GB on 24 GB 3090).
+# Gen side was fine; only judge needed a nudge. Reductions are ~10% not 50%:
+#   gemma-4-e4b gen: parallel=16 @ 8k/slot = 16 × 1 GB kv + 4 GB = ~20 GB ✓
+#   gemma-4-26b-a4b judge: parallel=3 @ 16k/slot = 3 × 1.3 GB kv + 17 GB = ~21 GB ✓
+CTX_V11_GEN="${LOTL_GEMMA_CTX_V11:-131072}"     # 8k per slot × 16 slots (unchanged)
 PARALLEL_V11_GEN="${LOTL_GEMMA_PARALLEL_V11:-16}"
-CTX_V14_GEN="${LOTL_GEMMA_CTX_V14:-98304}"      # 12k per slot × 8 slots
+CTX_V14_GEN="${LOTL_GEMMA_CTX_V14:-131072}"     # 16k per slot × 8 slots (unchanged)
 PARALLEL_V14_GEN="${LOTL_GEMMA_PARALLEL_V14:-8}"
-CTX_JUDGE="${LOTL_GEMMA_CTX_JUDGE:-65536}"      # 16k per slot × 4 slots
-PARALLEL_JUDGE="${LOTL_GEMMA_PARALLEL_JUDGE:-4}"
+CTX_JUDGE="${LOTL_GEMMA_CTX_JUDGE:-49152}"      # 16k per slot × 3 slots — was 32k/slot × 4 before crash
+PARALLEL_JUDGE="${LOTL_GEMMA_PARALLEL_JUDGE:-3}"
 
 LME_LIMIT="${LOTL_LME_LIMIT:-20}"
 LOCOMO_LIMIT="${LOTL_LOCOMO_LIMIT:-5}"
