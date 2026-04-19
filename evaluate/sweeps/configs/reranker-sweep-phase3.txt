@@ -1,12 +1,18 @@
-# Phase 3 reranker A/B — mxbai-xs embed + pre-populated v17 DB
-# Each non-baseline row: enable rerank + set the model + force local transformers backend.
-# Pair with Phase 1 winners (add overlays here once Phase 1 resolves).
-# Remember to flip STRONG_SIGNAL_SKIP on if Phase 1 validated it.
+# Phase 3 reranker A/B — small-model pass (≤100M params).
+# Parked 2026-04-19 evening: the three bigger candidates (mxbai-rerank-base 184M,
+# gte-reranker-modernbert-base 149M, tomaarsen-reranker-ModernBERT-base-gooaq-bce
+# 150M) are slow at CPU rerank time and hit OOM on ModernBERT attention.
+# Revisit once small-model signal settles: if jina-tiny beats baseline MRR by
+# ≥0.01, testing bigger variants is worth the runtime.
+#
+# Reactivate by uncommenting the three entries at the bottom.
 
 baseline
 jina-tiny             LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=jinaai/jina-reranker-v1-tiny-en
 jina-turbo            LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=jinaai/jina-reranker-v1-turbo-en
 mxbai-xsmall          LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=mixedbread-ai/mxbai-rerank-xsmall-v1
-mxbai-base            LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=mixedbread-ai/mxbai-rerank-base-v1
-gte-modernbert        LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=Alibaba-NLP/gte-reranker-modernbert-base
-tomaarsen-modernbert  LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=tomaarsen/reranker-ModernBERT-base-gooaq-bce
+
+# Parked — uncomment to re-enable:
+# mxbai-base            LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=mixedbread-ai/mxbai-rerank-base-v1
+# gte-modernbert        LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=Alibaba-NLP/gte-reranker-modernbert-base
+# tomaarsen-modernbert  LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=tomaarsen/reranker-ModernBERT-base-gooaq-bce
