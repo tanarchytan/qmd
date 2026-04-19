@@ -1014,7 +1014,17 @@ async function main() {
     let runningJudgeCorrect = 0;
     let runningJudgeN = 0;
 
-    for (let i = 0; i < qaList.length; i++) {
+    // Worker-pool semaphore: N concurrent question-processors pulling from a
+    // shared index queue. LOTL_LOCOMO_WORKERS=1 preserves the original
+    // sequential behavior. Safe because JS async is single-threaded — state
+    // mutations (runningF1 += f1, allResults.push) are atomic between awaits.
+    // Under concurrency the progress-line denominator switches to a
+    // `completed` counter since i is no longer in completion order.
+    const locomoConcurrency = Math.max(1, parseInt(process.env.LOTL_LOCOMO_WORKERS || "1", 10));
+    if (locomoConcurrency > 1) console.log(`    Workers: ${locomoConcurrency} concurrent`);
+    let completed = 0;
+    const indexQueue = Array.from({ length: qaList.length }, (_, i) => i);
+    const processQuestion = async (i: number): Promise<void> => {
       const qa = qaList[i]!;
 
       // --- RECALL (memories + knowledge graph) ---
@@ -1133,10 +1143,12 @@ async function main() {
 
       if (allResults.length % PARTIAL_SAVE_EVERY === 0) savePartial();
 
-      // Progress every question
-      const avgF1 = runningF1 / (i + 1);
+      // Progress: use `completed` counter so workers finishing out-of-order
+      // still advance the bar monotonically. avgF1 denominator follows.
+      completed++;
+      const avgF1 = runningF1 / completed;
       const line = [
-        `\r    ${progressBar(i + 1, qaList.length)}`,
+        `\r    ${progressBar(completed, qaList.length)}`,
         `F1=${(avgF1 * 100).toFixed(1)}%`,
         `mem=${memories.length}`,
         `search=${searchMs}ms`,
@@ -1146,10 +1158,21 @@ async function main() {
       process.stdout.write(line);
 
       // Detailed output every 10 or on last
-      if ((i + 1) % 10 === 0 || i === qaList.length - 1) {
+      if (completed % 10 === 0 || completed === qaList.length) {
         console.log(); // newline after progress bar
       }
-    }
+    };
+
+    // Run the worker pool. Each worker pulls indices from the shared queue.
+    const locomoWorker = async () => {
+      while (indexQueue.length > 0) {
+        const idx = indexQueue.shift();
+        if (idx == null) break;
+        try { await processQuestion(idx); }
+        catch (e) { process.stderr.write(`\n    [error] q${idx}: ${e}\n`); }
+      }
+    };
+    await Promise.all(Array.from({ length: locomoConcurrency }, () => locomoWorker()));
 
     console.log(`\n    ${conv.sample_id} done: F1=${(runningF1 / qaList.length * 100).toFixed(1)}% EM=${(runningEM / qaList.length * 100).toFixed(1)}% in ${elapsed(convStart)}`);
 
