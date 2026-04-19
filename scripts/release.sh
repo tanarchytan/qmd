@@ -16,12 +16,14 @@ set -euo pipefail
 
 BUMP="${1:?Usage: release.sh [patch|minor|major|<version>]}"
 
-# Ensure we're on main and clean
+# Ensure we're on main or dev, and working tree is clean.
+# (Lotl's main is a single-commit orphan; day-to-day work happens on dev.
+# Both branches are valid starting points for cutting a release.)
 BRANCH=$(git branch --show-current)
-if [[ "$BRANCH" != "main" ]]; then
-  echo "Error: must be on main branch (currently on $BRANCH)" >&2
-  exit 1
-fi
+case "$BRANCH" in
+  main|dev) ;;
+  *) echo "Error: must be on main or dev (currently on $BRANCH)" >&2; exit 1 ;;
+esac
 
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "Error: working directory not clean" >&2
@@ -41,15 +43,21 @@ echo "package-lock.json: in sync ✓"
 CURRENT=$(jq -r .version package.json)
 echo "Current version: $CURRENT"
 
-# Calculate new version
+# Calculate new version. Strips any pre-release suffix (-rc1, -beta.2, etc.)
+# before arithmetic, so auto-bumping from 1.0.0-rc1 works sanely:
+#   patch 1.0.0-rc1 → 1.0.1
+#   minor 1.0.0-rc1 → 1.1.0
+#   major 1.0.0-rc1 → 2.0.0
+# Explicit `release.sh 1.0.0` skips the bump path entirely.
 bump_version() {
   local current="$1" type="$2"
-  IFS='.' read -r major minor patch <<< "$current"
+  local stripped="${current%%-*}"
+  IFS='.' read -r major minor patch <<< "$stripped"
   case "$type" in
     major) echo "$((major + 1)).0.0" ;;
     minor) echo "$major.$((minor + 1)).0" ;;
     patch) echo "$major.$minor.$((patch + 1))" ;;
-    *)     echo "$type" ;; # explicit version
+    *)     echo "$type" ;; # explicit version (e.g., "1.0.0", "1.0.0-rc2")
   esac
 }
 
