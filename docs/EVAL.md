@@ -472,11 +472,12 @@ with HuggingFace `xiaowu0162/longmemeval-cleaned`).
 | Lotl v15.1 | 74.9% | — |
 | MemPalace own run | 74.8% | 100% (ceilinged) |
 
-**Running MemPalace on our data** (reproduces both rows above):
+**Running MemPalace on our data** (reproduces both rows above — scripts
+archived to `evaluate/legacy/` in the v1.0 cleanup; still runnable):
 
 ```sh
-./evaluate/run-mempalace-baseline.sh
-python3 evaluate/summarize-mempalace.py
+./evaluate/legacy/run-mempalace-baseline.sh
+python3 evaluate/legacy/summarize-mempalace.py
 ```
 
 Results land in `~/external/mempalace-results/`.
