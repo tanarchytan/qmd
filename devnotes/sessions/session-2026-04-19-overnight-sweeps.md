@@ -3,6 +3,35 @@
 **Status at bedtime (01:30 approx):** main chain (bkb4go86h) complete, follow-up
 (bs4wjrdqv) running. ~3 h remaining compute.
 
+## ⚡ Biggest finding: eval-harness was polluting its own A/B data
+
+`memoryRecall` in `src/memory/index.ts:1673` unconditionally bumps
+`access_count` + `last_accessed` on every retrieved memory. Across sweep
+configs sharing a DB, later configs see the accumulated touches and
+Weibull-decay-weighted ranking drifts. **Every A/B config pair in today's
+sweeps where the DB was shared is confounded.**
+
+Symptom: Stage 3 LoCoMo baseline (R@5 57.2%, wall 273s incl. ingest) vs
+baseline-w91 (R@5 52.7%, wall 40s) with identical config. 4.5pp R@5 gap
+coming from nowhere except the touch-accumulation bias.
+
+Fix landed as `LOTL_RECALL_NO_TOUCH=on` guard (commit `b2c0f62`).
+sweep-flags.sh and sweep-flags-llm.sh export it by default. Production
+code path unchanged — touches still drive decay/promotion when the flag
+isn't set.
+
+**Impact on today's data:**
+- Stages 1-9 of main chain + follow-up ran WITHOUT the guard → contaminated
+- Stage 10+ of the follow-up (currently queued) gets the fix via fresh
+  tsx subprocesses
+- Reruns chain (R1-R5) will all use the fix
+
+**Tomorrow's action:** the reruns chain was already planned to redo stages
+2/4/6/7/8. Those reruns will now *also* give clean A/B data for those
+stages. But ALL the numeric deltas in Stage 3's SUMMARY should be treated
+as upper bounds on effect size — actual flag effects may be smaller
+(or larger) under clean isolation.
+
 ## Key findings (tomorrow's triage order)
 
 ### 🟢 MRR drift — investigated, closed as phantom
