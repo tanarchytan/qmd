@@ -84,7 +84,9 @@ function geminiUrl(model: string): string {
 }
 
 async function askGemini(prompt: string, apiKey: string): Promise<string> {
-  const cacheKey = { model: LLM_CONFIG.gemini.model, temperature: 0, seed: LLM_SEED, prompt };
+  // askGemini hardcodes maxOutputTokens=256 below; reflect in the cache key
+  // so it stays consistent with the max_tokens-keyed OpenAI-compat path.
+  const cacheKey = { model: LLM_CONFIG.gemini.model, temperature: 0, seed: LLM_SEED, max_tokens: 256, prompt };
   const cached = llmCache.get(cacheKey);
   if (cached != null) return cached;
 
@@ -126,7 +128,12 @@ async function askOpenAICompat(
   maxTokens: number = 256,
   callType: "gen" | "judge" = "gen",
 ): Promise<string> {
-  const cacheKey = { model, temperature: 0, seed: LLM_SEED, prompt };
+  // Include maxTokens in the cache key. Thinking models like qwen/gemma can
+  // burn the whole budget on reasoning_content before emitting content — a
+  // prior call with too-small maxTokens caches an empty content string, and
+  // subsequent calls with a larger maxTokens would cache-hit that garbage
+  // without this field in the key (caught 2026-04-19 with gemma-4-e4b v11).
+  const cacheKey = { model, temperature: 0, seed: LLM_SEED, max_tokens: maxTokens, prompt };
   const cached = llmCache.get(cacheKey);
   if (cached != null) return cached;
   const resp = await fetch(url, {
@@ -301,7 +308,9 @@ async function persistAnswer(
 
 // Minimal Gemini caller that takes pre-built url — used when --judge-model overrides.
 async function askGeminiDirect(prompt: string, url: string, model: string): Promise<string> {
-  const cacheKey = { model, temperature: 0, seed: LLM_SEED, prompt };
+  // Gemini uses maxOutputTokens=256 hardcoded — cache key reflects that for
+  // consistency with the max_tokens-keyed Poe/LM Studio path.
+  const cacheKey = { model, temperature: 0, seed: LLM_SEED, max_tokens: 256, prompt };
   const cached = llmCache.get(cacheKey);
   if (cached != null) return cached;
   const resp = await fetch(url, {

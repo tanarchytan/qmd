@@ -36,8 +36,10 @@ export LOTL_ANSWER_MAX_TOKENS="${LOTL_ANSWER_MAX_TOKENS:-1536}"
 # Gen side was fine; only judge needed a nudge. Reductions are ~10% not 50%:
 #   gemma-4-e4b gen: parallel=16 @ 8k/slot = 16 × 1 GB kv + 4 GB = ~20 GB ✓
 #   gemma-4-26b-a4b judge: parallel=3 @ 16k/slot = 3 × 1.3 GB kv + 17 GB = ~21 GB ✓
-CTX_V11_GEN="${LOTL_GEMMA_CTX_V11:-131072}"     # 8k per slot × 16 slots (unchanged)
-PARALLEL_V11_GEN="${LOTL_GEMMA_PARALLEL_V11:-16}"
+# v11 gen at parallel=8 (was 16) — LoCoMo prompts w/ gemma tokenizer push
+# past 8k per slot. 16k/slot at parallel=8 fits within gemma-e4b's 131072 max.
+CTX_V11_GEN="${LOTL_GEMMA_CTX_V11:-131072}"     # 16k per slot × 8 slots
+PARALLEL_V11_GEN="${LOTL_GEMMA_PARALLEL_V11:-8}"
 CTX_V14_GEN="${LOTL_GEMMA_CTX_V14:-131072}"     # 16k per slot × 8 slots (unchanged)
 PARALLEL_V14_GEN="${LOTL_GEMMA_PARALLEL_V14:-8}"
 CTX_JUDGE="${LOTL_GEMMA_CTX_JUDGE:-49152}"      # 16k per slot × 3 slots — was 32k/slot × 4 before crash

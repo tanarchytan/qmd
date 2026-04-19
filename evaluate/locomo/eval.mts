@@ -113,7 +113,9 @@ async function askOpenAICompat(
   model: string,
   maxTokens: number = 256,
 ): Promise<string> {
-  const cacheKey = { model, temperature: 0, seed: LLM_SEED, prompt };
+  // Include maxTokens in the key so thinking-model empty-content entries
+  // cached at a smaller budget don't shadow valid results at a larger budget.
+  const cacheKey = { model, temperature: 0, seed: LLM_SEED, max_tokens: maxTokens, prompt };
   const cached = llmCache.get(cacheKey);
   if (cached != null) return cached;
   const resp = await fetch(url, {
@@ -202,7 +204,7 @@ async function askJudge(question: string, predicted: string, gold: string): Prom
 }
 
 async function askGemini(prompt: string, apiKey: string): Promise<string> {
-  const cacheKey = { model: LLM_CONFIG.gemini.model, temperature: 0, seed: LLM_SEED, prompt };
+  const cacheKey = { model: LLM_CONFIG.gemini.model, temperature: 0, seed: LLM_SEED, max_tokens: 256, prompt };
   const cached = llmCache.get(cacheKey);
   if (cached != null) return cached;
 
@@ -236,7 +238,7 @@ async function askGemini(prompt: string, apiKey: string): Promise<string> {
 }
 
 async function askMiniMax(prompt: string, apiKey: string): Promise<string> {
-  const cacheKey = { model: LLM_CONFIG.minimax.model, temperature: 0.01, seed: LLM_SEED, prompt };
+  const cacheKey = { model: LLM_CONFIG.minimax.model, temperature: 0.01, seed: LLM_SEED, max_tokens: 512, prompt };
   const cached = llmCache.get(cacheKey);
   if (cached != null) return cached;
 
@@ -1094,7 +1096,7 @@ async function main() {
           try { await persistAnswer(`${conv.sample_id}-q${i}`, qa.question, prompt, raw, extracted, activeLLM); } catch { /* best-effort */ }
         } catch (e) {
           prediction = memories.map(m => m.text).join(" "); // fallback to raw memories
-          process.stderr.write(`\n    [warn] MiniMax failed for q${i}: ${e}\n`);
+          process.stderr.write(`\n    [warn] LLM failed for q${i}: ${e}\n`);
         }
         answerMs = Date.now() - t1;
       } else {
