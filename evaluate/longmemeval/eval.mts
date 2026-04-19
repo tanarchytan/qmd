@@ -140,13 +140,18 @@ async function askOpenAICompat(
   maxTokens: number = 256,
   callType: "gen" | "judge" = "gen",
   responseFormat?: Record<string, unknown>,
+  seedOverride?: number,
 ): Promise<string> {
+  // Seed override lets the 3-run judge majority vote call the same prompt N
+  // times at different seeds and collect independent verdicts. Passed into
+  // both the cache key and the request body.
+  const effectiveSeed = seedOverride ?? LLM_SEED;
   // Include maxTokens in the cache key. Thinking models like qwen/gemma can
   // burn the whole budget on reasoning_content before emitting content — a
   // prior call with too-small maxTokens caches an empty content string, and
   // subsequent calls with a larger maxTokens would cache-hit that garbage
   // without this field in the key (caught 2026-04-19 with gemma-4-e4b v11).
-  const cacheKey = { model, temperature: 0, seed: LLM_SEED, max_tokens: maxTokens, prompt };
+  const cacheKey = { model, temperature: 0, seed: effectiveSeed, max_tokens: maxTokens, prompt };
   const cached = llmCache.get(cacheKey);
   if (cached != null) return cached;
   const body: Record<string, unknown> = {
@@ -155,7 +160,7 @@ async function askOpenAICompat(
     temperature: 0,
     // Pass seed so Poe/OpenAI can return deterministic outputs at temp=0 —
     // identical inputs produce identical outputs → cache hits on re-run.
-    seed: LLM_SEED,
+    seed: effectiveSeed,
     max_tokens: maxTokens,
   };
   if (responseFormat) body.response_format = responseFormat;
@@ -221,21 +226,24 @@ async function askLLM(
   modelOverride?: string,
   callType: "gen" | "judge" = "gen",
   responseFormat?: Record<string, unknown>,
+  seedOverride?: number,
 ): Promise<string> {
   const cfg = LLM_CONFIG[provider];
   const apiKey = process.env[cfg.keyEnv];
   if (!apiKey) throw new Error(`${cfg.keyEnv} not set`);
   const model = modelOverride || cfg.model;
   if (provider === "gemini") {
-    // Gemini URL path is model-specific — rebuild on override.
+    // Gemini URL path is model-specific — rebuild on override. Seed override
+    // for Gemini isn't plumbed (single-seed path); 3-run majority vote falls
+    // back to single-run for Gemini.
     if (modelOverride) {
       const url = geminiUrl(modelOverride) + `?key=${apiKey}`;
       return askGeminiDirect(prompt, url, modelOverride);
     }
     return askGemini(prompt, apiKey);
   }
-  if (provider === "poe") return askOpenAICompat(prompt, apiKey, cfg.url, model, maxTokens, callType, responseFormat);
-  if (provider === "lmstudio") return askOpenAICompat(prompt, apiKey || "lm-studio", cfg.url, model, maxTokens, callType, responseFormat);
+  if (provider === "poe") return askOpenAICompat(prompt, apiKey, cfg.url, model, maxTokens, callType, responseFormat, seedOverride);
+  if (provider === "lmstudio") return askOpenAICompat(prompt, apiKey || "lm-studio", cfg.url, model, maxTokens, callType, responseFormat, seedOverride);
   throw new Error(`LLM provider not supported: ${provider}`);
 }
 
@@ -378,6 +386,43 @@ const JUDGE_SYSTEM_PROMPT =
   "INCORRECT if any required fact is missing, contradicted, or has a different value. " +
   "Respond on one line with a single JSON object: {\"correct\": true|false, \"reason\": \"<short sentence>\"}";
 
+/**
+ * Single judge call at a given seed. Internal helper; public entry is
+ * askJudge which handles N-run majority vote (LOTL_JUDGE_RUNS).
+ * Returns 1 (correct), 0 (wrong), or null (unparseable / fetch-fail).
+ */
+async function askJudgeOnce(fullPrompt: string, seed: number): Promise<number | null> {
+  if (!judgeProvider) return null;
+  try {
+    const envCap = Number(process.env.LOTL_JUDGE_MAX_TOKENS ?? 0);
+    const judgeMaxTokens = envCap > 0 ? envCap : (judgeProvider === "lmstudio" ? 768 : 96);
+    const rf = (judgeProvider === "lmstudio" || judgeProvider === "poe") ? JUDGE_RESPONSE_SCHEMA : undefined;
+    const raw = await askLLM(fullPrompt, judgeProvider, judgeMaxTokens, judgeModelOverride ?? undefined, "judge", rf, seed);
+    const m = raw.match(/\{[\s\S]*?\}/);
+    if (m) {
+      try {
+        const obj = JSON.parse(m[0]);
+        if (typeof obj.correct === "boolean") return obj.correct ? 1 : 0;
+      } catch { /* fall through */ }
+    }
+    const upper = raw.toUpperCase();
+    if (/\bINCORRECT\b|\bWRONG\b|"CORRECT":\s*FALSE/.test(upper)) return 0;
+    if (/\bCORRECT\b|"CORRECT":\s*TRUE/.test(upper)) return 1;
+    process.stderr.write(`[judge] unparseable verdict (seed=${seed}): ${raw.slice(0, 120)}\n`);
+    return null;
+  } catch (err) {
+    process.stderr.write(`[judge] failed (seed=${seed}): ${err instanceof Error ? err.message : err}\n`);
+    return null;
+  }
+}
+
+/**
+ * LLM-as-judge with optional N-run majority vote. LOTL_JUDGE_RUNS=N (default 1).
+ * N>1 runs the same judge prompt N times at seeds LLM_SEED, LLM_SEED+1, ... and
+ * returns the majority vote (ties broken toward 0). Any individual run that
+ * returns null still counts as a non-vote; requires > N/2 non-null agreeing
+ * votes for a verdict. Audit methodology: EverMemOS / LongMemEval paper.
+ */
 async function askJudge(question: string, predicted: string, gold: string): Promise<number | null> {
   if (!judgeProvider) return null;
   const userMsg =
@@ -386,42 +431,16 @@ async function askJudge(question: string, predicted: string, gold: string): Prom
     `CANDIDATE ANSWER: ${predicted.trim()}\n\n` +
     `Respond with the JSON object only.`;
   const fullPrompt = `${JUDGE_SYSTEM_PROMPT}\n\n${userMsg}`;
-  try {
-    // Judge outputs a single JSON line of ~30 tokens. 48-token cap is
-    // plenty of headroom and saves Poe-output cost vs the prior 64.
-    // Bump to 96 tokens so Gemini has room for prose around the verdict;
-    // poe/gpt-4o typically replies with JSON-only in ~30 tokens anyway.
-    // LM Studio thinking models (qwen3.6-35b-a3b) burn 300+ reasoning_tokens
-    // before emitting the verdict; raise to 768 for lmstudio so `content`
-    // has room after the reasoning budget is spent. Override via
-    // LOTL_JUDGE_MAX_TOKENS if you hit content-truncation on other models.
-    const envCap = Number(process.env.LOTL_JUDGE_MAX_TOKENS ?? 0);
-    const judgeMaxTokens = envCap > 0 ? envCap : (judgeProvider === "lmstudio" ? 768 : 96);
-    // Force structured JSON on lmstudio/poe paths. Gemma-4-26b-a4b without
-    // schema enforcement dropped 10-13% of verdicts at n=500 (unparseable).
-    // Gemini doesn't honor response_format so we pass undefined there.
-    const rf = (judgeProvider === "lmstudio" || judgeProvider === "poe") ? JUDGE_RESPONSE_SCHEMA : undefined;
-    const raw = await askLLM(fullPrompt, judgeProvider, judgeMaxTokens, judgeModelOverride ?? undefined, "judge", rf);
-    // 1) JSON path — preferred, works for Poe/gpt-4o and well-behaved models.
-    const m = raw.match(/\{[\s\S]*?\}/);
-    if (m) {
-      try {
-        const obj = JSON.parse(m[0]);
-        if (typeof obj.correct === "boolean") return obj.correct ? 1 : 0;
-      } catch { /* fall through to text parse */ }
-    }
-    // 2) Text fallback — Gemini-flash often replies with prose + CORRECT/WRONG.
-    //    Look for bare verdict tokens (case-insensitive).
-    const upper = raw.toUpperCase();
-    if (/\bINCORRECT\b|\bWRONG\b|"CORRECT":\s*FALSE/.test(upper)) return 0;
-    if (/\bCORRECT\b|"CORRECT":\s*TRUE/.test(upper)) return 1;
-    // Unparseable — log once so we can see the raw response shape.
-    process.stderr.write(`[judge] unparseable verdict: ${raw.slice(0, 120)}\n`);
-    return null;
-  } catch (err) {
-    process.stderr.write(`[judge] failed: ${err instanceof Error ? err.message : err}\n`);
-    return null;
-  }
+  const runs = Math.max(1, Number(process.env.LOTL_JUDGE_RUNS ?? 1));
+  if (runs === 1) return askJudgeOnce(fullPrompt, LLM_SEED);
+  // N-run: call with seeds LLM_SEED, LLM_SEED+1, LLM_SEED+2, ...
+  const verdicts: (number | null)[] = [];
+  for (let i = 0; i < runs; i++) verdicts.push(await askJudgeOnce(fullPrompt, LLM_SEED + i));
+  const ones = verdicts.filter(v => v === 1).length;
+  const zeros = verdicts.filter(v => v === 0).length;
+  // Majority vote; ties → 0 (strict default). Unanimous-null → null.
+  if (ones === 0 && zeros === 0) return null;
+  return ones > zeros ? 1 : 0;
 }
 
 function buildAnswerPrompt(question: string, memories: string[], questionType: string): string {

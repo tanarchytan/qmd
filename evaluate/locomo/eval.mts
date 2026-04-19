@@ -102,6 +102,7 @@ async function askLLM(
   maxTokens: number = 256,
   modelOverride?: string,
   responseFormat?: Record<string, unknown>,
+  seedOverride?: number,
 ): Promise<string> {
   const cfg = LLM_CONFIG[provider];
   const apiKey = process.env[cfg.keyEnv];
@@ -109,8 +110,8 @@ async function askLLM(
   const model = modelOverride || cfg.model;
   if (provider === "gemini") return askGemini(prompt, apiKey);
   if (provider === "minimax") return askMiniMax(prompt, apiKey);
-  if (provider === "poe") return askOpenAICompat(prompt, apiKey, cfg.url, model, maxTokens, responseFormat);
-  if (provider === "lmstudio") return askOpenAICompat(prompt, apiKey || "lm-studio", cfg.url, model, maxTokens, responseFormat);
+  if (provider === "poe") return askOpenAICompat(prompt, apiKey, cfg.url, model, maxTokens, responseFormat, seedOverride);
+  if (provider === "lmstudio") return askOpenAICompat(prompt, apiKey || "lm-studio", cfg.url, model, maxTokens, responseFormat, seedOverride);
   throw new Error(`LLM provider not supported: ${provider}`);
 }
 
@@ -139,17 +140,20 @@ async function askOpenAICompat(
   model: string,
   maxTokens: number = 256,
   responseFormat?: Record<string, unknown>,
+  seedOverride?: number,
 ): Promise<string> {
+  // Seed override supports the 3-run judge majority vote path in askJudge.
+  const effectiveSeed = seedOverride ?? LLM_SEED;
   // Include maxTokens in the key so thinking-model empty-content entries
   // cached at a smaller budget don't shadow valid results at a larger budget.
-  const cacheKey = { model, temperature: 0, seed: LLM_SEED, max_tokens: maxTokens, prompt };
+  const cacheKey = { model, temperature: 0, seed: effectiveSeed, max_tokens: maxTokens, prompt };
   const cached = llmCache.get(cacheKey);
   if (cached != null) return cached;
   const body: Record<string, unknown> = {
     model,
     messages: [{ role: "user", content: prompt }],
     temperature: 0,
-    seed: LLM_SEED,
+    seed: effectiveSeed,
     max_tokens: maxTokens,
   };
   if (responseFormat) body.response_format = responseFormat;
@@ -197,6 +201,35 @@ const JUDGE_SYSTEM_PROMPT =
     ? JUDGE_SYSTEM_PROMPT_STRICT
     : JUDGE_SYSTEM_PROMPT_LENIENT;
 
+async function askJudgeOnce(fullPrompt: string, seed: number): Promise<number | null> {
+  if (!judgeProvider) return null;
+  try {
+    const envCap = Number(process.env.LOTL_JUDGE_MAX_TOKENS ?? 0);
+    const judgeMaxTokens = envCap > 0 ? envCap : (judgeProvider === "lmstudio" ? 768 : 96);
+    const rf = (judgeProvider === "lmstudio" || judgeProvider === "poe") ? JUDGE_RESPONSE_SCHEMA : undefined;
+    const raw = await askLLM(fullPrompt, judgeProvider, judgeMaxTokens, judgeModelOverride ?? undefined, rf, seed);
+    const m = raw.match(/\{[\s\S]*?\}/);
+    if (m) {
+      try {
+        const obj = JSON.parse(m[0]);
+        if (typeof obj.correct === "boolean") return obj.correct ? 1 : 0;
+      } catch { /* fall through */ }
+    }
+    const upper = raw.toUpperCase();
+    if (/\bINCORRECT\b|\bWRONG\b|"CORRECT":\s*FALSE/.test(upper)) return 0;
+    if (/\bCORRECT\b|"CORRECT":\s*TRUE/.test(upper)) return 1;
+    process.stderr.write(`[judge] unparseable (seed=${seed}): ${raw.slice(0, 120)}\n`);
+    return null;
+  } catch (err) {
+    process.stderr.write(`[judge] failed (seed=${seed}): ${err instanceof Error ? err.message : err}\n`);
+    return null;
+  }
+}
+
+/**
+ * LoCoMo judge with optional N-run majority vote. LOTL_JUDGE_RUNS=N (default 1).
+ * N>1 runs at seeds LLM_SEED, LLM_SEED+1, ... and majority-votes.
+ */
 async function askJudge(question: string, predicted: string, gold: string): Promise<number | null> {
   if (!judgeProvider) return null;
   const userMsg =
@@ -205,32 +238,14 @@ async function askJudge(question: string, predicted: string, gold: string): Prom
     `PREDICTED ANSWER: ${predicted.trim()}\n\n` +
     `Respond with the JSON object only.`;
   const fullPrompt = `${JUDGE_SYSTEM_PROMPT}\n\n${userMsg}`;
-  try {
-    // LM Studio thinking models (qwen3.6-35b-a3b) burn 150+ reasoning_tokens
-    // before emitting the verdict content. Bump cap to 768 so `content` isn't
-    // starved. Override via LOTL_JUDGE_MAX_TOKENS for other models.
-    const envCap = Number(process.env.LOTL_JUDGE_MAX_TOKENS ?? 0);
-    const judgeMaxTokens = envCap > 0 ? envCap : (judgeProvider === "lmstudio" ? 768 : 96);
-    const rf = (judgeProvider === "lmstudio" || judgeProvider === "poe") ? JUDGE_RESPONSE_SCHEMA : undefined;
-    const raw = await askLLM(fullPrompt, judgeProvider, judgeMaxTokens, judgeModelOverride ?? undefined, rf);
-    // JSON path (preferred, Poe/gpt-4o).
-    const m = raw.match(/\{[\s\S]*?\}/);
-    if (m) {
-      try {
-        const obj = JSON.parse(m[0]);
-        if (typeof obj.correct === "boolean") return obj.correct ? 1 : 0;
-      } catch { /* fall through */ }
-    }
-    // Text fallback — Gemini-flash prose + CORRECT/WRONG.
-    const upper = raw.toUpperCase();
-    if (/\bINCORRECT\b|\bWRONG\b|"CORRECT":\s*FALSE/.test(upper)) return 0;
-    if (/\bCORRECT\b|"CORRECT":\s*TRUE/.test(upper)) return 1;
-    process.stderr.write(`[judge] unparseable: ${raw.slice(0, 120)}\n`);
-    return null;
-  } catch (err) {
-    process.stderr.write(`[judge] failed: ${err instanceof Error ? err.message : err}\n`);
-    return null;
-  }
+  const runs = Math.max(1, Number(process.env.LOTL_JUDGE_RUNS ?? 1));
+  if (runs === 1) return askJudgeOnce(fullPrompt, LLM_SEED);
+  const verdicts: (number | null)[] = [];
+  for (let i = 0; i < runs; i++) verdicts.push(await askJudgeOnce(fullPrompt, LLM_SEED + i));
+  const ones = verdicts.filter(v => v === 1).length;
+  const zeros = verdicts.filter(v => v === 0).length;
+  if (ones === 0 && zeros === 0) return null;
+  return ones > zeros ? 1 : 0;
 }
 
 async function askGemini(prompt: string, apiKey: string): Promise<string> {
