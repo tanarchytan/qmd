@@ -236,7 +236,13 @@ evaluate/
 │   ├── smoke-resume-full.sh              ← LM Studio mid-flight resume (cache replay)
 │   ├── smoke-resume-locomo.sh            ← LM Studio LoCoMo-only resume
 │   ├── smoke-gemma-validate.sh           ← LM Studio gemma-4 A/B vs llama+qwen
-│   └── rejudge-failed.sh                 ← LM Studio rejudge-only pass (after ctx overflow)
+│   ├── smoke-followup.sh                 ← A/B/C follow-up orchestrator
+│   ├── rejudge-failed.sh                 ← LM Studio rejudge-only pass (after ctx overflow)
+│   ├── phase-b-gemma.sh                  ← Phase B full-scale eval on gemma stack
+│   ├── phase-b-llama-qwen.sh             ← Phase B full-scale eval on llama+qwen stack
+│   ├── wilson-ci.mjs                     ← Wilson Score 95% CIs + distinguishability (Phase C)
+│   ├── audit-locomo-goldens.mjs          ← Cross-ref our results vs audit's errors.json
+│   └── extract-facts-batch.mjs           ← Phase 5 fact/triple extraction batch runner
 ├── sweeps/
 │   ├── configs/                          ← version-controlled sweep recipes
 │   │   ├── flag-sweep-phase1.txt

@@ -1,5 +1,50 @@
 # Changelog
 
+## [Unreleased]
+
+Gemma pivot + methodology upgrades in flight toward v1.0.0 GA.
+
+### Added
+
+- **LM Studio eval harness** for local LLM-as-judge with gemma-4 / qwen-35B / llama-3.1-8B.
+  Full scripts: `smoke-all-lmstudio.sh`, `smoke-gemma-validate.sh`, `phase-b-gemma.sh`,
+  `phase-b-llama-qwen.sh`, `rejudge-failed.sh`, `extract-facts-batch.mjs`.
+- **v14 CoT answer prompt** ported verbatim from dial481/locomo-audit's
+  `answer_prompt_cot`. Lifts judge accuracy meaningfully on gemma stack.
+- **Strict LoCoMo judge** — `LOTL_LOCOMO_JUDGE=strict` drops the "touches on topic" leniency
+  bug (6.9x inflation per audit). Default stays lenient for back-compat.
+- **response_format: json_schema** enforcement on lmstudio/poe judges — zero
+  unparseable verdicts (previously 10-13% dropout rate on gemma-4-26b-a4b).
+- **N-run judge majority vote** via `LOTL_JUDGE_RUNS` env (default 1).
+- **Answer persistence** — every generation written to `answer-cache/<hash>.json` for
+  replay with a different judge without regenerating.
+- **Wilson Score 95% CIs** — `evaluate/scripts/wilson-ci.mjs` with `--compare`
+  distinguishability flags. Stdlib-only Node port of audit's Python.
+- **LoCoMo golden audit cross-ref** — `evaluate/scripts/audit-locomo-goldens.mjs`
+  against dial481/locomo-audit's errors.json (quantifies theoretical ceiling gain
+  from 99 score-corrupting errors in the shipped goldens).
+- **Phase 5 scaffolding** (pre-v1.0) — schema migration for `fact_text` +
+  `fact_embedding` columns, `src/memory/fact-extractor.ts` with prompt template
+  + parser, `evaluate/scripts/extract-facts-batch.mjs` runner.
+
+### Fixed
+
+- **llm-cache v2 hash** includes max_tokens to prevent thinking-model stale-empty
+  entries from shadowing fresh calls at larger budgets. Legacy entries still
+  readable via fallback (non-empty only) so existing caches survive migration.
+- **LOTL_RECALL_NO_TOUCH=on** now defaults ON in both eval.mts entry points so
+  new eval scripts can't forget it (cost 3+ LM Studio crashes 2026-04-19).
+- **Cross-model unload** in LM Studio harness — `load_judge` now unloads the
+  gen model first (and vice versa) + 3s settle before the next load. LM Studio
+  doesn't auto-evict on load and can OOM a 24 GB card without this.
+- **Single-instance guarantee** — every `load_model` unloads `:N` suffix variants
+  first, preventing bare-name request routing ambiguity.
+- **context_length sizing** documented: LM Studio's `context_length` is TOTAL
+  across parallel slots. Per-slot = ctx / parallel. Scripts default to
+  `desired_per_slot × parallel`.
+- **LoCoMo eval worker pool** via `LOTL_LOCOMO_WORKERS`. LoCoMo was sequential
+  before; now honors parallel slots like LME does.
+
 ## [1.0.0-rc1] - 2026-04-18 — 🦎 Lotl
 
 **First stable release under the new name.** Previously `@tanarchy/lotl` — rebranded
