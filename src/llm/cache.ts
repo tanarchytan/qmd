@@ -43,11 +43,13 @@ export type LLMCache = {
 
 function makeHash(key: CacheKey): string {
   const h = createHash("sha256");
-  // Include max_tokens in the hash. Caught 2026-04-19 with gemma-4-e4b:
-  // thinking models cache empty content when the budget is consumed by
-  // reasoning; a subsequent call with a larger budget would hit that stale
-  // empty entry without this field in the hash.
-  h.update(`${key.model}|${key.temperature}|${key.seed ?? "noseed"}|${key.max_tokens ?? "default"}|${key.prompt}`);
+  // NOTE: max_tokens intentionally NOT in the hash for backward compat.
+  // Changing the hash invalidates every existing cache entry → cache-miss
+  // cascade triggers LM Studio auto-loads that can OOM a 24GB GPU when a
+  // different heavy model is already loaded (caught 2026-04-19 w/ qwen+llama).
+  // Thinking-model empty-content entries are worked around via
+  // LOTL_LLM_CACHE=off on runs that change the token budget (e.g. gemma).
+  h.update(`${key.model}|${key.temperature}|${key.seed ?? "noseed"}|${key.prompt}`);
   return h.digest("hex").slice(0, 16);
 }
 
