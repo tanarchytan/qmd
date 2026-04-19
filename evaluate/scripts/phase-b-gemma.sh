@@ -46,11 +46,14 @@ export LOTL_ANSWER_MAX_TOKENS=1536
 # Separate cache file so this run doesn't touch llama/qwen cache.
 export LOTL_LLM_CACHE_PATH="$PWD/evaluate/longmemeval/llm-cache-gemma.json"
 
-# VRAM-tuned from smoke:
-CTX_GEN=131072     # gemma-e4b: 16k/slot × 8 slots = ~128k total, fits model's 131072 max
-PARALLEL_GEN=8
-CTX_JUDGE=49152    # gemma-26b-a4b: 16k/slot × 3 slots — survived smoke without crash
-PARALLEL_JUDGE=3
+# VRAM-tuned from smoke. Env overrides let us run in "night mode" with halved
+# parallel slots (quieter fan, ~2× slower wall). Full-power default at 08:00+.
+#   Night mode: LOTL_PARALLEL_GEN=4 LOTL_PARALLEL_JUDGE=1 (half)
+#   Full power: LOTL_PARALLEL_GEN=8 LOTL_PARALLEL_JUDGE=3 (default)
+CTX_GEN="${LOTL_PARALLEL_GEN_CTX:-131072}"
+PARALLEL_GEN="${LOTL_PARALLEL_GEN:-8}"
+CTX_JUDGE="${LOTL_PARALLEL_JUDGE_CTX:-49152}"
+PARALLEL_JUDGE="${LOTL_PARALLEL_JUDGE:-3}"
 
 # Scale (override via env if you want a smaller test run)
 LME_LIMIT="${LOTL_LME_LIMIT:-500}"
