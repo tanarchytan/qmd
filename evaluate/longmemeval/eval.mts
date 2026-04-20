@@ -18,6 +18,12 @@ import { pathToFileURL } from "url";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { openCache } from "../../src/llm/cache.js";
+import { applyEvalEnvCompat } from "../shared/env-compat.js";
+
+// Phase E (#47) — mirror LOTL_EVAL_* ↔ LOTL_* for eval-only vars so existing
+// scripts (phase-b-gemma.sh, sweep-flags.sh) keep working while new docs +
+// scripts migrate to the LOTL_EVAL_* namespace. MUST run before env reads.
+applyEvalEnvCompat();
 
 // Default LOTL_RECALL_NO_TOUCH=on for the whole eval module. This MUST be set
 // before src/memory/index.ts is imported (below) so the first recall also

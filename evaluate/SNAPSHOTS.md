@@ -131,6 +131,84 @@ Comparison to published claims (different methodologies — not strictly apples-
 
 ---
 
+## v1.0.0 GA — combined-winners stack (reserved, fills tonight)
+
+> This section is a **skeleton**. Numbers below are `TBD` placeholders —
+> will be filled when the combined-winners run (#38) lands after the LM
+> Studio host comes back tonight. Replace TBD → actual in one pass when
+> the results JSON is ready; then bump #41 → completed.
+
+Stack (see `evaluate/scripts/phase-d-combined-winners.sh`):
+
+- Embedder: mxbai-embed-xsmall-v1 q8 (384d)
+- Retrieval: RRF 0.7/0.3 BM25/vec + keyword expansion + synonyms
+- Rerank: `jinaai/jina-reranker-v1-tiny-en` (Stage 9 winner, +4.9pp R@5)
+- Generator: `google/gemma-4-e4b` via LM Studio parallel=8 ctx=131072
+- Judge: `google/gemma-4-26b-a4b`, schema-forced JSON, 3-run majority vote
+- Prompt: v14 CoT (`LOTL_EVAL_PROMPT_RULES=v14`)
+- LoCoMo judge: strict (`LOTL_EVAL_LOCOMO_JUDGE=strict`)
+- Hygiene: `LOTL_RECALL_NO_TOUCH=on`
+
+### LongMemEval n=500 — combined-winners
+
+| Metric | Value | Wilson 95% CI | Notes |
+|---|---|---|---|
+| F1 (paper metric) | `TBD` | `[TBD, TBD]` | — |
+| R@5 | `TBD` | `[TBD, TBD]` | retrieval @ k=5 |
+| MRR | `TBD` | — | — |
+| NDCG@10 | `TBD` | — | — |
+| Judge accuracy (3-run majority) | `TBD` | `[TBD, TBD]` | — |
+| Wall | `TBD` min | — | gemma-e4b parallel=8 |
+
+### LoCoMo 10-conv × 20q (n=200) — combined-winners
+
+| Metric | Value | Wilson 95% CI |
+|---|---|---|
+| R@5 | `TBD` | `[TBD, TBD]` |
+| MRR | `TBD` | — |
+| F1 | `TBD` | `[TBD, TBD]` |
+| Judge accuracy (strict, 3-run majority) | `TBD` | `[TBD, TBD]` |
+| Wall | `TBD` min | — |
+
+### Adversarial baseline (#36) — judge leniency check
+
+| Answer source | Judge "correct" rate | Expected | Verdict |
+|---|---|---|---|
+| Golden                  | `TBD` | ≥60% | — |
+| v1 specific-wrong       | `TBD` | <10% | — |
+| v2 vague-topical        | `TBD` | <5%  | — |
+
+If v1 acceptance is much above 10% or v2 above 5%, the judge is too lenient
+for the release claim — retune gate before calling the release.
+
+### BEIR top-3 GGUF rerank sweep (#53) — optional alternative default
+
+Measured via LM Studio `/v1/chat/completions` scoring shim (see
+`src/llm/lmstudio-rerank.ts`). Kept out of the default stack if any config
+regresses vs jina-tiny; may be promoted post-release.
+
+| Reranker | BEIR paper | LoCoMo R@5 (7/3 weights) | Δ vs jina-tiny | Wall/q |
+|---|---|---|---|---|
+| jina-tiny-v1 (default)    | —      | `TBD` | —     | ~4 s (ONNX baseline) |
+| jina-reranker-v3          | 61.94  | `TBD` | `TBD` | `TBD` |
+| mxbai-rerank-large-v2     | 61.44  | `TBD` | `TBD` | `TBD` |
+| Qwen3-Reranker-4B         | 61.16  | `TBD` | `TBD` | `TBD` |
+| bge-reranker-v2-m3        | 56.51  | `TBD` | `TBD` | `TBD` |
+
+Reproducer (tonight):
+```sh
+bash evaluate/scripts/phase-d-combined-winners.sh --dry-run   # verify env stack
+bash evaluate/scripts/phase-d-combined-winners.sh             # fire full run
+bash evaluate/scripts/sweep-flags.sh \
+  evaluate/sweeps/configs/rerank-lmstudio-gguf.txt \
+  --corpus locomo --name beir-top3-gguf
+node evaluate/scripts/adversarial-gen.mjs \
+  evaluate/longmemeval/results-phase-d-combined-winners-pass1.json \
+  --provider lmstudio --limit 100
+```
+
+---
+
 ## Honest-eval principles applied
 
 See [`locomo/HYBRID_HARNESS.md`](./locomo/HYBRID_HARNESS.md) for the full audit

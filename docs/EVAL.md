@@ -148,6 +148,22 @@ The way it used to work (and still does with `--llm gemini`):
 
 All toggles default to the v15-final configuration. Override to ablate.
 
+### Naming convention — `LOTL_EVAL_*` vs `LOTL_*`
+
+As of 2026-04-20 (Phase E #47): variables that **only exist to tune the
+bench harness** use the `LOTL_EVAL_*` prefix. Variables that affect the
+production library stay as `LOTL_*`.
+
+- **New scripts / new code**: always use `LOTL_EVAL_*` for eval-only vars.
+- **Legacy scripts**: unchanged. A startup bridge in
+  `evaluate/shared/env-compat.ts` (applied by both `eval.mts` entry points)
+  mirrors `LOTL_X ↔ LOTL_EVAL_X` in both directions, so either form keeps
+  working. Tables below show the new name with the legacy `LOTL_*` form
+  noted where relevant.
+- **Rule of thumb**: if it only matters while running `evaluate/`, it's
+  `LOTL_EVAL_*`. If it also matters when importing Lotl as a library, it
+  stays `LOTL_*`.
+
 ### Ingest-side
 
 | Var | Default | Effect |
