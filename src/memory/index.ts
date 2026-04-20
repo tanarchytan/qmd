@@ -504,6 +504,40 @@ function ensureMemoriesVecTable(db: Database, dimensions: number): void {
   _memoriesVecHasPartition = true;
 }
 
+// =============================================================================
+// Phase 5b — parallel fact vec table for fact-augmented embedding keys
+// =============================================================================
+//
+// memories_vec_fact stores fact_embedding BLOBs in the same shape as
+// memories_vec. Populated by extract-facts-batch.mjs after fact extraction.
+// Retrieval at LOTL_MEMORY_EMBED_SOURCE=fact queries this table instead of
+// memories_vec. LOTL_MEMORY_EMBED_SOURCE=dual queries both and RRF-merges.
+//
+// Design: devnotes/architecture/phase5-kg-and-fact-aug-design.md
+// NULL fact_embedding rows are skipped (no entry in memories_vec_fact).
+
+let _memoriesVecFactInitialized = false;
+
+export function ensureMemoriesVecFactTable(db: Database, dimensions: number): void {
+  if (_memoriesVecFactInitialized) return;
+  const tableInfo = db.prepare(
+    `SELECT sql FROM sqlite_master WHERE type='table' AND name='memories_vec_fact'`
+  ).get() as { sql: string } | null;
+  if (tableInfo) {
+    const dimMatch = tableInfo.sql.match(/float\[(\d+)\]/);
+    const existingDims = dimMatch?.[1] ? parseInt(dimMatch[1], 10) : null;
+    if (existingDims === dimensions) {
+      _memoriesVecFactInitialized = true;
+      return;
+    }
+    db.exec(`DROP TABLE IF EXISTS memories_vec_fact`);
+  }
+  db.exec(
+    `CREATE VIRTUAL TABLE memories_vec_fact USING vec0(scope TEXT PARTITION KEY, id TEXT PRIMARY KEY, embedding float[${dimensions}] distance_metric=cosine)`
+  );
+  _memoriesVecFactInitialized = true;
+}
+
 /**
  * Pre-warm vec0 partitions for a known set of scope keys. Inserts then
  * immediately deletes a zero vector for each scope, which forces vec0 to
@@ -1273,26 +1307,40 @@ export async function memoryRecall(
       const kMultiplier = MEMORY_VEC_K_MULTIPLIER;
       const vecK = Math.max(limit, limit * kMultiplier);
 
+      // Phase 5b — LOTL_MEMORY_EMBED_SOURCE=fact routes vec queries to
+      // memories_vec_fact (fact-embeddings) instead of memories_vec (content).
+      // "dual" and unknown values fall back to content; separate dual-path
+      // RRF implementation can land when we have Phase 5b numbers to judge.
+      // "fact" with no populated fact_embedding table silently falls back to
+      // content (the table may not exist yet on pre-Phase-5 DBs).
+      const embedSource = (process.env.LOTL_MEMORY_EMBED_SOURCE || "content").toLowerCase();
+      let vecTable = "memories_vec";
+      if (embedSource === "fact") {
+        const factTableExists = db.prepare(
+          `SELECT name FROM sqlite_master WHERE type='table' AND name='memories_vec_fact'`
+        ).get();
+        if (factTableExists) vecTable = "memories_vec_fact";
+      }
       const runVecKnn = (emb: number[]): Array<{ id: string; distance: number }> => {
         if (_memoriesVecHasPartition && scope) {
           try {
             const scoped = db.prepare(
-              `SELECT id, distance FROM memories_vec
+              `SELECT id, distance FROM ${vecTable}
                WHERE scope = ? AND embedding MATCH ? AND k = ?`
             ).all(scope, new Float32Array(emb), vecK) as Array<{ id: string; distance: number }>;
             const globalResults = db.prepare(
-              `SELECT id, distance FROM memories_vec
+              `SELECT id, distance FROM ${vecTable}
                WHERE scope = ? AND embedding MATCH ? AND k = ?`
             ).all("global", new Float32Array(emb), Math.min(vecK, limit)) as Array<{ id: string; distance: number }>;
             return scoped.concat(globalResults);
           } catch {
             return db.prepare(
-              `SELECT id, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?`
+              `SELECT id, distance FROM ${vecTable} WHERE embedding MATCH ? AND k = ?`
             ).all(new Float32Array(emb), vecK * 20) as Array<{ id: string; distance: number }>;
           }
         }
         return db.prepare(
-          `SELECT id, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?`
+          `SELECT id, distance FROM ${vecTable} WHERE embedding MATCH ? AND k = ?`
         ).all(new Float32Array(emb), vecK * 20) as Array<{ id: string; distance: number }>;
       };
 

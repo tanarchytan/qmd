@@ -54,6 +54,7 @@ const { loadQmdEnv } = await import(toUrl(join(LOTL_DIR, "src/env.ts")));
 loadQmdEnv();
 const { openDatabase } = await import(toUrl(join(LOTL_DIR, "src/db.ts")));
 const { initializeDatabase } = await import(toUrl(join(LOTL_DIR, "src/store/db-init.ts")));
+const { ensureMemoriesVecFactTable } = await import(toUrl(join(LOTL_DIR, "src/memory/index.ts")));
 const { buildFactExtractionPrompt, parseFactExtraction, factExtractionCacheKey, factsToEmbeddableText, FACT_EXTRACTION_PROMPT_VERSION } = await import(toUrl(join(LOTL_DIR, "src/memory/fact-extractor.ts")));
 
 // --- Simple per-run cache (disk-backed) ---
@@ -137,11 +138,12 @@ async function ensureEmbedder() {
 const db = openDatabase(dbPath);
 initializeDatabase(db);
 
-const rows = db.prepare(`SELECT id, text FROM memories WHERE fact_text IS NULL ${limit > 0 ? `LIMIT ${limit}` : ""}`).all();
+const rows = db.prepare(`SELECT id, text, scope FROM memories WHERE fact_text IS NULL ${limit > 0 ? `LIMIT ${limit}` : ""}`).all();
 console.log(`Found ${rows.length} memories without fact_text. Extracting...`);
 
 const updateStmt = db.prepare(`UPDATE memories SET fact_text = ?, fact_embedding = ? WHERE id = ?`);
 let done = 0, skipped = 0, failed = 0;
+let vecFactStmt = null; // lazy — only prepare after we know embed dim
 
 for (const row of rows) {
   try {
@@ -155,6 +157,13 @@ for (const row of rows) {
       const embed = await ensureEmbedder();
       const [emb] = await embed([factText]);
       factEmb = Buffer.from(new Float32Array(emb).buffer);
+      // Phase 5b — mirror into memories_vec_fact so LOTL_MEMORY_EMBED_SOURCE=fact
+      // recall queries can hit fact embeddings via vec0 KNN.
+      if (!vecFactStmt) {
+        ensureMemoriesVecFactTable(db, emb.length);
+        vecFactStmt = db.prepare(`INSERT INTO memories_vec_fact (scope, id, embedding) VALUES (?, ?, ?)`);
+      }
+      try { vecFactStmt.run(row.scope || "global", row.id, new Float32Array(emb)); } catch {}
     }
     updateStmt.run(factText || null, factEmb, row.id);
     done++;
