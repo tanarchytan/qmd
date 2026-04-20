@@ -14,7 +14,7 @@
  *
  * Activation:
  *   LOTL_MEMORY_RERANK=cross-encoder
- *   LOTL_TRANSFORMERS_RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L6-v2  (default)
+ *   LOTL_TRANSFORMERS_RERANK_MODEL=jinaai/jina-reranker-v1-tiny-en  (default)
  *   LOTL_TRANSFORMERS_RERANK_FILE=model_quint8_avx2                     (default; no .onnx suffix)
  *   LOTL_TRANSFORMERS_RERANK_DTYPE=q8                                   (default)
  *
@@ -251,11 +251,18 @@ export function createTransformersRerankBackend(
   const m = model
     ?? envModel
     ?? process.env.LOTL_TRANSFORMERS_RERANK_MODEL
-    ?? "cross-encoder/ms-marco-MiniLM-L6-v2";
-  // Legacy cross-encoder ships model_quint8_avx2 explicitly; newer rerankers
-  // (jina-v1, mxbai-rerank-*, modernbert-based) don't use that filename and
-  // silently fail to load if we force it. Only inherit the legacy file/dtype
-  // defaults when the user hasn't changed the model.
+    ?? "jinaai/jina-reranker-v1-tiny-en";
+  // New default: jina-reranker-v1-tiny-en. Picked over legacy ms-marco-MiniLM
+  // after Stage 9 LoCoMo rerank sweep (2026-04-20) showed +4.9pp R@5 /
+  // +0.052 MRR at 7/3 RRF weights with only ~4s/query overhead. mxbai-xsmall
+  // scored higher (+6.4pp / +0.081 MRR) but at 24s/query — 6× too slow for
+  // production. Full picks table in devnotes/sessions/session-2026-04-19-gemma-pivot.md.
+  //
+  // Legacy cross-encoder (ms-marco-MiniLM-L6-v2) ships model_quint8_avx2
+  // explicitly; newer rerankers (jina-v1, mxbai-rerank-*, modernbert-based)
+  // use a different ONNX filename convention and silently fail to load if
+  // we force it. Keep the legacy-file-name inheritance branch for users
+  // who explicitly pin the old model.
   const isLegacyDefault = m === "cross-encoder/ms-marco-MiniLM-L6-v2";
   const d = dtype
     ?? process.env.LOTL_TRANSFORMERS_RERANK_DTYPE
