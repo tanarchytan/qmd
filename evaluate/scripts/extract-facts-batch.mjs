@@ -55,6 +55,7 @@ loadQmdEnv();
 const { openDatabase } = await import(toUrl(join(LOTL_DIR, "src/db.ts")));
 const { initializeDatabase } = await import(toUrl(join(LOTL_DIR, "src/store/db-init.ts")));
 const { ensureMemoriesVecFactTable } = await import(toUrl(join(LOTL_DIR, "src/memory/index.ts")));
+const { knowledgeStore } = await import(toUrl(join(LOTL_DIR, "src/memory/knowledge.ts")));
 const { buildFactExtractionPrompt, parseFactExtraction, factExtractionCacheKey, factsToEmbeddableText, FACT_EXTRACTION_PROMPT_VERSION } = await import(toUrl(join(LOTL_DIR, "src/memory/fact-extractor.ts")));
 
 // --- Simple per-run cache (disk-backed) ---
@@ -166,6 +167,24 @@ for (const row of rows) {
       try { vecFactStmt.run(row.scope || "global", row.id, new Float32Array(emb)); } catch {}
     }
     updateStmt.run(factText || null, factEmb, row.id);
+
+    // Phase 5a — push extracted SPO triples into the knowledge graph. Scope
+    // copied from source memory. Confidence held at 1.0 (LLM extraction is
+    // the trust floor; future work can score per-triple).
+    for (const t of parsed.triples || []) {
+      try {
+        knowledgeStore(db, {
+          subject: t.subject,
+          predicate: t.predicate,
+          object: t.object,
+          scope: row.scope || "global",
+          confidence: 1.0,
+        });
+      } catch (e) {
+        process.stderr.write(`[kg] triple failed id=${row.id} ${t.subject}/${t.predicate}/${t.object}: ${e.message}\n`);
+      }
+    }
+
     done++;
   } catch (e) {
     process.stderr.write(`[extract] failed id=${row.id}: ${e.message}\n`);
