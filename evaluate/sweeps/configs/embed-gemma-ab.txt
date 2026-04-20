@@ -1,0 +1,19 @@
+# embedding-gemma A/B vs mxbai-xs default.
+#
+# text-embedding-embeddinggemma-300m is Google's embedder, GGUF-only and
+# shipped in LM Studio's catalog. Tests if Google's 300M model beats our
+# shipped mxbai-xs 22M default on retrieval quality. Cost is GPU, not CPU.
+#
+# Rebuild the DB with embeddinggemma-300m first:
+#   LOTL_EMBED_BACKEND=lmstudio \
+#   LOTL_LMSTUDIO_EMBED_MODEL=text-embedding-embeddinggemma-300m \
+#     npx tsx evaluate/longmemeval/eval.mts --ds s --limit 500 \
+#       --db-suffix embed-gemma --no-llm
+#
+# Then this sweep compares the two DBs via --db-suffix.
+
+baseline-mxbai    LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1
+embed-gemma-9-1   LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1 LOTL_DB_SUFFIX=embed-gemma
+embed-gemma-7-3   LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_DB_SUFFIX=embed-gemma
+embed-gemma-5-5   LOTL_MEMORY_RRF_W_BM25=0.5 LOTL_MEMORY_RRF_W_VEC=0.5 LOTL_DB_SUFFIX=embed-gemma
+embed-gemma-3-7   LOTL_MEMORY_RRF_W_BM25=0.3 LOTL_MEMORY_RRF_W_VEC=0.7 LOTL_DB_SUFFIX=embed-gemma

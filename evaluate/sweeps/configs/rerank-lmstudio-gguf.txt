@@ -1,0 +1,29 @@
+# LM Studio rerank sweep — GGUF-only rerankers via the chat-completions shim.
+#
+# Unlocks models we couldn't test via the @huggingface/transformers ONNX path:
+#   - qwen3-reranker-0.6b           (LM Studio bundled, type=llm, GGUF)
+#   - mxbai-rerank-base-v2-GGUF     (v2, not v1 — different architecture than Stage 9)
+#   - mxbai-rerank-large-v2-GGUF    (v2 large)
+#   - gte-reranker-modernbert-base-gguf-q8_0  (keisuke-miyako's quant)
+#   - jina-reranker-v1-tiny-en-GGUF (sanity check vs our transformers baseline)
+#
+# PREREQUISITES:
+#   1. Download models into LM Studio via POST /api/v1/models/download with the HF URL.
+#   2. LM Studio server running at LOTL_LMSTUDIO_HOST (default 10.0.0.105:1234).
+#   3. Set LOTL_LMSTUDIO_RERANK_WORKERS=4 (or parallel-slot count for loaded model)
+#      so the scoring-prompt calls don't serialize.
+#
+# NOTE: LM Studio rerank is LLM-scored via chat-completions (no /v1/rerank
+# endpoint exists yet). Scores are noisier than transformers cross-encoder
+# logits but get GPU acceleration for GGUF models. For A/B credibility,
+# always compare against jina-tiny-w73 (our Stage 9 champion) at the same
+# weights so we see real lift.
+#
+# All runs at 7/3 weights to match Stage 9 directly-comparable numbers.
+
+baseline                        LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3
+qwen3-reranker-0.6b             LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=qwen3-reranker-0.6b
+mxbai-v2-base-gguf              LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=mradermacher/mxbai-rerank-base-v2-GGUF
+mxbai-v2-large-gguf             LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=mradermacher/mxbai-rerank-large-v2-GGUF
+gte-modernbert-gguf             LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=keisuke-miyako/gte-reranker-modernbert-base-gguf-q8_0
+jina-tiny-gguf-lmstudio         LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=gpustack/jina-reranker-v1-tiny-en-GGUF
