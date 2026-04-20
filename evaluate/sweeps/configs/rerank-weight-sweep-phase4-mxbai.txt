@@ -1,0 +1,15 @@
+# Phase D rerank-weight sweep — mxbai-xsmall-v1 variant of phase4 grid.
+#
+# Run this alongside rerank-weight-sweep-phase4.txt if the jina-tiny grid
+# suggests a weight ratio other than 7/3 wins. Gives us apples-to-apples
+# comparison between the two rerankers at whichever weight point is optimal
+# for each.
+#
+# Wall: 4× slower than jina grid (mxbai-xsmall = ~24s/q vs jina-tiny's ~4s).
+# Don't run until we need max-quality numbers for a specific weight.
+
+baseline            LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1
+mxrr-9-1            LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1 LOTL_MEMORY_RERANK=on LOTL_TRANSFORMERS_RERANK_MODEL=mixedbread-ai/mxbai-rerank-xsmall-v1
+mxrr-7-3            LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_TRANSFORMERS_RERANK_MODEL=mixedbread-ai/mxbai-rerank-xsmall-v1
+mxrr-5-5            LOTL_MEMORY_RRF_W_BM25=0.5 LOTL_MEMORY_RRF_W_VEC=0.5 LOTL_MEMORY_RERANK=on LOTL_TRANSFORMERS_RERANK_MODEL=mixedbread-ai/mxbai-rerank-xsmall-v1
+mxrr-3-7            LOTL_MEMORY_RRF_W_BM25=0.3 LOTL_MEMORY_RRF_W_VEC=0.7 LOTL_MEMORY_RERANK=on LOTL_TRANSFORMERS_RERANK_MODEL=mixedbread-ai/mxbai-rerank-xsmall-v1

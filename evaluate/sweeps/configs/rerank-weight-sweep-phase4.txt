@@ -1,0 +1,24 @@
+# Phase D rerank-weight sweep — Stage 9 winner (jina-tiny-v1) across BM25/vec ratios.
+#
+# Stage 9 data confirmed rerank helps at 7/3 weights (jina-tiny = +4.9pp R@5 /
+# +0.052 MRR) but ties baseline at 9/1 (Stage 11 combined-winners). So the
+# question for the release default: which ratio wins now that rerank ships on?
+#
+# Grid: 9 ratios spanning bm25-heavy → vec-heavy. Each runs with
+# jina-reranker-v1-tiny-en (our new default). Baseline row = no rerank at 9/1
+# for delta calc.
+#
+# Expected wall: 10 configs × ~3 min/config (short eval, rerank is the bottleneck)
+# × ~4s rerank overhead per query × ~200 LoCoMo questions = ~55s rerank wall per
+# config. Total ≈ 10-15 min wall for LoCoMo-full.
+
+baseline            LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1
+rr-9-1              LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1 LOTL_MEMORY_RERANK=on
+rr-8-2              LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on
+rr-7-3              LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on
+rr-6-4              LOTL_MEMORY_RRF_W_BM25=0.6 LOTL_MEMORY_RRF_W_VEC=0.4 LOTL_MEMORY_RERANK=on
+rr-5-5              LOTL_MEMORY_RRF_W_BM25=0.5 LOTL_MEMORY_RRF_W_VEC=0.5 LOTL_MEMORY_RERANK=on
+rr-4-6              LOTL_MEMORY_RRF_W_BM25=0.4 LOTL_MEMORY_RRF_W_VEC=0.6 LOTL_MEMORY_RERANK=on
+rr-3-7              LOTL_MEMORY_RRF_W_BM25=0.3 LOTL_MEMORY_RRF_W_VEC=0.7 LOTL_MEMORY_RERANK=on
+rr-2-8              LOTL_MEMORY_RRF_W_BM25=0.2 LOTL_MEMORY_RRF_W_VEC=0.8 LOTL_MEMORY_RERANK=on
+rr-1-9              LOTL_MEMORY_RRF_W_BM25=0.1 LOTL_MEMORY_RRF_W_VEC=0.9 LOTL_MEMORY_RERANK=on

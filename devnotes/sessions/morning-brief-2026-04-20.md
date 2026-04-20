@@ -132,6 +132,28 @@ Then SNAPSHOTS.md + CHANGELOG + release per Phase F.
 - **#36 adversarial plausibility** — needs LLM generation of v1 (specific-wrong)
   + v2 (vague-topical) wrong answers. Scoped but not scripted yet.
 - **#47 LOTL_EVAL_* prefix rename** — deferred; too risky to do while user asleep.
+- **#48 rerank-weight sweep with jina-tiny default** — config at
+  `evaluate/sweeps/configs/rerank-weight-sweep-phase4.txt`. Run via:
+
+  ```sh
+  # LoCoMo (where rerank actually helps)
+  bash evaluate/scripts/sweep-flags.sh \
+    evaluate/sweeps/configs/rerank-weight-sweep-phase4.txt \
+    --corpus locomo --name rerank-weight-jina-locomo
+
+  # LME (~10 min wall — fast because CPU rerank overhead is small per query)
+  bash evaluate/scripts/sweep-flags.sh \
+    evaluate/sweeps/configs/rerank-weight-sweep-phase4.txt \
+    --corpus lme --limit 500 --name rerank-weight-jina-lme
+  ```
+
+- **#49-#51 big rerankers retry** — config at
+  `evaluate/sweeps/configs/reranker-big-phase4.txt`. CPU wall 12-24h total.
+  Only run if idle GPU shift available. `LOTL_TRANSFORMERS_RERANK_MAXLEN=512`
+  baked in to prevent the ModernBERT OOM we hit before.
+
+- **#52 mxbai-rerank-v2 GGUF via LM Studio** — post-v1.0 experimental path
+  (needs rerank API shim in LM Studio, doesn't exist yet in their OpenAI-compat).
 
 ## Watch out
 
