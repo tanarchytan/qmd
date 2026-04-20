@@ -186,8 +186,8 @@ production library stay as `LOTL_*`.
 | Var | Default | Effect |
 |-----|---------|--------|
 | `LOTL_PROMPT_RULES` | v11 | `v10` minimal rules · `v11` full rules (multi-item, yes/no, synthesis, undefined) · `v11.1` adds ORDERING / DURATION / COUNTING rules · `v12` chain-of-thought + structured `Answer:`/`Cited:` output (paper-style, over-engineered in practice) · **`v13` minimal LongMemEval-paper-aligned** (memories + question only, recommended for LLM-judge runs) |
-| `LOTL_ANSWER_TOP_K` | 5 | How many retrieved memories are fed into the answer prompt. Retrieval still returns 50 for metric computation (MRR@50, R@50); answer prompt uses only the top-K. |
-| `LOTL_ANSWER_MAX_CHARS` | 6000 | Per-memory character cap before the memory enters the answer prompt. LongMemEval sessions average 8,283 chars — the 2026-04-17 jump from 800→6000 is what unblocked Phase 7.1 accuracy. Lower if you need to fit a small-context model. |
+| `LOTL_ANSWER_TOP_K` | 10 | How many retrieved memories are fed into the answer prompt. Retrieval still returns 50 for metric computation (MRR@50, R@50); answer prompt uses only the top-K. Default aligned with Mem0/MemOS/EverMemOS/Zep (all use ~10). |
+| `LOTL_ANSWER_MAX_CHARS` | 6000 | Per-memory character cap before the memory enters the answer prompt. LongMemEval sessions average 8,283 chars — the 2026-04-17 jump from 800→6000 is what unblocked Phase 7.1 accuracy. Note: 6000 is generous vs competitors because Lotl stores raw dialogue turns (longer atomic unit) rather than extracted short facts; Mem0/Zep/EverMemOS ingest pipelines LLM-extract to short facts (~100-300 chars) so no cap is needed. Lower if you need to fit a small-context model. |
 
 ### LLM-judge (`--judge <provider>` CLI flag)
 

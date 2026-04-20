@@ -1,0 +1,20 @@
+# Phase 6 sweep #2 — rerank blend α at rr-8-2.
+#
+# Measures how much we should trust rerank scores vs the normalized RRF
+# score when composing the final memoryRecall ranking. Both sides are
+# min-max normalized to [0,1] before blend, so α is meaningful.
+#
+# Interpretation:
+#   α=1.0 / β=0.0  → RRF-only (sanity check; rerank score entirely ignored)
+#   α=0.7 / β=0.3  → current default (RRF dominant, rerank corrects)
+#   α=0.5 / β=0.5  → equal weight
+#   α=0.3 / β=0.7  → rerank dominant, RRF as tiebreaker
+#   α=0.0 / β=1.0  → pure rerank order
+#
+# Expected wall: 5 × ~14 min = ~70 min on LME n=500.
+
+blend-10-00    LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_RERANK_BLEND_ORIGINAL=1.0 LOTL_MEMORY_RERANK_BLEND_RERANK=0.0
+blend-07-03    LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_RERANK_BLEND_ORIGINAL=0.7 LOTL_MEMORY_RERANK_BLEND_RERANK=0.3
+blend-05-05    LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_RERANK_BLEND_ORIGINAL=0.5 LOTL_MEMORY_RERANK_BLEND_RERANK=0.5
+blend-03-07    LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_RERANK_BLEND_ORIGINAL=0.3 LOTL_MEMORY_RERANK_BLEND_RERANK=0.7
+blend-00-10    LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_RERANK_BLEND_ORIGINAL=0.0 LOTL_MEMORY_RERANK_BLEND_RERANK=1.0

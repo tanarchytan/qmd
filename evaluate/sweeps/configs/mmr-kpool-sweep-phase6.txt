@@ -1,0 +1,20 @@
+# Phase 6 sweep #1 — MMR × rerank candidate pool.
+#
+# Built on today's LME winner (rr-8-2: BM25=0.8 / VEC=0.2 / jina-tiny rerank).
+# MMR clusters the top-K across sessions; bigger K feeds rerank more candidates.
+# Both levers are "squeeze more from mxbai-xs" plays.
+#
+# 8 configs: MMR {off, session} × K {20, 40, 75, 100}. Baseline (K=40 MMR off)
+# doubles as the rr-8-2 reproducer — confirms determinism + anchors the deltas.
+#
+# Expected wall per config on LME n=500: ~14 min (same per-query cost as rr-8-2,
+# K=100 adds ~30% to rerank wall only). Total ~2h.
+
+base-k40-mmr-off    LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_RERANK_CANDIDATE_LIMIT=40
+base-k40-mmr-on     LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_RERANK_CANDIDATE_LIMIT=40  LOTL_MEMORY_MMR=session
+k20-mmr-off         LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_RERANK_CANDIDATE_LIMIT=20
+k20-mmr-on          LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_RERANK_CANDIDATE_LIMIT=20  LOTL_MEMORY_MMR=session
+k75-mmr-off         LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_RERANK_CANDIDATE_LIMIT=75
+k75-mmr-on          LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_RERANK_CANDIDATE_LIMIT=75  LOTL_MEMORY_MMR=session
+k100-mmr-off        LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_RERANK_CANDIDATE_LIMIT=100
+k100-mmr-on         LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_RERANK_CANDIDATE_LIMIT=100 LOTL_MEMORY_MMR=session

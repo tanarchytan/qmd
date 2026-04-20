@@ -1,39 +1,71 @@
 # Lotl TODO — Optimization Phases
 
-> Last updated: 2026-04-20 morning.
+> Last updated: 2026-04-20 evening.
 >
-> **2026-04-20 session summary** — LM Studio host `10.0.0.105` offline
-> (physical reboot unavailable until tonight). 3 non-LM ONNX sweeps
-> running locally (#48 rerank-weight, #49–#51 big ONNX rerankers). All
-> LM-Studio-dependent tasks parked. See
-> `devnotes/sessions/session-2026-04-20-lmstudio-outage.md` for the
-> resume order and downloaded GGUF model table.
+> **2026-04-20 session summary** — LM Studio host offline until tomorrow.
+> LME weight sweep complete (rr-8-2 wins: R@5 94.3% / MRR 0.920).
+> LoCoMo weight sweep mid-flight (3/10 done, same BM25-heavy pattern).
+> Big ONNX rerankers in flight (CPU, 12-24h). Phase 6 follow-on queue
+> staged (4 sweeps, ~5.5h total) via `phase6-queue.sh`. See
+> `devnotes/sessions/session-2026-04-20-lmstudio-outage.md` and
+> `devnotes/sessions/tomorrow-lmstudio-plan-20260421.md`.
 >
-> **2026-04-19 session summary** — Phase 0-6 optimization infrastructure
-> shipped; rerun chain in flight. See
-> `devnotes/sessions/session-2026-04-19-morning-triage.md` for triage order
-> and `devnotes/sessions/v1.0.0-ga-release-checklist.md` for the release
-> path after data lands. Key corrections since last update:
+> **Reading order:** 3-category work dashboard below → current best →
+> completed phases → historical / backlog.
 >
-> - MRR "drift" 0.917 → 0.907 is a phantom — code unchanged since SNAPSHOTS
->   commit, original number likely measured on different DB state. No bisect.
-> - Reranker data in the first sweeps is INVALID (silent no-op fixed in
->   `9cba9bc`) + ModernBERT OOM fixed in `f766f9d`. Reruns landing today.
-> - `LOTL_RECALL_NO_TOUCH` guard added — eval A/B hygiene for shared DBs.
-> - 5 flag polarity bugs documented in
->   `devnotes/architecture/env-flag-polarity-reference.md`.
+> ---
 >
-> **Reading order:** Current best → completed → pending → backlog → parked.
-> Each pending phase has pass/fail gates.
+> ## Work dashboard — 3 categories
 >
-> **Open tracks (agent tasks):**
-> - #48 rerank weight sweep (ONNX jina-tiny, in flight)
-> - #49/#50/#51 big ONNX rerankers on LoCoMo 7/3 (in flight)
-> - #32/#33/#38 Phase B gemma + llama+qwen + combined-winners (parked — LM Studio)
-> - #52/#53 LM Studio GGUF rerank sweep (parked — LM Studio)
-> - #36 adversarial baseline (parked — needs LLM gen)
-> - #47 `LOTL_EVAL_*` rename (deferred post-sweep — 32 vars scoped)
-> - #41/#42 Phase F release (chain-blocked by #38)
+> Organized by what the work needs, not by phase. Each row maps to a
+> numbered task in the tasks backend for tracking.
+>
+> ### 1. Code — zero external dependency, doable anytime
+>
+> | # | Task | Status |
+> |---|------|--------|
+> | #47 | `LOTL_EVAL_*` env namespace bridge | **DONE** (compat shipped; full code migration is post-release cleanup) |
+> | #41 skeleton | `evaluate/SNAPSHOTS.md` v1.0.0 GA tables with TBD cells | **DONE** (waits for #38 numbers to fill) |
+> | #36 scaffold | `adversarial-gen.mjs` runner + v1/v2 prompts | **DONE** (LLM call staged; see CAT 3) |
+> | #38 scaffold | `phase-d-combined-winners.sh` env stack + dry-run | **DONE** (fires in CAT 3 when ready) |
+> | Phase 6 env knobs | Exposed `LOTL_MEMORY_RERANK_CANDIDATE_LIMIT` / `LOTL_MEMORY_RERANK_BLEND_ORIGINAL` / `LOTL_MEMORY_RERANK_BLEND_RERANK` | **DONE** |
+> | Phase 6 configs | max-chars / MMR×K / blend α / expand×syn sweep configs + queue script | **DONE** |
+> | Phase 6 summarizer | `summarize-phase6.mjs` auto-ranks winners across sweeps | **DONE** |
+> | Tomorrow plan doc | `tomorrow-lmstudio-plan-20260421.md` 6-step load order | **DONE** |
+>
+> ### 2. CPU — ONNX / local compute, running now or queued
+>
+> | # | Task | Status |
+> |---|------|--------|
+> | #48 LoCoMo | rerank weight sweep jina-tiny (10 configs) | **in flight** 3/10 done (rr-9-1/8-2/7-3 ✓, baseline failed — refire standalone later) |
+> | #49 / #50 / #51 | big ONNX rerankers (mxbai-base-v1, gte-modernbert, tomaarsen-modernbert) on LoCoMo 7/3 | **in flight** 1/4 configs done (baseline ✓), ~12-24h CPU wall |
+> | #57 | Phase 6 max-chars sweep (500/1000/2000/6000/7500) — **highest expected signal, fires first in Phase 6 queue** | **queued** (~70 min wall) |
+> | #54 | Phase 6 MMR × K-pool sweep (8 configs) | **queued** (~2h wall) |
+> | #55 | Phase 6 rerank blend α sweep (5 configs) | **queued** (~70 min wall) |
+> | #56 | Phase 6 expand × synonyms sweep (6 configs) | **queued** (~85 min wall) |
+>
+> CPU chain = CAT 2 runs autonomously via `phase6-queue.sh`
+> (currently waiting on #48/#49-51 SUMMARY.md). Total ~5.5 h after
+> current blockers clear. No user intervention needed until tomorrow.
+>
+> ### 3. LM Studio — blocked until host returns, sequenced for tomorrow
+>
+> Full plan: [`devnotes/sessions/tomorrow-lmstudio-plan-20260421.md`](../devnotes/sessions/tomorrow-lmstudio-plan-20260421.md).
+>
+> | # | Task | Load step | Depends on |
+> |---|------|-----------|------------|
+> | #33 | Phase B gemma JUDGE-ONLY rerun from pass1 cache | Step 1: `gemma-4-26b-a4b` | pass1.json (saved) |
+> | Phase 5b batch extract | populate `fact_embedding` + KG triples | Step 2: `gemma-4-e4b` | — |
+> | #38 | combined-winners full run | Step 2-3: `gemma-4-e4b` → `gemma-4-26b-a4b` | Phase 6 winners (CAT 2) |
+> | #36 | adversarial plausibility (judge-leniency test) | Step 3: `gemma-4-26b-a4b` | #38 results |
+> | #32 | llama+qwen cross-stack baseline | Step 4-5: `meta-llama-3.1-8b-instruct` → `qwen/qwen3.6-35b-a3b` | — (parallel with #38 if second host available) |
+> | #53 | BEIR top-3 GGUF rerank sweep | Step 6: swap per reranker | — (independent) |
+> | #52 | mxbai-rerank-v2 GGUF test | covered by #53 | — |
+> | #41 | SNAPSHOTS.md + CHANGELOG v1.0.0 fill | Step 7 (no LM Studio) | #38 results |
+> | #42 | v1.0.0 GA release (`/release 1.0.0`) | Step 7 (no LM Studio) | #41 |
+>
+> **Critical path to release**: #33 → Phase 5b → #38 → #36 → #41 → #42.
+> Everything else is parallel / validation / post-release.
 
 ---
 

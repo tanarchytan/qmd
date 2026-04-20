@@ -1,0 +1,24 @@
+# Phase 6 sweep #4 — per-memory char cap (LOTL_ANSWER_MAX_CHARS).
+#
+# Lotl stores raw dialogue turns as memories (large atomic unit, ~8k char
+# mean on LME _s). Competitors (Mem0/MemOS/Zep/EverMemOS) LLM-extract to
+# short facts (~100-300 chars) and don't need a per-doc cap. Our default
+# 6000 is ~6-20× looser than any competitor's effective per-doc size.
+#
+# This sweep tests whether the extra per-memory context actually helps
+# retrieval→answer accuracy or is just token burn:
+#
+#   500   — matches EverMemOS sufficiency-check cap (tight)
+#   1000  — Mem0-ish envelope
+#   2000  — middle ground
+#   6000  — current default (2026-04-17 Phase 7.4 winner)
+#   7500  — looser test (user-requested)
+#
+# Base config: rr-8-2 (BM25=0.8 / VEC=0.2 / rerank on / TOP_K=10).
+# Expected wall: 5 × ~14 min = ~70 min on LME n=500.
+
+maxchars-500     LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_ANSWER_MAX_CHARS=500
+maxchars-1000    LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_ANSWER_MAX_CHARS=1000
+maxchars-2000    LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_ANSWER_MAX_CHARS=2000
+maxchars-6000    LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_ANSWER_MAX_CHARS=6000
+maxchars-7500    LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_ANSWER_MAX_CHARS=7500

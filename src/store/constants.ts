@@ -21,7 +21,10 @@ export const CHUNK_WINDOW_CHARS = CHUNK_WINDOW_TOKENS * 4;
 // Hybrid query: strong BM25 signal detection thresholds
 export const STRONG_SIGNAL_MIN_SCORE = 0.85;
 export const STRONG_SIGNAL_MIN_GAP = 0.15;
-export const RERANK_CANDIDATE_LIMIT = 40;
+// Rerank pool: how many candidates feed the cross-encoder. Bigger pool =
+// more chances the answer is inside for rerank to find, at linear cost
+// in rerank wall. Default 40 (Stage 9). Env-overridable for sweeps.
+export const RERANK_CANDIDATE_LIMIT = Number(process.env.LOTL_MEMORY_RERANK_CANDIDATE_LIMIT ?? 40);
 // RRF and scoring tunables
 export const RRF_K = 60;
 export const WEIGHT_FTS = 2.0;
@@ -78,8 +81,11 @@ export const MEMORY_L2_FIRST_N_USER_TURNS = 3;
 // Rerank still defaults OFF in memoryRecall (LOTL_MEMORY_RERANK=on to enable)
 // because cross-encoder per-query cost is 4-5 s on CPU — too slow for
 // production memory recall latency targets.
-export const MEMORY_RERANK_BLEND_ORIGINAL = 0.7;
-export const MEMORY_RERANK_BLEND_RERANK = 0.3;
+//
+// Env overrides let the blend be re-swept without a recompile. Both sum is
+// not enforced (allows pure-rerank α=0/1 or RRF-only α=1/0).
+export const MEMORY_RERANK_BLEND_ORIGINAL = Number(process.env.LOTL_MEMORY_RERANK_BLEND_ORIGINAL ?? 0.7);
+export const MEMORY_RERANK_BLEND_RERANK = Number(process.env.LOTL_MEMORY_RERANK_BLEND_RERANK ?? 0.3);
 
 /** Weight for intent terms relative to query terms (1.0) in snippet scoring */
 export const INTENT_WEIGHT_SNIPPET = 0.3;

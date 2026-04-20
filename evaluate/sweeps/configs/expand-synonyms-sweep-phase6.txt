@@ -1,0 +1,16 @@
+# Phase 6 sweep #3 — query expansion × BM25 synonyms at rr-8-2.
+#
+# Both were crutches for weak vec / no-rerank. With rerank on + BM25-heavy
+# RRF, they may be redundant or noise. 2 × 3 grid re-tests them jointly.
+#
+# Default is expand=keywords (from prior sweeps) + synonyms=on.
+# Testing: expand=keywords/entities/off × synonyms=on/off.
+#
+# Expected wall: 6 × ~14 min = ~85 min on LME n=500.
+
+expand-kw-syn-on      LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_EXPAND=keywords
+expand-kw-syn-off     LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_EXPAND=keywords LOTL_MEMORY_SYNONYMS=off
+expand-ent-syn-on     LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_EXPAND=entities
+expand-ent-syn-off    LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_EXPAND=entities LOTL_MEMORY_SYNONYMS=off
+expand-off-syn-on     LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_EXPAND=off
+expand-off-syn-off    LOTL_MEMORY_RRF_W_BM25=0.8 LOTL_MEMORY_RRF_W_VEC=0.2 LOTL_MEMORY_RERANK=on LOTL_MEMORY_EXPAND=off      LOTL_MEMORY_SYNONYMS=off
