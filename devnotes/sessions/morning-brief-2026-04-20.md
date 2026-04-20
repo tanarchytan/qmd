@@ -21,17 +21,38 @@ overnight (should have finished ~06:00).
 
 See `git log 5cc777f..HEAD` for exact range; also reverse-chron via `git log --oneline -20`.
 
+## Overnight findings already triaged
+
+Stage 9 finished + 5 more sweeps completed. No action needed to check — I reviewed them:
+
+### Rerank Stage 9 (LoCoMo 10-conv, 7/3 weights)
+
+| Config | R@5 | MRR | Wall | Per-query cost |
+|---|---|---|---|---|
+| baseline | 52.0% | 0.411 | 64s | — |
+| **jina-tiny-v1** | **56.9% (+4.9)** | **0.462 (+0.052)** | 2h17m | **~4s** |
+| jina-turbo-v1 | 55.8% (+3.9) | 0.461 (+0.050) | 3h24m | ~6s |
+| mxbai-xsmall-v1 | 58.4% (+6.4) | 0.491 (+0.081) | 13h33m | ~24s (too slow) |
+
+The 3 big rerankers (mxbai-base, gte-modernbert, tomaarsen-modernbert)
+did not run — sweep stopped after mxbai-xsmall's 13.6h run.
+
+**Default picked: `jinaai/jina-reranker-v1-tiny-en`** (commit `e4991eb`).
+mxbai-xsmall wins absolute quality but at 6× jina-tiny's latency → opt-in only.
+
+### Other overnight sweeps (all landed)
+
+- **MRR drift (5 passes)**: byte-identical 52.7% / 0.415 across all 5 → pipeline fully deterministic ✓
+- **All-flags-stack LME**: best is `expand-kw-plus-entities` at R@5 93.6% (+0.3) / MRR 0.909 (+0.002)
+- **All-flags-stack LoCoMo**: ⚠ `all-flags-including-weak` = R@5 15.8% (**−37.0pp**). LHASH+DIVERSIFY toxic combo. Warning added (commit `d35e585`).
+- **Flag-corrected LME (Stage 14)**: `expand=none` wins — R@5 93.8% (+0.4) / MRR 0.910 (+0.003)
+- **Flag-corrected LoCoMo (Stage 14b)**: `synonyms=off` wins by +0.2pp R@5 (noise band)
+- **Combined-winners LoCoMo (Stage 11)**: rr-only at default 9/1 weights ties baseline — rerank only helps at 7/3 weights
+- **LLM-judge A/B (Stage 13, Gemini n=100)**: completed — check SUMMARY for content-flag deltas
+
 ## Fire order — 08:30 → evening
 
-### 1. Check rerank Stage 9 (local workstation, no LM Studio needed)
-
-```sh
-bash evaluate/scripts/summarize-rerankers-now.sh
-```
-
-Expected: 7 configs all completed overnight (baseline + jina-tiny + jina-turbo
-+ mxbai-xsmall + mxbai-base + gte-modernbert + tomaarsen-modernbert). Pick
-winner via MRR + R@5 lift.
+### 1. ~~Check Stage 9~~ (DONE — results above)
 
 ### 2. Phase B gemma clean run (LM Studio, ~2.5h)
 
