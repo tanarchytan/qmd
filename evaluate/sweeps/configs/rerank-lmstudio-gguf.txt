@@ -1,11 +1,26 @@
 # LM Studio rerank sweep — GGUF-only rerankers via the chat-completions shim.
 #
-# Unlocks models we couldn't test via the @huggingface/transformers ONNX path:
+# Unlocks models we couldn't test via the @huggingface/transformers ONNX path.
+#
+# BEIR nDCG@10 top-3 (jina-v3 paper, Table 3) — all covered:
+#   #1 jina-reranker-v3        0.6B   61.94  (listwise)
+#   #2 mxbai-rerank-large-v2   1.5B   61.44
+#   #3 Qwen3-Reranker-4B       4.0B   61.16
+# Plus secondary comparators (bge-v2-m3, qwen3-0.6B, mxbai-base-v2, gte-modernbert, jina-tiny).
+#
+# Sweep members:
 #   - qwen3-reranker-0.6b           (LM Studio bundled, type=llm, GGUF)
+#   - qwen3-reranker-4b-gguf        (BEIR #3; QuantFactory quant)
 #   - mxbai-rerank-base-v2-GGUF     (v2, not v1 — different architecture than Stage 9)
-#   - mxbai-rerank-large-v2-GGUF    (v2 large)
+#   - mxbai-rerank-large-v2-GGUF    (BEIR #2)
 #   - gte-reranker-modernbert-base-gguf-q8_0  (keisuke-miyako's quant)
 #   - jina-reranker-v1-tiny-en-GGUF (sanity check vs our transformers baseline)
+#   - jina-reranker-v3-GGUF         (BEIR #1; may need llama.cpp fork — flag if fails)
+#   - bge-reranker-v2-m3-GGUF       (0.6B multilingual; BEIR 56.51; gpustack quant, mainline-safe)
+#   - jina-reranker-m0-GGUF         (commented; #4 on BEIR at 58.95, multimodal multilingual — uncomment to include)
+#
+# jina-tiny ONNX remains the transformers.js default (Stage 9 champion).
+# LM Studio variants are opt-in via LOTL_RERANK_BACKEND=lmstudio for GPU A/Bs.
 #
 # PREREQUISITES:
 #   1. Download models into LM Studio via POST /api/v1/models/download with the HF URL.
@@ -23,7 +38,14 @@
 
 baseline                        LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3
 qwen3-reranker-0.6b             LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=qwen3-reranker-0.6b
-mxbai-v2-base-gguf              LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=mradermacher/mxbai-rerank-base-v2-GGUF
-mxbai-v2-large-gguf             LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=mradermacher/mxbai-rerank-large-v2-GGUF
-gte-modernbert-gguf             LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=keisuke-miyako/gte-reranker-modernbert-base-gguf-q8_0
-jina-tiny-gguf-lmstudio         LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=gpustack/jina-reranker-v1-tiny-en-GGUF
+qwen3-reranker-4b-gguf          LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=qwen3-reranker-4b
+mxbai-v2-base-gguf              LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=mxbai-rerank-base-v2
+mxbai-v2-large-gguf             LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=mxbai-rerank-large-v2
+gte-modernbert-gguf             LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=gte-reranker-modernbert-base
+jina-tiny-gguf-lmstudio         LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=jina-reranker-v1-tiny-en
+jina-v3-listwise-gguf           LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=jina-reranker-v3
+# LM Studio registered bge-v2-m3 under a text-embedding- prefixed ID — quirk of its
+# autodetection. The /v1/chat/completions call our lmstudio-rerank shim uses may fail
+# if LM Studio routes this as embed-only. If so, reclassify the model in LM Studio UI.
+bge-reranker-v2-m3-gguf         LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=text-embedding-bge-reranker-v2-m3
+# jina-reranker-m0-gguf         LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=jina-reranker-m0

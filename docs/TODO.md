@@ -1,6 +1,13 @@
 # Lotl TODO — Optimization Phases
 
-> Last updated: 2026-04-19 morning.
+> Last updated: 2026-04-20 morning.
+>
+> **2026-04-20 session summary** — LM Studio host `10.0.0.105` offline
+> (physical reboot unavailable until tonight). 3 non-LM ONNX sweeps
+> running locally (#48 rerank-weight, #49–#51 big ONNX rerankers). All
+> LM-Studio-dependent tasks parked. See
+> `devnotes/sessions/session-2026-04-20-lmstudio-outage.md` for the
+> resume order and downloaded GGUF model table.
 >
 > **2026-04-19 session summary** — Phase 0-6 optimization infrastructure
 > shipped; rerun chain in flight. See
@@ -18,6 +25,15 @@
 >
 > **Reading order:** Current best → completed → pending → backlog → parked.
 > Each pending phase has pass/fail gates.
+>
+> **Open tracks (agent tasks):**
+> - #48 rerank weight sweep (ONNX jina-tiny, in flight)
+> - #49/#50/#51 big ONNX rerankers on LoCoMo 7/3 (in flight)
+> - #32/#33/#38 Phase B gemma + llama+qwen + combined-winners (parked — LM Studio)
+> - #52/#53 LM Studio GGUF rerank sweep (parked — LM Studio)
+> - #36 adversarial baseline (parked — needs LLM gen)
+> - #47 `LOTL_EVAL_*` rename (deferred post-sweep — 32 vars scoped)
+> - #41/#42 Phase F release (chain-blocked by #38)
 
 ---
 

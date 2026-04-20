@@ -26,6 +26,22 @@ Gemma pivot + methodology upgrades in flight toward v1.0.0 GA.
 - **Phase 5 scaffolding** (pre-v1.0) — schema migration for `fact_text` +
   `fact_embedding` columns, `src/memory/fact-extractor.ts` with prompt template
   + parser, `evaluate/scripts/extract-facts-batch.mjs` runner.
+- **LM Studio GPU backends** for GGUF-only models (commit `afc4141`):
+  - `src/llm/lmstudio-rerank.ts` — chat-completions scoring shim (LM Studio has
+    no `/v1/rerank` endpoint). Worker pool via `LOTL_LMSTUDIO_RERANK_WORKERS=4`,
+    `response_format: json_schema` enforcement on the 0–1 score output.
+    Activate with `LOTL_RERANK_BACKEND=lmstudio`.
+  - `src/llm/lmstudio-embed.ts` — direct `/v1/embeddings` integration for
+    GGUF embedders (embedding-gemma-300m, etc). Activate with
+    `LOTL_EMBED_BACKEND=lmstudio`.
+- **BEIR top-3 GGUF sweep config** — `evaluate/sweeps/configs/rerank-lmstudio-gguf.txt`
+  covers jina-reranker-v3 (BEIR 61.94 #1), mxbai-rerank-large-v2 (#2, 61.44),
+  Qwen3-Reranker-4B (#3, 61.16), plus secondary comparators (bge-v2-m3,
+  qwen3-0.6B, mxbai-base-v2, gte-modernbert, jina-tiny). All at 7/3 weights
+  for direct Stage 9 comparability.
+- **embedding-gemma A/B config** — `evaluate/sweeps/configs/embed-gemma-ab.txt`
+  tests Google's 300M GGUF embedder vs our shipped mxbai-xs 22M across 4 RRF
+  ratios. Requires `--db-suffix embed-gemma` rebuild first.
 
 ### Fixed
 

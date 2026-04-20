@@ -1,7 +1,62 @@
 # Lotl Roadmap
 
 > For agents: this file tracks all pending work and benchmark history. Read this first when resuming a session.
-> Last updated: 2026-04-17 late night (Phase 7 three-bug investigation; char-cap identified as the real bottleneck)
+> Last updated: 2026-04-20 morning (LM Studio outage — pivoted to non-LM sweeps + docs)
+
+---
+
+## 🟡 2026-04-20 morning — LM Studio host offline, pivoted to ONNX sweeps
+
+Scheduled 08:30 resume of Phase B gemma (gen done overnight 08:55 → 494 KB
+`pass1.json` saved) was aborted when the LM Studio host `10.0.0.105`
+dropped offline. 100% ping loss, whole machine unreachable, user unable
+to physically reboot until tonight. All LM Studio–dependent tasks parked.
+
+### Pre-outage (done before 09:00)
+
+- **LM Studio GPU backends shipped** (commit `afc4141`):
+  `src/llm/lmstudio-rerank.ts` (chat-completions scoring shim — LM Studio
+  has no `/v1/rerank`) and `src/llm/lmstudio-embed.ts` (direct
+  `/v1/embeddings`). Opt-in via `LOTL_RERANK_BACKEND=lmstudio` /
+  `LOTL_EMBED_BACKEND=lmstudio`. 776 tests pass.
+- **GGUF models downloaded** for BEIR top-3 sweep via
+  `POST /api/v1/models/download` with HF URLs:
+  - #1 jina-reranker-v3 (BEIR 61.94, may need llama.cpp fork — smoke first)
+  - #2 mxbai-rerank-large-v2 (61.44)
+  - #3 Qwen3-Reranker-4B (61.16, gap-filler added today)
+  - plus bge-v2-m3, qwen3-0.6B, mxbai-base-v2, gte-modernbert, jina-tiny,
+    embeddinggemma-300m
+- **Config patches** — `rerank-lmstudio-gguf.txt` updated to LM Studio's
+  canonical short IDs (not HF repo names).
+- **Phase B gemma gen** → `results-phase-b-lme-v14-gemma-pass1.json`
+  (494 KB, n=500) — safe on disk; judge-only rerun needed tonight.
+
+### Non-LM-Studio sweeps fired after outage (ONNX, local CPU)
+
+| Sweep | Wall | Status |
+|---|---|---|
+| rerank weight sweep (jina-tiny, 9 ratios + baseline) on LoCoMo | ~10–15 min | running |
+| rerank weight sweep on LME n=500 | ~10 min | running |
+| big rerankers (mxbai-base-v1, gte-modernbert, tomaarsen-modernbert) @ 7/3 | 12–24h CPU | running |
+
+### Deferred (too risky mid-sweep)
+
+- **#47 `LOTL_EVAL_*` prefix rename** — subagent identified 32 eval-only
+  vars + 1 shared (`LOTL_RECALL_NO_TOUCH`). Renaming while sweeps actively
+  reference `LOTL_*` names risks silent breakage. Resumes post-sweep with
+  backward-compat fallback (new name primary, old name aliased).
+
+### Tonight's resume order (brief duplicated in session doc)
+
+1. `curl http://10.0.0.105:1234/v1/models` confirm up
+2. `phase-b-gemma.sh` — judge-only rerun from pass1 cache (~15–20 min)
+3. `phase-b-llama-qwen.sh` cross-stack (~2h)
+4. Wilson CI compare
+5. `sweep-flags.sh rerank-lmstudio-gguf.txt --corpus locomo` (BEIR top-3 A/B)
+6. Combined winners → Phase F release
+
+See `devnotes/sessions/session-2026-04-20-lmstudio-outage.md` for full
+download table, risk flags, and the adversarial baseline script scoping.
 
 ---
 
