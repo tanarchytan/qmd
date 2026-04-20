@@ -1473,7 +1473,21 @@ export async function memoryRecall(
   // L2 first-N user turns), collapse them to unique sessions with a
   // weighted score. Default OFF — only fires when LOTL_MEMORY_LHASH=on
   // AND memories carry ingest_level metadata.
+  //
+  // WARNING: LHASH + RECALL_DIVERSIFY together produced −37pp R@5 on the
+  // LoCoMo all-flags-stack sweep (2026-04-20). Do NOT enable both at once
+  // in production. The diversify step after LHASH collapsing leaves too
+  // few distinct sessions to pick from and tanks retrieval.
   const lHashEnabled = process.env.LOTL_MEMORY_LHASH === "on";
+  if (lHashEnabled && process.env.LOTL_RECALL_DIVERSIFY === "on") {
+    // Log once per process (not per call) to avoid flooding. Warn on first
+    // encounter of the toxic pair.
+    const g = globalThis as unknown as { __lotlLhashDiversifyWarned?: boolean };
+    if (!g.__lotlLhashDiversifyWarned) {
+      g.__lotlLhashDiversifyWarned = true;
+      process.stderr.write("[memory] WARNING: LOTL_MEMORY_LHASH + LOTL_RECALL_DIVERSIFY both enabled — tanks LoCoMo R@5 by ~37pp. Disable one.\n");
+    }
+  }
   if (lHashEnabled && results.size > 0) {
     const levelWeight = (lvl: string | undefined): number => {
       if (lvl === "L1") return MEMORY_L1_WEIGHT;
