@@ -95,7 +95,12 @@ export async function judgeAnswer(input: JudgeInput): Promise<JudgeVerdict> {
     const text = await res.text();
     if (!res.ok) throw new Error(`judge HTTP ${res.status}: ${text.slice(0, 200)}`);
     const json = JSON.parse(text);
-    const raw = String(json.choices?.[0]?.message?.content ?? "").trim();
+    // Thinking-model fallback (qwen3.6 etc route structured output into
+    // reasoning_content when content is empty).
+    const msg = json.choices?.[0]?.message;
+    const raw = String(
+      (msg?.content && msg.content.length > 0) ? msg.content : (msg?.reasoning_content ?? "")
+    ).trim();
     // Tolerate the model wrapping the JSON in prose or fences.
     const match = raw.match(/\{[\s\S]*?\}/);
     const obj = match ? JSON.parse(match[0]) : { correct: false, reason: "could not parse verdict" };

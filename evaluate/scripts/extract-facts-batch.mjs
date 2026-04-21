@@ -97,7 +97,9 @@ async function callLLM(prompt) {
     });
     if (!resp.ok) throw new Error(`lmstudio ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
     const data = await resp.json();
-    raw = data.choices?.[0]?.message?.content || "";
+    // Thinking-model fallback: qwen3.6 routes structured output into reasoning_content.
+    const msg = data.choices?.[0]?.message;
+    raw = (msg?.content && msg.content.length > 0) ? msg.content : (msg?.reasoning_content || "");
   } else if (provider === "gemini") {
     const apiKey = process.env.GOOGLE_API_KEY;
     if (!apiKey) throw new Error("GOOGLE_API_KEY not set");

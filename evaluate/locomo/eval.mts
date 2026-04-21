@@ -324,7 +324,10 @@ async function askMiniMax(prompt: string, apiKey: string): Promise<string> {
   }
 
   const data = await resp.json() as any;
-  let text = data.choices?.[0]?.message?.content || "";
+  // Same thinking-model fallback as askLLM (caught 2026-04-21 on qwen3.6):
+  // some models route output to reasoning_content instead of content.
+  const msg = data.choices?.[0]?.message;
+  let text = (msg?.content && msg.content.length > 0) ? msg.content : (msg?.reasoning_content || "");
   text = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
   const answerMatch = text.match(/(?:^|\n)(?:Answer:\s*)(.*)/i);
   if (answerMatch) text = answerMatch[1]!.trim();

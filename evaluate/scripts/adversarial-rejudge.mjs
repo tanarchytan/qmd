@@ -80,7 +80,9 @@ async function judge(question, golden, candidate, host, model) {
   });
   if (!resp.ok) throw new Error(`judge ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
   const data = await resp.json();
-  const raw = data.choices?.[0]?.message?.content ?? "";
+  // Thinking-model fallback: qwen3.6 routes structured output into reasoning_content.
+  const msg = data.choices?.[0]?.message;
+  const raw = (msg?.content && msg.content.length > 0) ? msg.content : (msg?.reasoning_content ?? "");
   try {
     const m = raw.match(/\{[\s\S]*?\}/);
     if (m) {

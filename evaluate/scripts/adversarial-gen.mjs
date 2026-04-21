@@ -109,7 +109,9 @@ async function callLLM({ prompt, provider, model, host }) {
   });
   if (!resp.ok) throw new Error(`lmstudio ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
   const data = await resp.json();
-  const raw = data.choices?.[0]?.message?.content ?? "";
+  // Thinking-model fallback: qwen3.6 routes structured output into reasoning_content.
+  const msg = data.choices?.[0]?.message;
+  const raw = (msg?.content && msg.content.length > 0) ? msg.content : (msg?.reasoning_content ?? "");
   try {
     const obj = JSON.parse(raw);
     if (typeof obj.wrong_answer === "string") return obj.wrong_answer.trim();
