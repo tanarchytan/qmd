@@ -538,8 +538,6 @@ src/
 ├── llm/
 │   ├── transformers-embed.ts   ← mxbai-xs q8 backend (default local)
 │   ├── transformers-rerank.ts  ← jina-reranker-v1-tiny-en cross-encoder (Stage 9 champion default)
-│   ├── lmstudio-embed.ts       ← /v1/embeddings GGUF (LOTL_EMBED_BACKEND=lmstudio)
-│   ├── lmstudio-rerank.ts      ← chat-completions scoring shim (LOTL_RERANK_BACKEND=lmstudio, json_schema enforced)
 │   ├── remote.ts               ← OpenAI/ZE/SF/Gemini/Poe providers
 │   ├── cache.ts                ← LLM response cache
 │   ├── gpu-probe.ts            ← OS-level VRAM + driver detector

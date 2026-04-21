@@ -299,7 +299,6 @@ function parseTimeReference(query: string): TimeReference | null {
 // FTS + remote. The native binding can crash on some Windows test envs.
 // =============================================================================
 let _onnxBackend: any = null;
-let _lmstudioBackend: any = null;
 async function getLocalEmbedBackend(): Promise<any> {
   const backend = process.env.LOTL_EMBED_BACKEND;
   if (backend === "transformers") {
@@ -312,20 +311,6 @@ async function getLocalEmbedBackend(): Promise<any> {
       process.stderr.write(`transformers embed backend load failed: ${err instanceof Error ? err.message : err}\n`);
       return null;
     }
-  }
-  if (backend === "lmstudio") {
-    // LM Studio's /v1/embeddings for GGUF-only embedders (embeddinggemma, etc.).
-    // Returns a minimal backend shape compatible with the caller's `embed()`
-    // expectation: { embed(text) → { embedding: number[] | null } }.
-    if (_lmstudioBackend) return _lmstudioBackend;
-    const mod = await import("../llm/lmstudio-embed.js");
-    _lmstudioBackend = {
-      embed: async (text: string, _opts?: { isQuery?: boolean }) => {
-        const [emb] = await mod.lmStudioEmbed([text]);
-        return { embedding: emb || null };
-      },
-    };
-    return _lmstudioBackend;
   }
   return null;
 }
@@ -1571,28 +1556,6 @@ export async function memoryRecall(
         const backend = await mod.createTransformersRerankBackend();
         const docs = rerankCandidates.map(r => ({ file: r.id, text: r.text }));
         const result = await backend.rerank(query, docs);
-        const rawScores = result.results.map(r => r.score);
-        const minS = Math.min(...rawScores);
-        const maxS = Math.max(...rawScores);
-        const range = maxS - minS;
-        const normMap = new Map<string, number>();
-        for (const r of result.results) {
-          const norm = range > 0 ? (r.score - minS) / range : 0.5;
-          normMap.set(r.file, norm);
-        }
-        for (const r of rerankCandidates) {
-          const rerankScore = normMap.get(r.id);
-          if (rerankScore !== undefined) {
-            r.score = MEMORY_RERANK_BLEND_ORIGINAL * normRrf(r.score) + MEMORY_RERANK_BLEND_RERANK * rerankScore;
-          }
-        }
-        sorted = rerankCandidates.sort((a, b) => b.score - a.score);
-      } else if (rerankBackend === "lmstudio") {
-        // LM Studio rerank — chat-completions shim (no /v1/rerank endpoint).
-        // Suitable for GPU-accelerated rerank with GGUF-only models.
-        const mod = await import("../llm/lmstudio-rerank.js");
-        const docs = rerankCandidates.map(r => ({ file: r.id, text: r.text }));
-        const result = await mod.lmStudioRerank(query, docs);
         const rawScores = result.results.map(r => r.score);
         const minS = Math.min(...rawScores);
         const maxS = Math.max(...rawScores);

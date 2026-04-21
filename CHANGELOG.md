@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **LM Studio as rerank + embed backend** (`src/llm/lmstudio-rerank.ts`,
+  `src/llm/lmstudio-embed.ts`, `LOTL_RERANK_BACKEND=lmstudio`,
+  `LOTL_EMBED_BACKEND=lmstudio`, `LOTL_LMSTUDIO_{RERANK,EMBED}_*` env
+  vars, accompanying tests and sweep configs). A post-v1.0 LoCoMo
+  probe showed the chat-completions scoring shim produces poor
+  rerank gradients at ~45 s/query wall — F1 3.8 % on conv-26 vs
+  13.2 % for the shipped jina-reranker-v1-tiny-en cross-encoder. The
+  `/v1/embeddings` shim worked wire-wise but never beat the shipped
+  transformers mxbai-xs q8 default. The entire code path is removed
+  rather than parked, because LM Studio cannot expose a real
+  `/v1/rerank` endpoint and the shim misled users into sweeps that
+  couldn't produce useful numbers. Use the `transformers` backend for
+  local rerank/embed or any `remote` OpenAI-compatible provider. LM
+  Studio remains fully supported for **answer generation and LLM-as-judge**
+  in the eval harness (`LOTL_LMSTUDIO_{HOST,KEY,GEN_MODEL,JUDGE_MODEL}`
+  unchanged).
+
 ## [1.0.0] - 2026-04-21 — 🦎 Lotl GA
 
 **First stable release.** Headline numbers landed via Phase 6 squeeze sweeps
