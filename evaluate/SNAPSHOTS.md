@@ -174,6 +174,62 @@ rerank blend α, expand × synonyms. See `docs/TODO.md` CAT 2 for live status.
 
 ---
 
+## Phase 6 squeeze sweeps — 2026-04-21 (LME n=500, retrieval-only)
+
+Built on 2026-04-20 LME weight-sweep winner (rr-8-2: BM25=0.8/VEC=0.2 + jina-tiny rerank).
+4 sub-sweeps × 24 configs total. Reproducer: `bash evaluate/scripts/phase6-watchdog.sh`.
+
+### max-chars (`LOTL_ANSWER_MAX_CHARS` ∈ {500, 1000, 2000, 6000, 7500})
+
+All 5 byte-identical: R@5 0.943 / MRR 0.920. **No-op on retrieval** — char cap only
+affects the LLM answer prompt, which `--no-llm` mode bypasses. Re-test under LLM
+judge once LM Studio is back.
+
+### MMR × K-pool (8 configs)
+
+All 8 byte-identical: R@5 0.943 / MRR 0.920. MMR session-level diversification
+has no effect on LME single-scope queries; pool size 20/40/75/100 produces
+identical top-K results. **No signal** — `LOTL_MEMORY_RERANK_CANDIDATE_LIMIT`
+hardcoded to 40, MMR knob hidden from .env.example (kept in code for LoCoMo
+follow-on).
+
+### Rerank blend α — **REAL SIGNAL**
+
+| tag | R@5 | MRR | NDCG / F1 |
+|---|---|---|---|
+| blend-10-00 (RRF only) | 0.934 | 0.907 | — / 0.062 |
+| blend-07-03 (prior default) | 0.943 | 0.920 | — / 0.065 |
+| **blend-05-05 (winner)** | **0.944** | **0.922** | — / 0.066 |
+| blend-03-07 | 0.941 | 0.914 | — / 0.067 |
+| blend-00-10 (pure rerank) | 0.919 | 0.895 | — / 0.067 |
+
+Equal-weight blend wins by +0.001 R@5 / +0.002 MRR over 0.7/0.3.
+**Hardcoded** — `MEMORY_RERANK_BLEND_ORIGINAL=0.5`, `_RERANK=0.5`.
+
+### Expand × Synonyms — **REAL SIGNAL**
+
+| tag | R@5 | MRR |
+|---|---|---|
+| expand-off-syn-off | **0.948** | 0.918 |
+| expand-ent-syn-off | 0.946 | 0.918 |
+| expand-ent-syn-on | 0.946 | 0.916 |
+| expand-off-syn-on | 0.946 | 0.916 |
+| **expand-kw-syn-off** | 0.943 | **0.921** |
+| expand-kw-syn-on (prior default) | 0.943 | 0.920 |
+
+`syn=off` wins on every expand mode by +0.001-0.002 MRR. **Hardcoded**:
+synonyms always off in `src/memory/index.ts` (env knob removed).
+
+`expand=keywords` wins MRR; `expand=off` wins R@5 by +0.005pp at -0.002 MRR.
+Kept env-configurable. Default stays `keywords` (best MRR, our headline metric).
+
+### Headline (with all Phase 6 hardcodes)
+
+- **Best R@5: 94.8%** (+1.4pp vs 2026-04-20 baseline 93.4%, +5.0pp vs 2026-04-17 no-rerank baseline)
+- **Best MRR: 0.922** (+0.015 vs 2026-04-20 baseline 0.907)
+
+---
+
 ## v1.0.0 GA — combined-winners stack (reserved, fills tonight)
 
 > This section is a **skeleton**. Numbers below are `TBD` placeholders —

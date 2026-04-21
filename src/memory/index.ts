@@ -20,7 +20,6 @@ import {
   MEMORY_FTS_OVERFETCH, MEMORY_VEC_K_MULTIPLIER,
   MEMORY_RERANK_BLEND_ORIGINAL, MEMORY_RERANK_BLEND_RERANK,
   MEMORY_RRF_K, MEMORY_RRF_W_BM25, MEMORY_RRF_W_VEC, MEMORY_RRF_W_TIME,
-  MEMORY_SYNONYMS,
 } from "../store/constants.js";
 
 // =============================================================================
@@ -1211,17 +1210,10 @@ export async function memoryRecall(
     // recall_any@5, +0.7pp R@5) by reducing noisy out-of-scope candidates.
     // 5× loses recall. 10× is the validated sweet spot.
     //
-    // Synonym expansion: each term expands to OR-joined synonyms from
-    // MEMORY_SYNONYMS. Opt out via LOTL_MEMORY_SYNONYMS=off.
-    const synonymsEnabled = process.env.LOTL_MEMORY_SYNONYMS !== "off";
-    const expandTerm = (t: string): string => {
-      if (!synonymsEnabled) return `"${t}"*`;
-      const syns = MEMORY_SYNONYMS[t];
-      if (!syns || syns.length === 0) return `"${t}"*`;
-      // Inline OR group: ("term"* OR "syn1"* OR "syn2"*)
-      const parts = [t, ...syns].map(s => `"${s}"*`);
-      return `(${parts.join(' OR ')})`;
-    };
+    // Synonym expansion was env-gated until 2026-04-21. Phase 6 expand×syn
+    // sweep on n=500 LME confirmed syn=off wins on every expand mode by
+    // +0.001-0.002 MRR. Hardcoded off — patch this file to re-enable.
+    const expandTerm = (t: string): string => `"${t}"*`;
     const safeFtsQuery = terms.map(expandTerm).join(' OR ');
     const ftsResults = db.prepare(
       `SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?`

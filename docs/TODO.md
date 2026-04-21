@@ -91,17 +91,19 @@
 
 ## Current best
 
-### LongMemEval _s (n=500, retrieval-only, 2026-04-20)
+### LongMemEval _s (n=500, retrieval-only, 2026-04-21 with Phase 6 hardcodes)
 
-Reproducer: `bash evaluate/scripts/sweep-flags.sh evaluate/sweeps/configs/rerank-weight-sweep-phase4.txt --corpus lme --limit 500 --name rerank-weight-jina-lme`.
+Reproducer: `bash evaluate/scripts/sweep-flags.sh evaluate/sweeps/configs/rerank-weight-sweep-phase4.txt --corpus lme --limit 500 --name rerank-weight-jina-lme`
+plus the new defaults baked into `src/store/constants.ts` (blend 0.5/0.5, RRF 0.8/0.2)
+and `src/memory/index.ts` (synonyms hardcoded off).
 
-| Config | rAny@5 | R@5 | MRR | NDCG@10 | Δ MRR |
-|---|---|---|---|---|---|
-| baseline (RRF 9/1, no rerank) — 2026-04-17 snapshot | 98.4% | 93.7% | 0.917 | 0.913 | — |
-| baseline (RRF 9/1, no rerank) — 2026-04-20 repro on same DB | 97.8% | 93.4% | 0.907 | 0.904 | −0.010 (DB-state drift, see ROADMAP) |
-| **rr-8-2** (RRF 0.8/0.2 + jina-tiny rerank) — **new v1.0 winner** | **98.2%** | **94.3%** | **0.920** | **0.916** | **+0.013** vs 04-20 baseline |
-| rr-6-4 (0.6/0.4 + rerank) | 98.2% | 94.5% | 0.917 | 0.915 | +0.010 |
-| rr-9-1 (0.9/0.1 + rerank) | 98.2% | 94.4% | 0.919 | 0.916 | +0.012 |
+| Config | R@5 | MRR | Δ MRR |
+|---|---|---|---|
+| baseline (RRF 9/1, no rerank) — 2026-04-17 snapshot | 93.7% | 0.917 | — |
+| baseline (RRF 9/1, no rerank) — 2026-04-20 repro on same DB | 93.4% | 0.907 | −0.010 (DB-state drift) |
+| rr-8-2 (RRF 0.8/0.2 + jina-tiny rerank, blend 0.7/0.3) — 2026-04-20 winner | 94.3% | 0.920 | +0.013 |
+| **rr-8-2 + blend 0.5/0.5** — Phase 6 hardcoded default | **94.4%** | **0.922** | **+0.015** |
+| **rr-8-2 + blend 0.5/0.5 + synonyms-off + expand=off** — best R@5 | **94.8%** | 0.918 | +0.011 |
 
 Key finding: BM25-heavy RRF (>0.5 BM25) + rerank wins. Vec-heavy regresses
 (rerank cannot recover from a bad initial pool given mxbai-xs's vec quality).
