@@ -2,25 +2,6 @@
 
 ## [Unreleased]
 
-### Removed
-
-- **LM Studio as rerank + embed backend** (`src/llm/lmstudio-rerank.ts`,
-  `src/llm/lmstudio-embed.ts`, `LOTL_RERANK_BACKEND=lmstudio`,
-  `LOTL_EMBED_BACKEND=lmstudio`, `LOTL_LMSTUDIO_{RERANK,EMBED}_*` env
-  vars, accompanying tests and sweep configs). A post-v1.0 LoCoMo
-  probe showed the chat-completions scoring shim produces poor
-  rerank gradients at ~45 s/query wall — F1 3.8 % on conv-26 vs
-  13.2 % for the shipped jina-reranker-v1-tiny-en cross-encoder. The
-  `/v1/embeddings` shim worked wire-wise but never beat the shipped
-  transformers mxbai-xs q8 default. The entire code path is removed
-  rather than parked, because LM Studio cannot expose a real
-  `/v1/rerank` endpoint and the shim misled users into sweeps that
-  couldn't produce useful numbers. Use the `transformers` backend for
-  local rerank/embed or any `remote` OpenAI-compatible provider. LM
-  Studio remains fully supported for **answer generation and LLM-as-judge**
-  in the eval harness (`LOTL_LMSTUDIO_{HOST,KEY,GEN_MODEL,JUDGE_MODEL}`
-  unchanged).
-
 ## [1.0.0] - 2026-04-21 — 🦎 Lotl GA
 
 **First stable release.** Headline numbers landed via Phase 6 squeeze sweeps
@@ -64,16 +45,6 @@ synonyms off.
   for `fact_text` + `fact_embedding` columns, `src/memory/fact-extractor.ts`
   with prompt template + parser, `evaluate/scripts/extract-facts-batch.mjs`
   runner. A/B of fact-augmented embedding retrieval deferred to v1.1.
-- **LM Studio GPU backends** for GGUF-only models:
-  - `src/llm/lmstudio-rerank.ts` — chat-completions scoring shim (LM
-    Studio has no `/v1/rerank` endpoint). Worker pool via
-    `LOTL_LMSTUDIO_RERANK_WORKERS=4`, `response_format: json_schema`
-    enforcement on the 0–1 score output. Defense-in-depth
-    `reasoning_content` fallback for thinking-model shims. Activate
-    with `LOTL_RERANK_BACKEND=lmstudio`.
-  - `src/llm/lmstudio-embed.ts` — direct `/v1/embeddings` integration
-    for GGUF embedders (embedding-gemma-300m, etc). Activate with
-    `LOTL_EMBED_BACKEND=lmstudio`.
 - **Adversarial judge-leniency pipeline** (#36) —
   `evaluate/scripts/adversarial-gen.mjs` generates v1 specific-wrong
   and v2 vague-topical distractors from the results JSON; companion
@@ -92,13 +63,6 @@ synonyms off.
   single-instance lockfile via `tasklist` (Git Bash `kill -0` doesn't
   work for out-of-session PIDs on Windows) and self-heals transient
   non-zero exits with a 5-retry loop.
-- **BEIR top-3 GGUF sweep** (#53) —
-  `evaluate/sweeps/configs/rerank-lmstudio-gguf.txt` covers the BEIR
-  top-3 cross-encoders (jina-v3 #1, mxbai-large-v2 #2, Qwen3-4B #3)
-  plus comparators. Driver scripts `phase-d-beir-early-stop.sh` +
-  `phase-d-beir-decoder-parallel.sh` explore the design space. See
-  **Known limitations** below for what actually runs.
-
 ### Changed — Phase 6 squeeze-sweep hardcodes
 
 Four LME n=500 sweeps (max-chars / MMR × K-pool / rerank-blend α /
@@ -134,13 +98,12 @@ gen/judge pair.
   (and other qwen3 family models) route structured JSON output into
   `message.reasoning_content` instead of `message.content`, producing
   100% empty verdicts on any harness that only reads `content`. Patched
-  across 6 call sites: `evaluate/{locomo,longmemeval}/eval.mts`
+  across 5 eval-harness call sites: `evaluate/{locomo,longmemeval}/eval.mts`
   (`askLLM` + LoCoMo's `askMiniMax` path),
-  `evaluate/longmemeval/poe-judge.mts`,
-  `evaluate/scripts/{extract-facts-batch,adversarial-gen,adversarial-rejudge}.mjs`,
-  and `src/llm/lmstudio-rerank.ts` (defense-in-depth). Pattern is
-  consistent: set `enable_thinking:false` when the model matches
-  `/qwen3/i`, then read `content || reasoning_content` with the
+  `evaluate/longmemeval/poe-judge.mts`, and
+  `evaluate/scripts/{extract-facts-batch,adversarial-gen,adversarial-rejudge}.mjs`.
+  Pattern is consistent: set `enable_thinking:false` when the model
+  matches `/qwen3/i`, then read `content || reasoning_content` with the
   structured-JSON regex applied to whichever is non-empty.
 - **Phase 5b fact extract** — `extract-facts-batch.mjs` used a
   non-existent `mod.embedTexts`; replaced with
@@ -177,21 +140,28 @@ gen/judge pair.
   Confirm with `wmic process list`, target specific PIDs. Captured in
   the devnotes runbook.
 
-### Known limitations
+### Removed (since v1.0.0-rc1)
 
-- **Cross-encoder rerankers via LM Studio are fundamentally
-  incompatible** with the `/v1/chat/completions` shim — jina-tiny,
-  jina-v3, gte-modernbert, and bge-v2-m3 all return
+- **LM Studio rerank + embed backends** — the short-lived
+  `src/llm/lmstudio-rerank.ts` (chat-completions scoring shim) and
+  `src/llm/lmstudio-embed.ts` (direct `/v1/embeddings`) landed in
+  rc1 but never benchmarked well enough to ship: the scoring shim
+  produced poor rerank gradients at ~45 s/query (F1 3.8 % on LoCoMo
+  conv-26 vs 13.2 % for the shipped jina-reranker-v1-tiny-en
+  cross-encoder), and cross-encoder rerankers return
   HTTP 400 "the current context does not logits computation. skipping"
-  because LM Studio registers them as `type=llm`. Only decoder-style
-  rerankers can be shim'd. Full BEIR A/B waits on LM Studio exposing a
-  `/v1/rerank` endpoint or an ONNX-runtime bridge.
-- **qwen3 rerankers (0.6B, 4B) via LM Studio** are thinking models and
-  LM Studio doesn't reliably honor `enable_thinking:false` — each
-  rerank query took ~47s on qwen3-reranker-0.6b at parallel=32
-  (~2.5 h per config, unusable for sweeps). The mxbai-rerank-v2 family
-  remains the only non-thinking decoder path confirmed to rerank at
-  sweep speed via this shim.
+  through LM Studio's chat-completions endpoint because LM Studio
+  registers them as `type=llm`. The embed shim worked but never beat
+  the shipped `transformers` mxbai-xs q8 default. Both paths are
+  removed — along with `LOTL_{RERANK,EMBED}_BACKEND=lmstudio`, the
+  `LOTL_LMSTUDIO_{RERANK,EMBED}_*` env vars, tests, and BEIR sweep
+  configs — rather than parked, because LM Studio fundamentally can't
+  expose a real `/v1/rerank` endpoint and the shim misled users into
+  sweeps that couldn't produce useful numbers. Use the `transformers`
+  backend (local cross-encoder) or any `remote` OpenAI-compatible
+  provider for rerank and embed. LM Studio remains fully supported
+  for **answer generation and LLM-as-judge** in the eval harness
+  (`LOTL_LMSTUDIO_{HOST,KEY,GEN_MODEL,JUDGE_MODEL}` unchanged).
 
 ## [1.0.0-rc1] - 2026-04-18 — 🦎 Lotl
 
