@@ -1,0 +1,13 @@
+# BEIR top-3 rerank sweep — Phase 1 (baseline + jina-tiny + 3 best per BEIR).
+#
+# Order follows the user's decision rule: if metrics drop monotonically from
+# BEIR #1 → #2 → #3 on LoCoMo, further rerankers are unlikely to win and
+# the early-stop wrapper skips Phase 2. If any inversion, Phase 2 fires.
+#
+# All at 7/3 weights to match Stage 9 jina-tiny baseline numbers.
+
+baseline                        LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3
+jina-tiny-gguf-lmstudio         LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=jina-reranker-v1-tiny-en
+jina-v3-listwise-gguf           LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=jina-reranker-v3
+mxbai-v2-large-gguf             LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=mxbai-rerank-large-v2
+qwen3-reranker-4b-gguf          LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=lmstudio LOTL_LMSTUDIO_RERANK_MODEL=qwen3-reranker-4b
