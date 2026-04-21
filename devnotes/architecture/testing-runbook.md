@@ -283,9 +283,57 @@ For multi-hour runs that chain multiple sweeps, use:
 - `evaluate/scripts/chained-sweeps.sh` — 6-stage main chain (~3h)
 - `evaluate/scripts/follow-up-sweeps.sh` — 8-stage follow-up (~3h)
 - `evaluate/scripts/reruns-chain.sh` — replays invalidated stages (~90min)
+- `evaluate/scripts/phase6-queue.sh` — Phase 6 squeeze-mxbai-xs chain:
+  max-chars → MMR×K → rerank blend α → expand×synonyms (~5.5h LME)
+- `evaluate/scripts/phase6-watchdog.sh` — wraps phase6-queue with a
+  heartbeat file + 5-retry self-heal on transient exits. Prefer this
+  over calling the queue directly for multi-hour runs.
 
-Each writes a `MASTER.md` triage doc to its own `evaluate/sweeps/chain-<ts>/`
-directory. Failures don't stop the chain; each stage logs its outcome.
+Each chain writes a `MASTER.md` or `SUMMARY.md` triage doc to its own
+`evaluate/sweeps/<chain>-<ts>/` directory. Failures don't stop the
+chain; each stage logs its outcome.
+
+### Resumable sweeps (2026-04-21)
+
+Historical pain: overnight sweeps die when Claude Code crashes (bash
+children get SIGHUP'd with the parent). Prior to 2026-04-21 this meant
+losing all partial work in a sweep.
+
+`sweep-flags.sh` is now resume-friendly:
+
+- **Reuses incomplete sweep dirs**: next invocation with the same
+  `--name` prefix lands in the most recent incomplete dir (no SUMMARY.md
+  present) instead of creating a new timestamped one.
+- **Skips completed configs**: `run_one_lme` / `run_one_locomo`
+  short-circuit if `<config>/lme.json` or `locomo.json` exists and is
+  non-partial.
+
+`phase6-watchdog.sh` adds:
+
+- **Heartbeat file** (`evaluate/logs/phase6-heartbeat.txt`) with
+  `<unix-ts> <status>` updated every 60 s while alive.
+- **Self-heal**: up to 5 retries on non-zero exit, 30 s backoff.
+- **`--status` flag** for quick agent-side liveness probe: prints
+  heartbeat age + completed sweeps + in-progress configs.
+
+Agent-side pattern: cron loop at `7 */2 * * *` reads heartbeat, re-fires
+`bash evaluate/scripts/phase6-watchdog.sh` if dead. After a Claude
+crash, the recovery is just running that command manually — it picks up
+where the last config left off.
+
+### Monitor pitfalls (what I got wrong 2026-04-21)
+
+- **Polling the outer queue log mtime is a false signal.**
+  `phase6-queue.sh` only prints between-config banners, so its log can
+  be fresh only every ~15 min. Watch per-config `lme.log` / `locomo.log`
+  mtimes for real liveness, OR the heartbeat file.
+- **Monitor tool itself dies with the Claude session.** Not a substitute
+  for the OS-level heartbeat. Both layers matter: Monitor for fast
+  detection during an alive session, cron + heartbeat for persistence.
+- **Claude's background Bash children don't survive Claude restart.**
+  Moving to a Windows Scheduled Task or NSSM would fully decouple, but
+  adds deploy friction. Current approach: accept the re-invoke cost,
+  rely on resume logic to make it cheap.
 
 ## Interpretation checklist
 

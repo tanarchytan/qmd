@@ -1,13 +1,33 @@
 # Lotl TODO — Optimization Phases
 
-> Last updated: 2026-04-20 evening.
+> Last updated: 2026-04-21 morning.
 >
-> **2026-04-20 session summary** — LM Studio host offline until tomorrow.
-> LME weight sweep complete (rr-8-2 wins: R@5 94.3% / MRR 0.920).
-> LoCoMo weight sweep mid-flight (3/10 done, same BM25-heavy pattern).
-> Big ONNX rerankers in flight (CPU, 12-24h). Phase 6 follow-on queue
-> staged (4 sweeps, ~5.5h total) via `phase6-queue.sh`. See
-> `devnotes/sessions/session-2026-04-20-lmstudio-outage.md` and
+> **2026-04-21 session summary** — Overnight: Claude Code crashed, SIGHUP'd
+> all background bash children. Lost ~11h of compute (Phase 6 queue never
+> fired; LoCoMo weight sweep stopped at 3/10 configs; big ONNX rerankers
+> stopped at 1/4). Morning triage:
+>
+> - **LME weight sweep** (yesterday, 10/10): rr-8-2 wins — R@5 94.3% / MRR
+>   0.920 / NDCG@10 0.916 with jina-tiny rerank. BM25-heavy + rerank is
+>   the winning regime; vec-heavy regresses.
+> - **LoCoMo weight sweep**: 3/10 configs done (rr-9-1 avgR5=0.575 wins,
+>   rr-8-2 0.572, rr-7-3 0.569). Same BM25-heavy pattern. Tail configs
+>   skipped (vec-heavy will tank per LME data). #48 marked COMPLETED.
+> - **Big ONNX rerankers** (#49/50/51): only baseline finished. Deferred
+>   post-v1.0 — BEIR top-3 GGUF via LM Studio (#53) is a faster + stronger
+>   replacement.
+> - **Phase 6 queue re-fired** this morning with `--skip-wait`. Order now:
+>   max-chars (biggest expected signal) → MMR×K → rerank blend → expand×syn.
+>   4 sweeps, ~5.5h wall. Max-chars 3/5 done (500/1000/2000), 6000 in flight.
+> - **Watchdog shipped** (`phase6-watchdog.sh`): heartbeat file every 60s,
+>   5-retry self-heal on transient errors, `--status` flag. Sweep-flags.sh
+>   is now resume-friendly (skip-if-done per config, reuse-incomplete-dir
+>   per sweep).
+> - **Agent-side check**: cron `7 */2 * * *` — I check every 2h and re-fire
+>   the watchdog if dead. Survives everything except a Claude crash itself.
+> - **LM Studio host**: still offline until user can physically restart.
+>
+> See `devnotes/sessions/session-2026-04-20-lmstudio-outage.md` and
 > `devnotes/sessions/tomorrow-lmstudio-plan-20260421.md`.
 >
 > **Reading order:** 3-category work dashboard below → current best →

@@ -180,6 +180,14 @@ production library stay as `LOTL_*`.
 | Var | Default | Effect |
 |-----|---------|--------|
 | `LOTL_RECALL_RAW` | off | Disable ALL post-RRF logic — no keyword/quoted/temporal boost, no decay weighting, no query expansion, no rerank. Pure BM25 + vector RRF. Used for apples-to-apples baseline comparisons (e.g. matching MemPalace's raw ChromaDB recipe). |
+| `LOTL_MEMORY_RRF_W_BM25` / `LOTL_MEMORY_RRF_W_VEC` | 0.9 / 0.1 | RRF fusion weights. LME n=500 winner at rr-8-2 (0.8 / 0.2) with rerank on: R@5 94.3% / MRR 0.920. Vec-heavy (<0.5 BM25) **regresses** because mxbai-xs vec can't supply a good candidate pool — rerank can't recover from a bad pool. |
+| `LOTL_MEMORY_RERANK` | off | Set to `on` to enable cross-encoder rerank (transformers backend by default; LM Studio GGUF via `LOTL_RERANK_BACKEND=lmstudio`). +0.9 to +1.2pp R@5 / +0.013 MRR at BM25-heavy weights; **regresses at vec-heavy weights**. |
+| `LOTL_MEMORY_RERANK_CANDIDATE_LIMIT` | 40 | How many candidates feed the cross-encoder. Bigger pool → more chance the answer is in-pool for rerank to find, at linear cost in rerank wall. Swept in Phase 6. |
+| `LOTL_MEMORY_RERANK_BLEND_ORIGINAL` / `LOTL_MEMORY_RERANK_BLEND_RERANK` | 0.7 / 0.3 | How the normalized RRF score is blended with the normalized rerank score. α=1.0/0.0 = RRF only (sanity). α=0.0/1.0 = pure rerank order. Both sides min-max normalized to [0,1] so the ratio is meaningful. Swept in Phase 6. |
+| `LOTL_MEMORY_MMR` | off | Set to `session` to enable session-diversity MMR. Penalizes repeat picks from the same session when candidates cluster tight on a topic. |
+| `LOTL_MEMORY_EXPAND` | `keywords` | Zero-LLM multi-query expansion. `keywords` (default) fans out to top-N keyword groups. `entities` uses named entities. `off` disables. |
+| `LOTL_MEMORY_SYNONYMS` | on | BM25 synonym expansion. Set to `off` to disable. |
+| `LOTL_MEMORY_KG` | off | Set to `on` to inject knowledge-graph facts into the candidate pool on weak recall (< K hits). Requires populated KG via `extract-facts-batch.mjs`. |
 
 ### Answer-prompt
 
@@ -210,6 +218,36 @@ qmd implements LongMemEval's *evaluate_qa.py* pattern: retrieve → generator LL
 | `LOTL_LLM_CACHE` | on | File-based response cache for reproducible re-runs |
 | `LOTL_LLM_CACHE_PATH` | auto | Override cache path (used internally; eval scripts auto-set) |
 | `LOTL_ZE_COLLECTIONS` | off | ZeroEntropy collections backend (rolled back, kept for legacy) |
+
+---
+
+## Resumable sweeps (2026-04-21)
+
+Long sweeps can be killed mid-flight (Claude Code crash, session disconnect,
+OOM, manual stop). Rather than losing the partial work, `sweep-flags.sh` now:
+
+- **Reuses incomplete sweep dirs**: if `evaluate/sweeps/<name>-*/` exists
+  with no `SUMMARY.md`, the next invocation lands in the same dir instead
+  of creating a new timestamped one.
+- **Skips completed configs**: `run_one_lme` / `run_one_locomo` short-circuit
+  if `<config>/lme.json` or `locomo.json` already exists and is non-partial.
+
+This makes re-invocation idempotent. For a multi-sweep chain (e.g. Phase 6),
+`evaluate/scripts/phase6-watchdog.sh` wraps the chain with:
+
+1. A heartbeat file at `evaluate/logs/phase6-heartbeat.txt` (`<unix-ts> <status>`,
+   updated every 60s while alive).
+2. Transient-error self-heal: up to 5 retries on non-zero exit, 30 s backoff
+   between attempts. Resume logic means no redone configs.
+3. `--status` flag: prints heartbeat age + completed sweeps + in-progress
+   configs in one shot.
+
+Agent-side cadence: a cron loop at `7 */2 * * *` (every 2 hours at :07)
+reads the heartbeat + log freshness and re-invokes the watchdog if dead.
+The watchdog itself still dies if Claude Code crashes (bash children get
+SIGHUP with parent), so after a hard Claude crash the recovery is manually
+running `bash evaluate/scripts/phase6-watchdog.sh` — it picks up where
+the last config died.
 
 ---
 

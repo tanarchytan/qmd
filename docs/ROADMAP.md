@@ -1,7 +1,77 @@
 # Lotl Roadmap
 
 > For agents: this file tracks all pending work and benchmark history. Read this first when resuming a session.
-> Last updated: 2026-04-20 morning (LM Studio outage — pivoted to non-LM sweeps + docs)
+> Last updated: 2026-04-21 morning (Phase 6 squeeze-mxbai-xs sweeps in flight; watchdog + resume shipped)
+
+---
+
+## 🟢 2026-04-21 morning — Phase 6 squeeze-mxbai-xs + watchdog + resume
+
+### Overnight post-mortem
+
+Claude Code crashed overnight — SIGHUP'd all background bash children.
+Result: Phase 6 queue never fired, LoCoMo weight sweep stopped at 3/10
+configs, big ONNX rerankers at 1/4. ~11h of compute lost.
+
+Evidence & root cause: VS Code + Windows session both up, sleep disabled
+on AC — so it wasn't the OS. Abrupt log truncation mid-progress-bar with
+no error trailer = SIGKILL / SIGHUP. User confirmed: *"you crashed totally"*.
+
+### Landed pre-crash (preserved)
+
+- **LME weight sweep × jina-tiny rerank** (10/10 configs). Winner:
+  `rr-8-2` at BM25=0.8 / VEC=0.2 — R@5 94.3% / MRR 0.920 / NDCG@10 0.916.
+  Vec-heavy (<0.5 BM25) regresses because mxbai-xs can't supply a clean
+  candidate pool; rerank cannot recover from a bad initial pool. Full
+  table in `evaluate/SNAPSHOTS.md`.
+- **LoCoMo weight sweep** (3/10 configs): rr-9-1 / 8-2 / 7-3 — same
+  BM25-heavy pattern. Tail skipped (LME already proves vec-heavy tanks).
+  Task #48 marked COMPLETED with the 3-config data.
+- **Big ONNX rerankers** (#49/50/51): only baseline finished. Deferred
+  post-v1.0 — BEIR top-3 GGUF via LM Studio (#53) is faster + stronger
+  replacement for those 3 models.
+
+### Shipped today (response to overnight loss)
+
+1. **Env knobs exposed**: `LOTL_MEMORY_RERANK_CANDIDATE_LIMIT`,
+   `LOTL_MEMORY_RERANK_BLEND_ORIGINAL`, `LOTL_MEMORY_RERANK_BLEND_RERANK`
+   are now env-readable (were hardcoded in `src/store/constants.ts`).
+2. **Phase 6 sweep configs** (all at rr-8-2 base) ordered by expected
+   signal magnitude:
+   - `max-chars-sweep-phase6.txt` — 500/1000/2000/6000/7500 char caps
+   - `mmr-kpool-sweep-phase6.txt` — MMR {off,session} × K {20,40,75,100}
+   - `rerank-blend-sweep-phase6.txt` — α ∈ {1.0, 0.7, 0.5, 0.3, 0.0}
+   - `expand-synonyms-sweep-phase6.txt` — expand {kw,ent,off} × syn {on,off}
+3. **Resumable sweeps** — `sweep-flags.sh` now skips configs whose
+   `lme.json` / `locomo.json` already exists, and reuses an incomplete
+   `<name>-*` sweep dir on re-invocation. Idempotent restart.
+4. **Watchdog wrapper** — `phase6-watchdog.sh` writes a heartbeat every
+   60 s, self-heals up to 5 non-zero exits with 30 s backoff, and exposes
+   `--status` for quick liveness probe.
+5. **Agent-side cron** — `7 */2 * * *` check cadence: read heartbeat,
+   re-fire watchdog on death. Survives everything except a Claude crash
+   itself; after a Claude crash, just run `bash evaluate/scripts/phase6-watchdog.sh`
+   — it picks up cleanly.
+6. **Docs** — `docs/EVAL.md`, `docs/TODO.md`, `evaluate/SNAPSHOTS.md`,
+   `devnotes/architecture/testing-runbook.md` all updated with the new
+   knobs, resume model, and monitor-pitfall notes.
+
+### Phase 6 status (live)
+
+At 07:51 Amsterdam: max-chars sweep 3/5 configs done (500/1000/2000 ✅,
+6000 in flight, 7500 pending). MMR×K / blend / expand-syn queued behind.
+Expected total wall ~5.5 h → completion ~13:30.
+
+When all 4 land, `node evaluate/scripts/summarize-phase6.mjs` prints a
+winner-per-lever table; those feed into `phase-d-combined-winners.sh`
+tomorrow for the release-candidate run (#38).
+
+### Tomorrow plan preserved
+
+LM Studio host still offline until user can physically restart. The
+6-step GPU load order is in `devnotes/sessions/tomorrow-lmstudio-plan-20260421.md`
+— unchanged by today's Phase 6 work, just more data to compose the
+combined-winners stack with.
 
 ---
 

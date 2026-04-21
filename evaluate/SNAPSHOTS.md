@@ -131,6 +131,49 @@ Comparison to published claims (different methodologies — not strictly apples-
 
 ---
 
+## LME n=500 weight sweep × jina-tiny rerank — 2026-04-20
+
+Purpose: find the RRF BM25/vec ratio that maximizes metrics with rerank on.
+10 configs (baseline + 9 weight points). Reproducer:
+
+```sh
+bash evaluate/scripts/sweep-flags.sh \
+  evaluate/sweeps/configs/rerank-weight-sweep-phase4.txt \
+  --corpus lme --limit 500 --name rerank-weight-jina-lme
+```
+
+| tag | rAny@5 | R@5 | MRR | NDCG@10 | Δ vs baseline (MRR) |
+|---|---|---|---|---|---|
+| baseline (RRF 9/1 no rerank) | 97.8% | 93.4% | 0.907 | 0.904 | — |
+| rr-1-9 (vec-heavy + rerank) | 94.2% | 87.0% | 0.897 | 0.878 | −0.010 |
+| rr-2-8 | 94.2% | 86.9% | 0.895 | 0.877 | −0.012 |
+| rr-3-7 | 94.2% | 87.3% | 0.894 | 0.878 | −0.013 |
+| rr-4-6 | 94.6% | 88.4% | 0.899 | 0.887 | −0.008 |
+| rr-5-5 | 98.0% | 94.0% | 0.917 | 0.911 | **+0.010** |
+| rr-6-4 | 98.2% | **94.5%** | 0.917 | 0.915 | +0.010 |
+| rr-7-3 | 98.2% | 94.2% | 0.918 | 0.914 | +0.011 |
+| **rr-8-2** | 98.2% | 94.3% | **0.920** | **0.916** | **+0.013** |
+| rr-9-1 | 98.2% | 94.4% | 0.919 | 0.916 | +0.012 |
+
+**Conclusions:**
+
+- **Vec-heavy regresses** (rr-1-9 → rr-4-6): mxbai-xs can't supply a clean
+  candidate pool — rerank cannot recover from a bad initial pool.
+- **BM25-heavy + rerank wins**: 0.8 / 0.2 is the sweet spot by MRR + NDCG@10.
+  `rr-6-4` best by R@5, `rr-8-2` best by MRR/NDCG@10 — all within noise of each other.
+- **New v1.0 default**: `rr-8-2` (BM25=0.8, VEC=0.2, jina-reranker-v1-tiny-en).
+
+Partial LoCoMo weight sweep (2026-04-20, 3/10 configs before overnight
+process death) confirmed the same shape: rr-9-1 avgR5=0.575 / avgMRR=0.468 beats
+rr-8-2 (0.572/0.467) beats rr-7-3 (0.569/0.465). Vec-heavy tail skipped
+— LME already proves they tank.
+
+Phase 6 follow-on sweeps (in flight 2026-04-21) test whether the new
+BM25-heavy baseline has more to give: max-chars, MMR × candidate pool,
+rerank blend α, expand × synonyms. See `docs/TODO.md` CAT 2 for live status.
+
+---
+
 ## v1.0.0 GA — combined-winners stack (reserved, fills tonight)
 
 > This section is a **skeleton**. Numbers below are `TBD` placeholders —
