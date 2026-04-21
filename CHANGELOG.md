@@ -2,64 +2,177 @@
 
 ## [Unreleased]
 
-Gemma pivot + methodology upgrades in flight toward v1.0.0 GA.
+## [1.0.0] - 2026-04-21 — 🦎 Lotl GA
+
+**First stable release.** Headline numbers landed via Phase 6 squeeze sweeps
++ combined-winners on the gemma stack: **LongMemEval _s n=500 JudgeCorrect
+73.8%** (within 0.5pp of gpt-4o-mini full-context baseline with only
+top-K retrieval + a 4B Matformer generator) and **LoCoMo n=200 R@5 60.0%**
+(+9.5pp vs no-rerank baseline). Adversarial judge audit clean: gold
+self-check 100/100, v1 specific-wrong 0/99, v2 vague-topical 1/87 — the
+numbers are measuring what we think they're measuring.
+
+The winning stack: `gemma-4-e4b` gen + `gemma-4-26b-a4b` 3-run majority
+judge, v14 CoT answer prompt, strict LoCoMo judge, RRF 0.8/0.2 fusion,
+jina-reranker-v1-tiny cross-encoder, 0.5/0.5 original+rerank blend,
+synonyms off.
 
 ### Added
 
-- **LM Studio eval harness** for local LLM-as-judge with gemma-4 / qwen-35B / llama-3.1-8B.
-  Full scripts: `smoke-all-lmstudio.sh`, `smoke-gemma-validate.sh`, `phase-b-gemma.sh`,
-  `phase-b-llama-qwen.sh`, `rejudge-failed.sh`, `extract-facts-batch.mjs`.
+- **LM Studio eval harness** for local LLM-as-judge with gemma-4 /
+  qwen-35B / llama-3.1-8B. Full scripts: `smoke-all-lmstudio.sh`,
+  `smoke-gemma-validate.sh`, `phase-b-gemma.sh`, `phase-b-llama-qwen.sh`,
+  `rejudge-failed.sh`, `extract-facts-batch.mjs`.
 - **v14 CoT answer prompt** ported verbatim from dial481/locomo-audit's
   `answer_prompt_cot`. Lifts judge accuracy meaningfully on gemma stack.
-- **Strict LoCoMo judge** — `LOTL_LOCOMO_JUDGE=strict` drops the "touches on topic" leniency
-  bug (6.9x inflation per audit). Default stays lenient for back-compat.
-- **response_format: json_schema** enforcement on lmstudio/poe judges — zero
-  unparseable verdicts (previously 10-13% dropout rate on gemma-4-26b-a4b).
+- **Strict LoCoMo judge** — `LOTL_LOCOMO_JUDGE=strict` drops the "touches
+  on topic" leniency bug (6.9x inflation per audit). Default stays
+  lenient for back-compat.
+- **response_format: json_schema** enforcement on lmstudio/poe judges —
+  zero unparseable verdicts (previously 10-13% dropout rate on
+  gemma-4-26b-a4b).
 - **N-run judge majority vote** via `LOTL_JUDGE_RUNS` env (default 1).
-- **Answer persistence** — every generation written to `answer-cache/<hash>.json` for
-  replay with a different judge without regenerating.
-- **Wilson Score 95% CIs** — `evaluate/scripts/wilson-ci.mjs` with `--compare`
-  distinguishability flags. Stdlib-only Node port of audit's Python.
+- **Answer persistence** — every generation written to
+  `answer-cache/<hash>.json` for replay with a different judge without
+  regenerating.
+- **Wilson Score 95% CIs** — `evaluate/scripts/wilson-ci.mjs` with
+  `--compare` distinguishability flags. Stdlib-only Node port of
+  audit's Python.
 - **LoCoMo golden audit cross-ref** — `evaluate/scripts/audit-locomo-goldens.mjs`
-  against dial481/locomo-audit's errors.json (quantifies theoretical ceiling gain
-  from 99 score-corrupting errors in the shipped goldens).
-- **Phase 5 scaffolding** (pre-v1.0) — schema migration for `fact_text` +
-  `fact_embedding` columns, `src/memory/fact-extractor.ts` with prompt template
-  + parser, `evaluate/scripts/extract-facts-batch.mjs` runner.
-- **LM Studio GPU backends** for GGUF-only models (commit `afc4141`):
-  - `src/llm/lmstudio-rerank.ts` — chat-completions scoring shim (LM Studio has
-    no `/v1/rerank` endpoint). Worker pool via `LOTL_LMSTUDIO_RERANK_WORKERS=4`,
-    `response_format: json_schema` enforcement on the 0–1 score output.
-    Activate with `LOTL_RERANK_BACKEND=lmstudio`.
-  - `src/llm/lmstudio-embed.ts` — direct `/v1/embeddings` integration for
-    GGUF embedders (embedding-gemma-300m, etc). Activate with
+  against dial481/locomo-audit's errors.json (quantifies theoretical
+  ceiling gain from 99 score-corrupting errors in the shipped goldens).
+- **Phase 5 scaffolding** (experimental, post-v1.0) — schema migration
+  for `fact_text` + `fact_embedding` columns, `src/memory/fact-extractor.ts`
+  with prompt template + parser, `evaluate/scripts/extract-facts-batch.mjs`
+  runner. A/B of fact-augmented embedding retrieval deferred to v1.1.
+- **LM Studio GPU backends** for GGUF-only models:
+  - `src/llm/lmstudio-rerank.ts` — chat-completions scoring shim (LM
+    Studio has no `/v1/rerank` endpoint). Worker pool via
+    `LOTL_LMSTUDIO_RERANK_WORKERS=4`, `response_format: json_schema`
+    enforcement on the 0–1 score output. Defense-in-depth
+    `reasoning_content` fallback for thinking-model shims. Activate
+    with `LOTL_RERANK_BACKEND=lmstudio`.
+  - `src/llm/lmstudio-embed.ts` — direct `/v1/embeddings` integration
+    for GGUF embedders (embedding-gemma-300m, etc). Activate with
     `LOTL_EMBED_BACKEND=lmstudio`.
-- **BEIR top-3 GGUF sweep config** — `evaluate/sweeps/configs/rerank-lmstudio-gguf.txt`
-  covers jina-reranker-v3 (BEIR 61.94 #1), mxbai-rerank-large-v2 (#2, 61.44),
-  Qwen3-Reranker-4B (#3, 61.16), plus secondary comparators (bge-v2-m3,
-  qwen3-0.6B, mxbai-base-v2, gte-modernbert, jina-tiny). All at 7/3 weights
-  for direct Stage 9 comparability.
-- **embedding-gemma A/B config** — `evaluate/sweeps/configs/embed-gemma-ab.txt`
-  tests Google's 300M GGUF embedder vs our shipped mxbai-xs 22M across 4 RRF
-  ratios. Requires `--db-suffix embed-gemma` rebuild first.
+- **Adversarial judge-leniency pipeline** (#36) —
+  `evaluate/scripts/adversarial-gen.mjs` generates v1 specific-wrong
+  and v2 vague-topical distractors from the results JSON; companion
+  `adversarial-rejudge.mjs` re-runs the judge. Lets a judge configuration
+  be proven clean quantitatively before release.
+- **Combined-winners composer** (#38) —
+  `evaluate/scripts/phase-d-combined-winners.sh` composes the full
+  Phase 6 stack (rerank + blend + RRF + v14 CoT + strict judge + gemma
+  gen/judge pair) and drives LME + LoCoMo in one pass.
+- **LOTL_EVAL_* namespace bridge** (#47) — `evaluate/shared/env-compat.ts`
+  bidirectionally mirrors 32 eval-only env vars between legacy and
+  `LOTL_EVAL_*` names so existing sweeps and callers keep working
+  while the new namespace rolls in.
+- **Resumable sweeps + watchdog** — `sweep-flags.sh` skips completed
+  configs (detects `SUMMARY.md`), `phase6-watchdog.sh` enforces a
+  single-instance lockfile via `tasklist` (Git Bash `kill -0` doesn't
+  work for out-of-session PIDs on Windows) and self-heals transient
+  non-zero exits with a 5-retry loop.
+- **BEIR top-3 GGUF sweep** (#53) —
+  `evaluate/sweeps/configs/rerank-lmstudio-gguf.txt` covers the BEIR
+  top-3 cross-encoders (jina-v3 #1, mxbai-large-v2 #2, Qwen3-4B #3)
+  plus comparators. Driver scripts `phase-d-beir-early-stop.sh` +
+  `phase-d-beir-decoder-parallel.sh` explore the design space. See
+  **Known limitations** below for what actually runs.
+
+### Changed — Phase 6 squeeze-sweep hardcodes
+
+Four LME n=500 sweeps (max-chars / MMR × K-pool / rerank-blend α /
+query-expand × synonyms) completed. Winners baked into
+`src/store/constants.ts`:
+
+- `MEMORY_RERANK_BLEND_ORIGINAL=0.5` / `_RERANK=0.5` (+0.002 MRR over
+  the previous 0.7/0.3).
+- `RRF_W_BM25=0.8` / `_VEC=0.2` default (flipped from 0.9/0.1 per the
+  2026-04-20 weight sweep).
+- `MEMORY_RERANK_CANDIDATE_LIMIT=40` hardcoded.
+- `LOTL_MEMORY_SYNONYMS` hardcoded off in `src/memory/index.ts` —
+  syn-off wins across every expand mode.
+- max-chars 500→7500 and MMR × K-pool were both no-ops on retrieval
+  under `--no-llm` (max-chars only gates the LLM prompt budget; MMR ×
+  K-pool produced byte-identical metrics across all 8 configs on LME's
+  single-scope corpus).
+
+### Changed — dead-knob cleanup
+
+Removed 10+ env vars that were parked, superseded, or silently
+hardcoded. Notable deletions: `LOTL_MEMORY_LHASH` (parked harmful with
+DIVERSIFY interaction), `LOTL_RECALL_DIVERSIFY` (superseded by
+`LOTL_MEMORY_MMR=session`), `LOTL_TRANSFORMERS_QUIET`,
+`LOTL_STRICT_DIM_MISMATCH`, `LOTL_TRANSFORMERS_DIRECT_MAXLEN`,
+`LOTL_GEMINI_EMBED_BATCH_SIZE`, `LOTL_GEMINI_EMBED_INTERVAL_MS`.
+Per-version LM Studio `ctx`/`parallel` knobs collapsed to a single
+gen/judge pair.
 
 ### Fixed
 
-- **llm-cache v2 hash** includes max_tokens to prevent thinking-model stale-empty
-  entries from shadowing fresh calls at larger budgets. Legacy entries still
-  readable via fallback (non-empty only) so existing caches survive migration.
-- **LOTL_RECALL_NO_TOUCH=on** now defaults ON in both eval.mts entry points so
-  new eval scripts can't forget it (cost 3+ LM Studio crashes 2026-04-19).
-- **Cross-model unload** in LM Studio harness — `load_judge` now unloads the
-  gen model first (and vice versa) + 3s settle before the next load. LM Studio
-  doesn't auto-evict on load and can OOM a 24 GB card without this.
-- **Single-instance guarantee** — every `load_model` unloads `:N` suffix variants
-  first, preventing bare-name request routing ambiguity.
-- **context_length sizing** documented: LM Studio's `context_length` is TOTAL
-  across parallel slots. Per-slot = ctx / parallel. Scripts default to
-  `desired_per_slot × parallel`.
-- **LoCoMo eval worker pool** via `LOTL_LOCOMO_WORKERS`. LoCoMo was sequential
-  before; now honors parallel slots like LME does.
+- **qwen3 thinking-model `reasoning_content` fallback** — qwen3.6-35b-a3b
+  (and other qwen3 family models) route structured JSON output into
+  `message.reasoning_content` instead of `message.content`, producing
+  100% empty verdicts on any harness that only reads `content`. Patched
+  across 6 call sites: `evaluate/{locomo,longmemeval}/eval.mts`
+  (`askLLM` + LoCoMo's `askMiniMax` path),
+  `evaluate/longmemeval/poe-judge.mts`,
+  `evaluate/scripts/{extract-facts-batch,adversarial-gen,adversarial-rejudge}.mjs`,
+  and `src/llm/lmstudio-rerank.ts` (defense-in-depth). Pattern is
+  consistent: set `enable_thinking:false` when the model matches
+  `/qwen3/i`, then read `content || reasoning_content` with the
+  structured-JSON regex applied to whichever is non-empty.
+- **Phase 5b fact extract** — `extract-facts-batch.mjs` used a
+  non-existent `mod.embedTexts`; replaced with
+  `createTransformersEmbedBackend({ model, dtype: "q8" })` + input char
+  cap via `LOTL_EXTRACT_MAX_INPUT_CHARS=10000` to keep very long
+  session-level memories under the encoder context window.
+- **llm-cache v2 hash** includes `max_tokens` to prevent thinking-model
+  stale-empty entries from shadowing fresh calls at larger budgets.
+  Legacy entries still readable via fallback (non-empty only) so
+  existing caches survive migration.
+- **LOTL_RECALL_NO_TOUCH=on** now defaults ON in both eval.mts entry
+  points so new eval scripts can't forget it (cost 3+ LM Studio
+  crashes 2026-04-19).
+- **Cross-model unload** in LM Studio harness — `load_judge` now
+  unloads the gen model first (and vice versa) + 3s settle before the
+  next load. LM Studio doesn't auto-evict on load and can OOM a 24 GB
+  card without this.
+- **Single-instance guarantee** — every `load_model` unloads `:N`
+  suffix variants first, preventing bare-name request routing
+  ambiguity.
+- **LoCoMo eval worker pool** via `LOTL_LOCOMO_WORKERS`. LoCoMo was
+  sequential before; now honors parallel slots like LME does.
+- **Adversarial-gen schema detection** — accept `data.items`,
+  `data.results`, and `data.rows` shapes; `it.answer` treated as
+  equivalent golden.
+
+### Documented
+
+- **LM Studio `context_length` sizing**: `context_length` is TOTAL
+  across parallel slots, not per-slot. Per-slot ctx = `context_length /
+  parallel`. Scripts default to `desired_per_slot × parallel`.
+- **Windows kill-cascade quirks**: `taskkill //T` tree-kill doesn't
+  always propagate through `bash -c eval ...` parent-child chains.
+  Confirm with `wmic process list`, target specific PIDs. Captured in
+  the devnotes runbook.
+
+### Known limitations
+
+- **Cross-encoder rerankers via LM Studio are fundamentally
+  incompatible** with the `/v1/chat/completions` shim — jina-tiny,
+  jina-v3, gte-modernbert, and bge-v2-m3 all return
+  HTTP 400 "the current context does not logits computation. skipping"
+  because LM Studio registers them as `type=llm`. Only decoder-style
+  rerankers can be shim'd. Full BEIR A/B waits on LM Studio exposing a
+  `/v1/rerank` endpoint or an ONNX-runtime bridge.
+- **qwen3 rerankers (0.6B, 4B) via LM Studio** are thinking models and
+  LM Studio doesn't reliably honor `enable_thinking:false` — each
+  rerank query took ~47s on qwen3-reranker-0.6b at parallel=32
+  (~2.5 h per config, unusable for sweeps). The mxbai-rerank-v2 family
+  remains the only non-thinking decoder path confirmed to rerank at
+  sweep speed via this shim.
 
 ## [1.0.0-rc1] - 2026-04-18 — 🦎 Lotl
 
