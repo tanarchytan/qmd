@@ -72,7 +72,7 @@ on registration — patched `rerank-lmstudio-gguf.txt` accordingly.
 
 ## Next session (tonight)
 
-1. Confirm LM Studio host up: `curl http://10.0.0.105:1234/v1/models`
+1. Confirm LM Studio host up: `curl http://10.0.0.113:1234/v1/models`
 2. `bash evaluate/scripts/phase-b-gemma.sh` — re-fires from gen cache, judge only
 3. `bash evaluate/scripts/phase-b-llama-qwen.sh` — cross-stack
 4. `node evaluate/scripts/wilson-ci.mjs --compare <gemma> <llama-qwen>`

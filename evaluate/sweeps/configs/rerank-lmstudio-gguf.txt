@@ -24,7 +24,7 @@
 #
 # PREREQUISITES:
 #   1. Download models into LM Studio via POST /api/v1/models/download with the HF URL.
-#   2. LM Studio server running at LOTL_LMSTUDIO_HOST (default 10.0.0.105:1234).
+#   2. LM Studio server running at LOTL_LMSTUDIO_HOST (default 10.0.0.113:1234).
 #   3. Set LOTL_LMSTUDIO_RERANK_WORKERS=4 (or parallel-slot count for loaded model)
 #      so the scoring-prompt calls don't serialize.
 #

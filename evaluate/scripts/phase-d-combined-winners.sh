@@ -32,14 +32,14 @@ for arg in "$@"; do
   esac
 done
 
-HOST="${LOTL_LMSTUDIO_HOST:-10.0.0.105:1234}"
+HOST="${LOTL_LMSTUDIO_HOST:-10.0.0.113:1234}"
 
 # --- Phase D rerank winner (transformers.js ONNX default) -----------------
 export LOTL_MEMORY_RERANK=on
 export LOTL_RERANK_BACKEND="${LOTL_RERANK_BACKEND:-transformers}"
 export LOTL_TRANSFORMERS_RERANK_MODEL="${LOTL_TRANSFORMERS_RERANK_MODEL:-jinaai/jina-reranker-v1-tiny-en}"
-export LOTL_MEMORY_RRF_W_BM25=0.7
-export LOTL_MEMORY_RRF_W_VEC=0.3
+export LOTL_MEMORY_RRF_W_BM25=0.8    # Phase 6 LME winner — was 0.7
+export LOTL_MEMORY_RRF_W_VEC=0.2     # Phase 6 LME winner — was 0.3
 
 # --- Phase C judge configuration -----------------------------------------
 export LOTL_EVAL_JUDGE_RUNS=3           # majority vote across 3 judge passes

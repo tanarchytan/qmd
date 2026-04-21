@@ -12,7 +12,7 @@
  *
  * Activate via `LOTL_RERANK_BACKEND=lmstudio`. Model selection follows
  * the standard LM Studio pattern:
- *   LOTL_LMSTUDIO_HOST        10.0.0.105:1234
+ *   LOTL_LMSTUDIO_HOST        10.0.0.113:1234
  *   LOTL_LMSTUDIO_RERANK_MODEL qwen3-reranker-0.6b  (or any small chat model)
  *
  * Because this is LLM-based not logit-based, expect noisier scores.
@@ -108,7 +108,7 @@ export async function lmStudioRerank(
   docs: Array<{ file: string; text: string }>,
   options: LmStudioRerankOptions = {},
 ): Promise<RerankResult> {
-  const host = options.host || process.env.LOTL_LMSTUDIO_HOST || "10.0.0.105:1234";
+  const host = options.host || process.env.LOTL_LMSTUDIO_HOST || "10.0.0.113:1234";
   const model = options.model || process.env.LOTL_LMSTUDIO_RERANK_MODEL || "qwen3-reranker-0.6b";
   const structured = options.structured ?? true;
   const maxTokens = options.maxTokens ?? 64;

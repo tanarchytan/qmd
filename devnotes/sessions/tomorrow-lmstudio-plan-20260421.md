@@ -6,7 +6,7 @@ Everything that requires LM Studio, ordered to minimize model-load swaps
 ## Pre-flight (5 min)
 
 ```sh
-curl -sS http://10.0.0.105:1234/v1/models            # confirm host up
+curl -sS http://10.0.0.113:1234/v1/models            # confirm host up
 ls evaluate/sweeps/*phase6*/SUMMARY.md               # confirm Phase 6 landed overnight
 node evaluate/scripts/summarize-phase6.mjs           # print ranking + winners-per-lever
 ```

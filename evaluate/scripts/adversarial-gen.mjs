@@ -119,7 +119,7 @@ async function callLLM({ prompt, provider, model, host }) {
 }
 
 function parseArgs(argv) {
-  const args = { inputPath: argv[2], provider: "lmstudio", model: process.env.LOTL_LMSTUDIO_GEN_MODEL || "google/gemma-4-e4b", host: process.env.LOTL_LMSTUDIO_HOST || "10.0.0.105:1234", out: "", limit: Infinity };
+  const args = { inputPath: argv[2], provider: "lmstudio", model: process.env.LOTL_LMSTUDIO_GEN_MODEL || "google/gemma-4-e4b", host: process.env.LOTL_LMSTUDIO_HOST || "10.0.0.113:1234", out: "", limit: Infinity };
   for (let i = 3; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--provider") args.provider = argv[++i];

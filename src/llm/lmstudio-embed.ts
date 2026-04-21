@@ -5,7 +5,7 @@
  * don't have ONNX conversions for our transformers-embed.ts path.
  *
  * Activate via `LOTL_EMBED_BACKEND=lmstudio`. Model selection:
- *   LOTL_LMSTUDIO_HOST        10.0.0.105:1234
+ *   LOTL_LMSTUDIO_HOST        10.0.0.113:1234
  *   LOTL_LMSTUDIO_EMBED_MODEL text-embedding-embeddinggemma-300m  (default)
  *
  * Unlike rerank, LM Studio's /v1/embeddings IS OpenAI-compatible and
@@ -42,7 +42,7 @@ export async function lmStudioEmbed(
   texts: string[],
   options: LmStudioEmbedOptions = {},
 ): Promise<number[][]> {
-  const host = options.host || process.env.LOTL_LMSTUDIO_HOST || "10.0.0.105:1234";
+  const host = options.host || process.env.LOTL_LMSTUDIO_HOST || "10.0.0.113:1234";
   const model = options.model || process.env.LOTL_LMSTUDIO_EMBED_MODEL || "text-embedding-embeddinggemma-300m";
   const batchSize = options.batchSize ?? Number(process.env.LOTL_LMSTUDIO_EMBED_BATCH ?? 32);
 

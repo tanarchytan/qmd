@@ -23,7 +23,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
-HOST="${LOTL_LMSTUDIO_HOST:-10.0.0.105:1234}"
+HOST="${LOTL_LMSTUDIO_HOST:-10.0.0.113:1234}"
 GEN_MODEL="google/gemma-4-e4b"
 JUDGE_MODEL="google/gemma-4-26b-a4b"
 export LOTL_LMSTUDIO_HOST="$HOST"

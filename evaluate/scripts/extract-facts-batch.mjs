@@ -74,7 +74,7 @@ const flushCache = () => {
 process.on("exit", flushCache);
 
 // --- Provider ---
-const LMSTUDIO_HOST = process.env.LOTL_LMSTUDIO_HOST || "10.0.0.105:1234";
+const LMSTUDIO_HOST = process.env.LOTL_LMSTUDIO_HOST || "10.0.0.113:1234";
 const LMSTUDIO_MODEL = process.env.LOTL_LMSTUDIO_GEN_MODEL || "google/gemma-4-e4b";
 const LMSTUDIO_KEY = process.env.LOTL_LMSTUDIO_KEY || "lm-studio";
 
