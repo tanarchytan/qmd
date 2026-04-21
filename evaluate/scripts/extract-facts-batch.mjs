@@ -131,7 +131,11 @@ async function ensureEmbedder() {
   const mod = await import(toUrl(join(LOTL_DIR, "src/llm/transformers-embed.ts")));
   // Match the DB's embedder. mxbai-xs is the shipped default.
   const model = process.env.LOTL_EMBED_MODEL || "mixedbread-ai/mxbai-embed-xsmall-v1";
-  embedBatch = async (texts) => mod.embedTexts(texts, { model, dtype: "q8" });
+  const backend = await mod.createTransformersEmbedBackend({ model, dtype: "q8" });
+  embedBatch = async (texts) => {
+    const results = await backend.embedBatch(texts);
+    return results.map((r) => r?.embedding ?? null);
+  };
   return embedBatch;
 }
 
@@ -146,9 +150,18 @@ const updateStmt = db.prepare(`UPDATE memories SET fact_text = ?, fact_embedding
 let done = 0, skipped = 0, failed = 0;
 let vecFactStmt = null; // lazy — only prepare after we know embed dim
 
+// Truncate input to keep total prompt under typical LM Studio per-slot ctx
+// (default 4096 tokens ≈ ~12000 chars after prompt template overhead).
+// Fact extraction loses little from truncation — facts cluster in the
+// first few turns of each session-level memory.
+const MAX_INPUT_CHARS = Number(process.env.LOTL_EXTRACT_MAX_INPUT_CHARS ?? 10000);
+
 for (const row of rows) {
   try {
-    const prompt = buildFactExtractionPrompt(row.text);
+    const input = row.text.length > MAX_INPUT_CHARS
+      ? row.text.slice(0, MAX_INPUT_CHARS) + "\n[…truncated]"
+      : row.text;
+    const prompt = buildFactExtractionPrompt(input);
     const raw = await callLLM(prompt);
     const parsed = parseFactExtraction(raw);
     if (!parsed) { failed++; continue; }
