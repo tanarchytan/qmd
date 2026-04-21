@@ -305,14 +305,9 @@ export function ensureVecTableInternal(db: Database, dimensions: number): void {
     if (existingDims !== null && existingDims !== dimensions) {
       // Auto-reindex path: drop the old vec table + purge content_vectors so
       // subsequent queries silently fall back to BM25 until the next embed
-      // pass repopulates. Opt out via LOTL_STRICT_DIM_MISMATCH=on for pipelines
-      // that want the old fail-loud behavior.
-      if (process.env.LOTL_STRICT_DIM_MISMATCH === "on") {
-        throw new Error(
-          `Embedding dimension mismatch: existing vectors are ${existingDims}d but the current model produces ${dimensions}d. ` +
-          `Run 'qmd embed -f' to re-embed with the new model.`
-        );
-      }
+      // pass repopulates. Hardcoded auto-reindex (warn-only) as of 2026-04-21;
+      // LOTL_STRICT_DIM_MISMATCH env knob was removed — fail-loud on dim
+      // mismatch broke too many dev workflows to justify the guard rail.
       process.stderr.write(
         `lotl: embedding dimension changed (${existingDims}d → ${dimensions}d). ` +
         `Dropping stale vectors; run 'qmd embed -f' to repopulate.\n`

@@ -98,9 +98,7 @@ export class TransformersRerankBackend implements LLM {
       // transformers.js env knobs — set before model load, identical to
       // the embed backend's init path.
       (tf as any).env.cacheDir = cacheDir;
-      if (process.env.LOTL_TRANSFORMERS_QUIET !== "off") {
-        (tf as any).env.allowLocalModels = false;
-      }
+      (tf as any).env.allowLocalModels = false;
 
       // Mirror the embed backend's rule: an explicit fileName suppresses the
       // transformers.js v3 `_quantized` suffix munging, so it wins if set.

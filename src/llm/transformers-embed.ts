@@ -117,9 +117,7 @@ export class TransformersEmbedBackend implements LLM {
 
       // transformers.js env knobs — set before pipeline() call.
       (tf as any).env.cacheDir = cacheDir;
-      if (process.env.LOTL_TRANSFORMERS_QUIET !== "off") {
-        (tf as any).env.allowLocalModels = false;
-      }
+      (tf as any).env.allowLocalModels = false;
 
       const opts: Record<string, unknown> = { dtype };
       if (fileName) opts.model_file_name = fileName;
@@ -262,11 +260,9 @@ export async function createTransformersEmbedBackend(
     const { computeEmbedBudget, formatBudget } = await import("./embed-sizer.js");
     const { probeGpu } = await import("./gpu-probe.js");
     const [caps, budget] = await Promise.all([probeGpu(), computeEmbedBudget(m, d)]);
-    const quiet = process.env.LOTL_TRANSFORMERS_QUIET === "on";
-    if (!quiet) {
-      for (const w of caps.warnings ?? []) process.stderr.write(`[qmd.embed] warning: ${w}\n`);
-      process.stderr.write(`[qmd.embed] auto-selected: ${formatBudget(budget)}\n`);
-    }
+    // Quiet-by-default per env-flag-polarity-reference.md. Auto-select details
+    // and hardware warnings are eval-harness concerns, not runtime signal.
+    void caps;
     dev = budget.device;
     // Export the sized microbatch + worker count so eval harnesses and the
     // memory ingest path can honor them without running the probe twice.

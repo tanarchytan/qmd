@@ -149,7 +149,7 @@ export class TransformersEmbedDirectBackend implements LLM {
     if (cached) return cached;
 
     const loading = (async () => {
-      const quiet = process.env.LOTL_TRANSFORMERS_QUIET === "on";
+      const quiet = true; // Hardcoded quiet-by-default; env knob removed 2026-04-21.
       const cacheDir = defaultCacheDir();
       try { mkdirSync(cacheDir, { recursive: true }); } catch { /* ignore */ }
 
@@ -256,7 +256,7 @@ export class TransformersEmbedDirectBackend implements LLM {
     // which exhausts RAM after a few hundred calls. Memory text for LME/LoCoMo
     // is <2K tokens per row; 1024 is a safe cap with minimal quality loss.
     // Override via LOTL_TRANSFORMERS_DIRECT_MAXLEN if needed.
-    const maxLen = parseInt(process.env.LOTL_TRANSFORMERS_DIRECT_MAXLEN || "1024", 10);
+    const maxLen = 1024; // Hardcoded (post-Phase-11.7 default); env knob removed 2026-04-21.
     const encoded = await this.tokenizer(texts, {
       padding: true,
       truncation: true,

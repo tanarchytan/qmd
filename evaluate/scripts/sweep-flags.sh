@@ -35,12 +35,20 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "$NAME" ]] && NAME=$(basename "$CONFIG_FILE" .txt)
 
-# Resume an incomplete sweep if one exists with the same --name prefix and
-# no SUMMARY.md. Crash-restart friendly: watchdog re-invokes this script
-# verbatim and we land back in the same dir, picking up where we left off.
-EXISTING=$(ls -dt "$REPO/evaluate/sweeps/${NAME}-"*/ 2>/dev/null | head -1)
+# Resume/skip logic — crash-restart friendly + chain-idempotent:
+#   1. If the most recent <name>-* dir HAS SUMMARY.md → already done, exit 0.
+#      Lets a multi-sweep queue (phase6-queue.sh) re-fire without redoing work.
+#   2. Else if most recent <name>-* dir exists WITHOUT SUMMARY.md → resume it.
+#   3. Else create a fresh timestamped dir.
+# `|| true` protects against no-match (ls returns non-zero under set -e+pipefail
+# when the glob is literal because nullglob isn't set — which silently killed
+# the MMR-kpool sweep on first fire 2026-04-21).
+EXISTING=$(ls -dt "$REPO/evaluate/sweeps/${NAME}-"*/ 2>/dev/null | head -1 || true)
 EXISTING=${EXISTING%/}
-if [[ -n "$EXISTING" ]] && [[ -d "$EXISTING" ]] && [[ ! -f "$EXISTING/SUMMARY.md" ]]; then
+if [[ -n "$EXISTING" ]] && [[ -d "$EXISTING" ]] && [[ -f "$EXISTING/SUMMARY.md" ]]; then
+  echo "[sweep-flags] sweep already complete: $EXISTING — exit 0 (chain-idempotent)"
+  exit 0
+elif [[ -n "$EXISTING" ]] && [[ -d "$EXISTING" ]]; then
   SWEEP_DIR="$EXISTING"
   echo "[sweep-flags] resuming incomplete sweep: $SWEEP_DIR"
 else

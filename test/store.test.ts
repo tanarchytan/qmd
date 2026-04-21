@@ -2214,7 +2214,7 @@ describe("Vector Table", () => {
     await cleanupTestDb(store);
   });
 
-  test("ensureVecTable auto-reindexes on dimension mismatch; strict mode still throws", async () => {
+  test("ensureVecTable auto-reindexes on dimension mismatch (always warns, never throws)", async () => {
     const store = await createTestStore();
 
     // Create with 768 dimensions
@@ -2224,19 +2224,21 @@ describe("Vector Table", () => {
     `).get() as { sql: string };
     expect(before.sql).toContain("float[768]");
 
-    // Default: auto-reindex — drops stale table, recreates at new dim, warns.
-    delete process.env.LOTL_STRICT_DIM_MISMATCH;
+    // Always auto-reindex: drops stale table, recreates at new dim, warns.
+    // (LOTL_STRICT_DIM_MISMATCH env knob was removed 2026-04-21 — fail-loud
+    // mode was never the production behavior, always warn + auto-recover.)
     expect(() => store.ensureVecTable(1024)).not.toThrow();
     const after = store.db.prepare(`
       SELECT sql FROM sqlite_master WHERE type='table' AND name='vectors_vec'
     `).get() as { sql: string };
     expect(after.sql).toContain("float[1024]");
 
-    // Opt-in strict mode: old failure preserved for pipelines that need it.
-    store.ensureVecTable(1024); // no-op at current dim
-    process.env.LOTL_STRICT_DIM_MISMATCH = "on";
-    expect(() => store.ensureVecTable(768)).toThrow(/dimension mismatch/i);
-    delete process.env.LOTL_STRICT_DIM_MISMATCH;
+    // Reversing also auto-reindexes without throwing.
+    expect(() => store.ensureVecTable(768)).not.toThrow();
+    const after768 = store.db.prepare(`
+      SELECT sql FROM sqlite_master WHERE type='table' AND name='vectors_vec'
+    `).get() as { sql: string };
+    expect(after768.sql).toContain("float[768]");
 
     await cleanupTestDb(store);
   });

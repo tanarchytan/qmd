@@ -21,7 +21,6 @@ import {
   MEMORY_RERANK_BLEND_ORIGINAL, MEMORY_RERANK_BLEND_RERANK,
   MEMORY_RRF_K, MEMORY_RRF_W_BM25, MEMORY_RRF_W_VEC, MEMORY_RRF_W_TIME,
   MEMORY_SYNONYMS,
-  MEMORY_L0_WEIGHT, MEMORY_L1_WEIGHT, MEMORY_L2_WEIGHT,
 } from "../store/constants.js";
 
 // =============================================================================
@@ -1534,75 +1533,6 @@ export async function memoryRecall(
     }
   }
 
-  // ── STAGE C2: L# blend (Schift cache hierarchy) ──
-  // When ingest produced 3 variants per session (L0 full / L1 user-only /
-  // L2 first-N user turns), collapse them to unique sessions with a
-  // weighted score. Default OFF — only fires when LOTL_MEMORY_LHASH=on
-  // AND memories carry ingest_level metadata.
-  //
-  // WARNING: LHASH + RECALL_DIVERSIFY together produced −37pp R@5 on the
-  // LoCoMo all-flags-stack sweep (2026-04-20). Do NOT enable both at once
-  // in production. The diversify step after LHASH collapsing leaves too
-  // few distinct sessions to pick from and tanks retrieval.
-  const lHashEnabled = process.env.LOTL_MEMORY_LHASH === "on";
-  if (lHashEnabled && process.env.LOTL_RECALL_DIVERSIFY === "on") {
-    // Log once per process (not per call) to avoid flooding. Warn on first
-    // encounter of the toxic pair.
-    const g = globalThis as unknown as { __lotlLhashDiversifyWarned?: boolean };
-    if (!g.__lotlLhashDiversifyWarned) {
-      g.__lotlLhashDiversifyWarned = true;
-      process.stderr.write("[memory] WARNING: LOTL_MEMORY_LHASH + LOTL_RECALL_DIVERSIFY both enabled — tanks LoCoMo R@5 by ~37pp. Disable one.\n");
-    }
-  }
-  if (lHashEnabled && results.size > 0) {
-    const levelWeight = (lvl: string | undefined): number => {
-      if (lvl === "L1") return MEMORY_L1_WEIGHT;
-      if (lvl === "L2") return MEMORY_L2_WEIGHT;
-      return MEMORY_L0_WEIGHT; // L0 or unknown
-    };
-    const parseMetaLevel = (meta: string | null | undefined): string | undefined => {
-      if (!meta) return undefined;
-      try {
-        const m = typeof meta === "string" ? JSON.parse(meta) : meta;
-        return typeof m?.ingest_level === "string" ? m.ingest_level : undefined;
-      } catch { return undefined; }
-    };
-    // Group by source_session_id; collapse same-session variants.
-    const bySession = new Map<string, { bestEntry: typeof results extends Map<string, infer V> ? V : never; weightedScore: number; totalWeight: number }>();
-    const nonTagged: Array<typeof results extends Map<string, infer V> ? V : never> = [];
-    for (const entry of results.values()) {
-      let sid: string | null = null;
-      let lvl: string | undefined;
-      if (entry.metadata) {
-        try {
-          const m = typeof entry.metadata === "string" ? JSON.parse(entry.metadata) : entry.metadata;
-          sid = typeof m?.source_session_id === "string" ? m.source_session_id : null;
-          lvl = typeof m?.ingest_level === "string" ? m.ingest_level : undefined;
-        } catch { /* not JSON */ }
-      }
-      if (!sid) { nonTagged.push(entry); continue; }
-      const w = levelWeight(lvl);
-      const prev = bySession.get(sid);
-      if (!prev) {
-        bySession.set(sid, { bestEntry: entry, weightedScore: entry.score * w, totalWeight: w });
-      } else {
-        prev.weightedScore += entry.score * w;
-        prev.totalWeight += w;
-        // Prefer L1 entry as the representative text (highest-weight level).
-        if (w > levelWeight(parseMetaLevel(prev.bestEntry.metadata))) {
-          prev.bestEntry = entry;
-        }
-      }
-    }
-    // Rebuild results map with one entry per session_id.
-    results.clear();
-    for (const { bestEntry, weightedScore, totalWeight } of bySession.values()) {
-      bestEntry.score = totalWeight > 0 ? weightedScore / totalWeight : bestEntry.score;
-      results.set(bestEntry.id, bestEntry);
-    }
-    for (const entry of nonTagged) results.set(entry.id, entry);
-  }
-
   // ── STAGE D: Sort ──
   let sorted = [...results.values()].sort((a, b) => b.score - a.score);
 
@@ -1761,9 +1691,7 @@ export async function memoryRecall(
   // 5c. Dialog-aware diversity (v16). Greedy MMR-lite reshuffles top-limit
   // to prefer unseen source_dialog_id / source_session_id, covering more
   // evidence dialogs in multi-evidence queries.
-  const diversifyEnabled = process.env.LOTL_MEMORY_MMR === "session"
-    // back-compat
-    || (!RAW && process.env.LOTL_RECALL_DIVERSIFY === "on");
+  const diversifyEnabled = process.env.LOTL_MEMORY_MMR === "session";
   if (diversifyEnabled && sorted.length > 2) {
     sorted = applyDialogDiversity(sorted, limit);
   } else {

@@ -89,14 +89,43 @@
 
 ---
 
-## Current best (2026-04-17, n=500 LongMemEval _s)
+## Current best
 
-| Config | rAny@5 | R@5 | MRR | NDCG@10 | pref MRR |
+### LongMemEval _s (n=500, retrieval-only, 2026-04-20)
+
+Reproducer: `bash evaluate/scripts/sweep-flags.sh evaluate/sweeps/configs/rerank-weight-sweep-phase4.txt --corpus lme --limit 500 --name rerank-weight-jina-lme`.
+
+| Config | rAny@5 | R@5 | MRR | NDCG@10 | Δ MRR |
 |---|---|---|---|---|---|
-| **No rerank (RRF 0.9/0.1 + expand + synonyms)** | **98.4%** | **93.7%** | **0.917** | **0.913** | **0.745** |
-| + rerank on new RRF (normalized 0.7/0.3) | 98.0% | 93.8% | 0.911 | 0.912 | 0.740 |
+| baseline (RRF 9/1, no rerank) — 2026-04-17 snapshot | 98.4% | 93.7% | 0.917 | 0.913 | — |
+| baseline (RRF 9/1, no rerank) — 2026-04-20 repro on same DB | 97.8% | 93.4% | 0.907 | 0.904 | −0.010 (DB-state drift, see ROADMAP) |
+| **rr-8-2** (RRF 0.8/0.2 + jina-tiny rerank) — **new v1.0 winner** | **98.2%** | **94.3%** | **0.920** | **0.916** | **+0.013** vs 04-20 baseline |
+| rr-6-4 (0.6/0.4 + rerank) | 98.2% | 94.5% | 0.917 | 0.915 | +0.010 |
+| rr-9-1 (0.9/0.1 + rerank) | 98.2% | 94.4% | 0.919 | 0.916 | +0.012 |
 
-vs competitors: agentmemory 95.2% / 0.882 MRR | MemPalace 96.6% rAny@5.
+Key finding: BM25-heavy RRF (>0.5 BM25) + rerank wins. Vec-heavy regresses
+(rerank cannot recover from a bad initial pool given mxbai-xs's vec quality).
+Full 10-config table in `evaluate/SNAPSHOTS.md`.
+
+### LoCoMo (10-conv × 20q = n=200, retrieval-only, 2026-04-20 PARTIAL)
+
+Only 3/10 configs completed before overnight process death. Pattern confirms
+the LME shape — BM25-heavy wins:
+
+| Config | avgR5 | avgMRR | avgSR5 | wall |
+|---|---|---|---|---|
+| **rr-9-1** (0.9/0.1 + rerank) | **0.575** | **0.468** | 0.904 | 3.9 h |
+| rr-8-2 (0.8/0.2 + rerank) | 0.572 | 0.467 | 0.903 | 3.4 h |
+| rr-7-3 (0.7/0.3 + rerank, Stage 9 default) | 0.569 | 0.465 | 0.902 | 3.4 h |
+
+Baseline config aborted at 970/1986 — need a standalone re-fire for clean
+Wilson CI comparison. Tail configs (rr-6-4 → rr-1-9) skipped: LME proves
+vec-heavy tanks, LoCoMo will do the same.
+
+### vs competitors (context)
+
+agentmemory 95.2% / 0.882 MRR | MemPalace 96.6% rAny@5. Lotl still leads
+all open retrieval-only numbers on LME _s.
 
 ---
 
