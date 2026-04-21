@@ -50,6 +50,32 @@ if [[ "${1:-}" == "--status" ]]; then
   exit 0
 fi
 
+# Single-instance guard: two watchdogs racing will spawn two phase6-queues
+# and two parallel eval chains, which corrupts result files (same --tag,
+# racing writes). Caught live 2026-04-21 when I fired the watchdog twice
+# back-to-back and ended up with 16 eval.mts processes.
+#
+# NOTE: `kill -0 <pid>` doesn't work in Git Bash for processes outside the
+# current MSYS session — returns "No such process" even when tasklist
+# confirms the PID is alive. Use a Windows-aware check via tasklist.
+is_pid_alive() {
+  local pid=$1
+  [[ -z "$pid" ]] && return 1
+  tasklist //FI "PID eq $pid" //NH 2>/dev/null | grep -q "$pid"
+}
+
+LOCKFILE=evaluate/logs/phase6-watchdog.lock
+if [[ -f "$LOCKFILE" ]]; then
+  OLD_PID=$(cat "$LOCKFILE" 2>/dev/null || echo "")
+  if is_pid_alive "$OLD_PID"; then
+    echo "[watchdog] another instance alive at pid $OLD_PID — exiting 0" >&2
+    exit 0
+  fi
+  echo "[watchdog] stale lock at pid '$OLD_PID' — claiming" >&2
+fi
+echo $$ > "$LOCKFILE"
+trap 'rm -f "$LOCKFILE"' EXIT
+
 # Outer loop: self-heal up to MAX_RETRIES transient crashes. If the queue
 # exits 0 we're done; if non-zero, wait 30s and re-spawn — sweep-flags.sh
 # resume logic means no redone configs, just picks up the first incomplete.
