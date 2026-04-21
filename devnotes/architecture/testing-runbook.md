@@ -335,6 +335,64 @@ where the last config left off.
   adds deploy friction. Current approach: accept the re-invoke cost,
   rely on resume logic to make it cheap.
 
+### Single-instance guard (`phase6-watchdog.sh`)
+
+Back-to-back watchdog fires produce **multiple parallel eval chains all
+writing to the same `results-sweep-<tag>.json` file** — racing writes
+corrupt the results and double the CPU load. Caught live 2026-04-21
+(16 `eval.mts` processes from two watchdogs concurrently running
+`k20-mmr-off`).
+
+Prevention: lockfile at `evaluate/logs/phase6-watchdog.lock` holds the
+running watchdog's PID. On startup:
+
+1. If the lockfile exists and the recorded PID is alive → exit 0 silently.
+2. Otherwise write `$$` into the lockfile, trap `EXIT` to remove it.
+
+**Git Bash pitfall**: `kill -0 <pid>` does NOT work for processes outside
+the MSYS session — it returns "No such process" even when `tasklist`
+confirms the PID is alive. Use `tasklist //FI "PID eq <pid>" //NH`
+instead. See `is_pid_alive()` in `phase6-watchdog.sh`.
+
+Manual seed (when the watchdog is already running but the lockfile is
+missing — e.g. fresh clone, or I killed the lock during a panic):
+
+```sh
+# Find the watchdog PID:
+wmic process where "commandline like '%phase6-watchdog.sh%' and name='bash.exe'" \
+  get ProcessId //format:list
+# Write it:
+echo <PID> > evaluate/logs/phase6-watchdog.lock
+```
+
+### Zombie-detection drill (what to run when you're unsure)
+
+```sh
+# 1. Count eval.mts processes. Normal = 3-5 (one chain).
+#    Anything > 8 = parallel chains = zombies from a past kill / double-fire.
+wmic process where "commandline like '%eval.mts%'" get ProcessId //format:list \
+  | grep -c "^ProcessId="
+
+# 2. Count watchdog instances. Normal = 1.
+wmic process where "commandline like '%phase6-watchdog.sh%' and name='bash.exe'" \
+  get ProcessId //format:list | grep -c "^ProcessId="
+
+# 3. Heartbeat age. Fresh = <2 min. Stale = queue died.
+cat evaluate/logs/phase6-heartbeat.txt
+```
+
+If counts are wrong:
+
+```sh
+# Kill all eval.mts node children:
+for pid in $(wmic process where "commandline like '%eval.mts%' and name='node.exe'" \
+    get ProcessId //format:list 2>&1 | grep "^ProcessId=" | sed 's/ProcessId=//'); do
+  taskkill //PID $pid //F 2>&1 | head -1
+done
+# Then kill duplicate watchdogs by PID, keep the newest.
+# sweep-flags.sh resume logic means no redone configs on restart.
+```
+
 ## Interpretation checklist
 
 After any sweep, check:
