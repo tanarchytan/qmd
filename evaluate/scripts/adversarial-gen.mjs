@@ -143,7 +143,11 @@ async function main() {
     process.exit(1);
   }
   const data = JSON.parse(readFileSync(args.inputPath, "utf8"));
-  const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
+  const items = Array.isArray(data?.items) ? data.items
+    : Array.isArray(data?.results) ? data.results
+    : Array.isArray(data?.rows) ? data.rows
+    : Array.isArray(data) ? data
+    : [];
   if (items.length === 0) {
     console.error(`No items found in ${args.inputPath}`);
     process.exit(1);
