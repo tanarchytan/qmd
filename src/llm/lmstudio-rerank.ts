@@ -75,6 +75,11 @@ async function scoreOne(
     seed: 42,
     max_tokens: opts.maxTokens,
   };
+  // Thinking-model control: qwen3-reranker routes structured output into
+  // message.reasoning_content instead of content (caught 2026-04-21 on
+  // qwen-35b judge and confirmed to affect this rerank shim too). Disable
+  // thinking so the score lands in content.
+  if (opts.model && /qwen3/i.test(opts.model)) body.enable_thinking = false;
   if (opts.structured) body.response_format = RERANK_RESPONSE_SCHEMA;
 
   const resp = await fetch(`http://${opts.host}/v1/chat/completions`, {
@@ -86,8 +91,11 @@ async function scoreOne(
     body: JSON.stringify(body),
   });
   if (!resp.ok) throw new Error(`lmstudio rerank ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
-  const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }> };
-  const raw = data.choices?.[0]?.message?.content || "";
+  const data = await resp.json() as { choices?: Array<{ message?: { content?: string; reasoning_content?: string } }> };
+  // Defense-in-depth fallback: even with enable_thinking=false, some thinking
+  // models still leak the structured output into reasoning_content.
+  const msg = data.choices?.[0]?.message;
+  const raw = (msg?.content && msg.content.length > 0) ? msg.content : (msg?.reasoning_content || "");
   // Parse JSON-schema-enforced {"score": ...} or fall back to first numeric match.
   const m = raw.match(/\{[\s\S]*?\}/);
   if (m) {
