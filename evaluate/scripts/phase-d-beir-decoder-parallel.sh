@@ -76,7 +76,11 @@ unload_everything
 sleep 3
 
 TMPDIR=$(mktemp -d)
-for model in qwen3-reranker-0.6b qwen3-reranker-4b mxbai-rerank-base-v2 mxbai-rerank-large-v2; do
+# Skip qwen3-reranker-* — thinking models; enable_thinking:false isn't honored
+# by LM Studio and each rerank call takes ~47s of reasoning (caught 2026-04-21
+# on qwen3-reranker-0.6b at parallel=32 — 2.5 h per config, unusable).
+# Only mxbai-rerank-v2 family confirmed to rerank quickly as non-thinking decoders.
+for model in mxbai-rerank-base-v2 mxbai-rerank-large-v2; do
   parallel="${PARALLEL[$model]}"
   cfg_file="$TMPDIR/${model}.txt"
   write_single_config "$model" "$cfg_file"
