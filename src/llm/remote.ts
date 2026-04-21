@@ -564,18 +564,15 @@ export class RemoteLLM implements LLM {
     // BATCH_SIZE: 64 for OpenAI-compatible APIs (high per-request limit),
     // 5 for Gemini free tier (30k TPM cap binding — small batches keep
     // each request well under 5k tokens so the throttle controls steady-
-    // state TPM cleanly).
-    const geminiBatchSize = Number(process.env.LOTL_GEMINI_EMBED_BATCH_SIZE ?? "5");
-    const BATCH_SIZE = provider === 'gemini' ? geminiBatchSize : 64;
+    // state TPM cleanly). Hardcoded — Gemini's free-tier shape has been
+    // stable since 2024; override by patching this file if it changes.
+    const BATCH_SIZE = provider === 'gemini' ? 5 : 64;
     const allResults: (EmbeddingResult | null)[] = new Array(texts.length).fill(null);
     // Gemini rate limit throttle (free tier: 100 RPM, 30k TPM, 1k RPD).
     // TPM is the binding constraint — at BATCH_SIZE=5 averaging ~600 tok/text,
     // each batch is ~3k tokens. 15-sec interval = 4 batches/min × 3k = 12k TPM,
     // safely under the 30k cap with margin for token estimation error.
-    // Override via LOTL_GEMINI_EMBED_INTERVAL_MS.
-    const geminiIntervalMs = provider === 'gemini'
-      ? Number(process.env.LOTL_GEMINI_EMBED_INTERVAL_MS ?? "15000")
-      : 0;
+    const geminiIntervalMs = provider === 'gemini' ? 15000 : 0;
 
     for (let i = 0; i < texts.length; i += BATCH_SIZE) {
       const batch = texts.slice(i, i + BATCH_SIZE);

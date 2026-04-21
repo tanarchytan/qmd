@@ -1645,10 +1645,7 @@ export async function memoryRecall(
   //   2. Query has proper-noun entities (lowercase/wh-questions skipped)
   //   3. Top score is weak (< 0.3)
   // KG facts capped at 5, inserted at score 0.25.
-  const kgEnabled = process.env.LOTL_MEMORY_KG === "on"
-    // back-compat: old env vars still work
-    || process.env.LOTL_RECALL_KG_RAW === "on"
-    || (!RAW && process.env.LOTL_RECALL_KG === "on");
+  const kgEnabled = process.env.LOTL_MEMORY_KG === "on";
   if (kgEnabled) {
     const entities = extractQueryEntities(query);
     const topScore = sorted[0]?.score ?? 0;

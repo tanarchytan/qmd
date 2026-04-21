@@ -50,9 +50,6 @@ export const EVAL_ONLY_VARS = [
   // Prompt variant selection
   "PROMPT_RULES",
   // Recall-pipeline eval toggles (distinct from production LOTL_MEMORY_*)
-  "RECALL_MMR",
-  "RECALL_MMR_LAMBDA",
-  "RECALL_REFLECT",
   "RECALL_NO_TOUCH",
   // Preflight skip
   "SKIP_PREFLIGHT",

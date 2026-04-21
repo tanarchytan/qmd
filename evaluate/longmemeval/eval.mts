@@ -1017,7 +1017,7 @@ async function main() {
     INGEST_SYNTHESIS: process.env.LOTL_INGEST_SYNTHESIS !== "off",
     INGEST_REFLECTIONS: process.env.LOTL_INGEST_REFLECTIONS !== "off",
     PROMPT_RULES: process.env.LOTL_PROMPT_RULES || "v11",
-    RECALL_MMR: process.env.LOTL_RECALL_MMR === "on",
+    MEMORY_MMR: process.env.LOTL_MEMORY_MMR === "session",
   };
   console.log(`  Ablation: ${JSON.stringify(ablation)}\n`);
 
