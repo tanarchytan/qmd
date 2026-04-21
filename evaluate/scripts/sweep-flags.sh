@@ -35,9 +35,19 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "$NAME" ]] && NAME=$(basename "$CONFIG_FILE" .txt)
 
-SWEEP_DIR="$REPO/evaluate/sweeps/${NAME}-$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$SWEEP_DIR"
-cp "$CONFIG_FILE" "$SWEEP_DIR/config.txt"
+# Resume an incomplete sweep if one exists with the same --name prefix and
+# no SUMMARY.md. Crash-restart friendly: watchdog re-invokes this script
+# verbatim and we land back in the same dir, picking up where we left off.
+EXISTING=$(ls -dt "$REPO/evaluate/sweeps/${NAME}-"*/ 2>/dev/null | head -1)
+EXISTING=${EXISTING%/}
+if [[ -n "$EXISTING" ]] && [[ -d "$EXISTING" ]] && [[ ! -f "$EXISTING/SUMMARY.md" ]]; then
+  SWEEP_DIR="$EXISTING"
+  echo "[sweep-flags] resuming incomplete sweep: $SWEEP_DIR"
+else
+  SWEEP_DIR="$REPO/evaluate/sweeps/${NAME}-$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$SWEEP_DIR"
+  cp "$CONFIG_FILE" "$SWEEP_DIR/config.txt"
+fi
 echo "Sweep: $SWEEP_DIR"
 echo "Corpus: $CORPUS, Limit: $LIMIT"
 
@@ -57,6 +67,12 @@ run_one_lme() {
   local tag=$1; local overlay=$2
   local outDir="$SWEEP_DIR/$tag"
   mkdir -p "$outDir"
+  # Resumable: skip configs that already produced a non-partial lme.json.
+  # Lets watchdog re-spawn after a crash without redoing completed configs.
+  if [[ -f "$outDir/lme.json" ]] && node -e "const d=JSON.parse(require('fs').readFileSync('$outDir/lme.json')); process.exit(d.partial?1:0);" 2>/dev/null; then
+    echo "=== [$tag] LME n=$LIMIT SKIP (already done)"
+    return 0
+  fi
   echo ""
   echo "=== [$tag] LME n=$LIMIT  overlay: ${overlay:-<none>} ==="
   local t0=$(date +%s)
@@ -81,6 +97,10 @@ run_one_locomo() {
   local tag=$1; local overlay=$2
   local outDir="$SWEEP_DIR/$tag"
   mkdir -p "$outDir"
+  if [[ -f "$outDir/locomo.json" ]] && node -e "const d=JSON.parse(require('fs').readFileSync('$outDir/locomo.json')); process.exit(d.partial?1:0);" 2>/dev/null; then
+    echo "=== [$tag] LoCoMo SKIP (already done)"
+    return 0
+  fi
   echo ""
   echo "=== [$tag] LoCoMo 10-conv  overlay: ${overlay:-<none>} ==="
   local t0=$(date +%s)
