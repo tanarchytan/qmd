@@ -161,6 +161,9 @@ async function askOpenAICompat(
     seed: effectiveSeed,
     max_tokens: maxTokens,
   };
+  // Thinking-model control: qwen3.6 routes structured output into
+  // message.reasoning_content instead of content. Disable thinking.
+  if (model && /qwen3/i.test(model)) body.enable_thinking = false;
   if (responseFormat) body.response_format = responseFormat;
   const resp = await fetch(url, {
     method: "POST",
@@ -169,7 +172,12 @@ async function askOpenAICompat(
   });
   if (!resp.ok) throw new Error(`${model} ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
   const data = await resp.json() as any;
-  let text = (data.choices?.[0]?.message?.content || "").replace(/^["']|["']$/g, "").trim();
+  // Defense-in-depth: fall back to reasoning_content if content is empty
+  // (thinking models sometimes leak structured output there anyway).
+  const msg = data.choices?.[0]?.message;
+  const raw = (msg?.content && msg.content.length > 0) ? msg.content
+    : (msg?.reasoning_content || "");
+  let text = raw.replace(/^["']|["']$/g, "").trim();
   llmCache.set(cacheKey, text);
   return text;
 }

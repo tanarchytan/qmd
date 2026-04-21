@@ -169,6 +169,11 @@ async function askOpenAICompat(
     seed: effectiveSeed,
     max_tokens: maxTokens,
   };
+  // Thinking-model control: qwen3.6 routes structured output into
+  // `message.reasoning_content` instead of `content` (caught on qwen-35b
+  // judge 2026-04-21 — 100% empty verdicts). Disable thinking so the
+  // verdict lands in `content` where our parser reads it.
+  if (model && /qwen3/i.test(model)) body.enable_thinking = false;
   if (responseFormat) body.response_format = responseFormat;
   const resp = await fetch(url, {
     method: "POST",
@@ -185,7 +190,13 @@ async function askOpenAICompat(
   }
   if (callType === "gen") usageTotals.callsGen++;
   else usageTotals.callsJudge++;
-  let text = (data.choices?.[0]?.message?.content || "").replace(/^["']|["']$/g, "").trim();
+  // Defense-in-depth: even with enable_thinking=false, some thinking models
+  // still leak structured output into reasoning_content. Fall back when
+  // content is empty but reasoning_content has the JSON we asked for.
+  const msg = data.choices?.[0]?.message;
+  const raw = (msg?.content && msg.content.length > 0) ? msg.content
+    : (msg?.reasoning_content || "");
+  let text = raw.replace(/^["']|["']$/g, "").trim();
   llmCache.set(cacheKey, text);
   return text;
 }
