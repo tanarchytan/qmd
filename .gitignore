@@ -1,0 +1,59 @@
+node_modules/
+dist/
+package-lock.json
+.npmrc
+*.sqlite
+.DS_Store
+archive/
+texts/
+.cursor/
+.github/copilot/
+.claude/
+.vscode/
+.serena/
+graphify-out/
+**/graphify-out/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Tool working state — vexp MCP server, pi config, code-review-graph.
+# All auto-regenerated locally; tracking pollutes PRs with tool noise.
+# (.serena/, .claude/, .vscode/ already covered above)
+.vexp/
+.pi/
+.code-review-graph/
+
+# Markdown — only allow tracked top-level docs and curated subdirs.
+# (root *.md is ignored by default; explicitly track the ones below.)
+*.md
+!README.md
+!CLAUDE.md
+!CHANGELOG.md
+!skills/**/*.md
+!docs/**/*.md
+!devnotes/**/*.md
+!evaluate/**/*.md
+!setup/**/*.md
+!test/**/*.md
+
+# Evaluation artifacts (sqlite + per-tag results + LLM cache + run logs)
+evaluate/locomo/debug-*.mjs
+evaluate/locomo/dbs/
+evaluate/locomo/results.json
+evaluate/locomo/results-*.json
+evaluate/locomo/locomo10.json
+evaluate/locomo/llm-cache*.json
+evaluate/locomo/answer-cache/
+evaluate/locomo/**/*.log
+evaluate/longmemeval/longmemeval_*.json
+evaluate/longmemeval/dbs/
+evaluate/longmemeval/results*.json
+evaluate/longmemeval/llm-cache*.json
+evaluate/longmemeval/answer-cache/
+evaluate/longmemeval/**/*.log
+evaluate/logs/
+evaluate/sweeps/*/
+!evaluate/sweeps/configs/

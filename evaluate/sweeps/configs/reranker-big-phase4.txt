@@ -1,0 +1,15 @@
+# Phase 4 big reranker pass — 3 models >100M that Stage 9 didn't reach
+# (sweep stopped after mxbai-xsmall's 13.6h CPU run).
+#
+# Run only if we have idle GPU time or want the complete picture.
+# Expected CPU wall per config: 4-8h. GPU should be 10-100× faster.
+# Runs at 7/3 weights to match Stage 9 so results are directly comparable
+# to jina-tiny-w73 / mxbai-xsmall-w73.
+#
+# Context fix: LOTL_TRANSFORMERS_RERANK_MAXLEN=512 prevents the ModernBERT
+# OOM we hit earlier (67 GB BFCArena alloc on 8192-token input).
+
+baseline                  LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3
+mxbai-base-w73            LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=mixedbread-ai/mxbai-rerank-base-v1 LOTL_TRANSFORMERS_RERANK_MAXLEN=512
+gte-modernbert-w73        LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=Alibaba-NLP/gte-reranker-modernbert-base LOTL_TRANSFORMERS_RERANK_MAXLEN=512
+tomaarsen-modernbert-w73  LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3 LOTL_MEMORY_RERANK=on LOTL_RERANK_BACKEND=transformers LOTL_TRANSFORMERS_RERANK_MODEL=tomaarsen/reranker-ModernBERT-base-gooaq-bce LOTL_TRANSFORMERS_RERANK_MAXLEN=512

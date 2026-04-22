@@ -1,0 +1,29 @@
+{
+	"name": "lotl",
+	"owner": {
+		"name": "tanarchytan",
+		"email": "admin@tanarchy.org"
+	},
+	"plugins": [
+		{
+			"name": "lotl",
+			"source": "./",
+			"description": "Living-off-the-Land memory for AI agents: hybrid search + temporal KG on SQLite + local ONNX.",
+			"version": "1.0.0",
+			"author": {
+				"name": "tanarchytan",
+				"email": "admin@tanarchy.org"
+			},
+			"repository": "https://github.com/tanarchytan/lotl",
+			"license": "MIT",
+			"keywords": ["memory", "agent", "rag", "sqlite-vec", "hybrid-search", "knowledge-graph"],
+			"skills": ["./skills/lotl/"],
+			"mcpServers": {
+				"lotl": {
+					"command": "lotl",
+					"args": ["mcp"]
+				}
+			}
+		}
+	]
+}

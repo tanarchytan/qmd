@@ -1,0 +1,139 @@
+# Overnight sweep session — 2026-04-19
+
+**Status at bedtime (01:30 approx):** main chain (bkb4go86h) complete, follow-up
+(bs4wjrdqv) running. ~3 h remaining compute.
+
+## ⚡ Biggest finding: eval-harness was polluting its own A/B data
+
+`memoryRecall` in `src/memory/index.ts:1673` unconditionally bumps
+`access_count` + `last_accessed` on every retrieved memory. Across sweep
+configs sharing a DB, later configs see the accumulated touches and
+Weibull-decay-weighted ranking drifts. **Every A/B config pair in today's
+sweeps where the DB was shared is confounded.**
+
+Symptom: Stage 3 LoCoMo baseline (R@5 57.2%, wall 273s incl. ingest) vs
+baseline-w91 (R@5 52.7%, wall 40s) with identical config. 4.5pp R@5 gap
+coming from nowhere except the touch-accumulation bias.
+
+Fix landed as `LOTL_RECALL_NO_TOUCH=on` guard (commit `b2c0f62`).
+sweep-flags.sh and sweep-flags-llm.sh export it by default. Production
+code path unchanged — touches still drive decay/promotion when the flag
+isn't set.
+
+**Impact on today's data:**
+- Stages 1-9 of main chain + follow-up ran WITHOUT the guard → contaminated
+- Stage 10+ of the follow-up (currently queued) gets the fix via fresh
+  tsx subprocesses
+- Reruns chain (R1-R5) will all use the fix
+
+**Tomorrow's action:** the reruns chain was already planned to redo stages
+2/4/6/7/8. Those reruns will now *also* give clean A/B data for those
+stages. But ALL the numeric deltas in Stage 3's SUMMARY should be treated
+as upper bounds on effect size — actual flag effects may be smaller
+(or larger) under clean isolation.
+
+## Key findings (tomorrow's triage order)
+
+### 🟢 MRR drift — investigated, closed as phantom
+
+Stage 5 of main chain ran 5 identical LME n=500 baseline passes. Every single
+run produced **MRR 0.907 / rAny@5 97.8% / R@5 93.4%** — byte-identical.
+
+SNAPSHOTS.md pinned 0.917 MRR. Initial read: ~1pp drift. **Investigated in a
+worktree at `/c/Users/DavidGillot/Projects/qmd-bisect` (since cleaned up):**
+
+| Commit | MRR (n=100) | rAny@5 | R@5 |
+|---|---|---|---|
+| `53ad895` (pre-rename) | 0.881 | 92.0% | 86.2% |
+| `9af176c` (SNAPSHOTS commit) | 0.908 | 98.0% | 94.5% |
+| `ba4f062` (current dev) | 0.908 | 98.0% | 94.5% |
+
+**Finding: no drift exists.** Current code at `ba4f062` produces the same
+metrics as the commit that added SNAPSHOTS.md (`9af176c`). SNAPSHOTS' claim
+of 0.917 was likely measured on a different DB state, different machine
+(WSL?), or was cherry-picked from a favorable run.
+
+Pre-rename code (`53ad895`) actually scored ~2.7pp LOWER MRR. The rename
+era IMPROVED retrieval, not regressed it.
+
+**Action:** SNAPSHOTS.md needs the 0.917 values corrected to 0.907-0.908 to
+match reproducible measurements. Hold until follow-up chain completes.
+
+### 🔴 All reranker data is INVALID — fixed, needs rerun
+
+**Stages 2, 4, 6, 7 (partial) all silently no-op'd the reranker.** Every
+candidate produced byte-identical metrics to baseline because the factory
+hardcoded `model_quint8_avx2` as the ONNX filename — only the legacy
+`cross-encoder/ms-marco-MiniLM-L6-v2` ships that variant.
+
+Error in logs: `"Memory rerank failed: Could not locate file ..."` — fell
+through to fusion-only ranking silently.
+
+**Fixed in `9cba9bc`:** when user specifies a non-default model, don't
+inherit legacy filename/dtype. Let transformers.js resolve /onnx/ from the
+repo and pass `dtype=q8`.
+
+**Action tomorrow:**
+1. Rerun Phase 3 reranker A/B on LME + LoCoMo (stages 2, 4 equivalents)
+2. Rerun Stage 6 combined-winners — the auto-picked "tomaarsen-modernbert"
+   was selected on invalid data
+
+### 🟡 LoCoMo flag × weight (Stage 3) — partially valid
+
+Stage 3 didn't use rerankers so the data is valid. Highlights:
+
+- **`LHASH` crashes on LoCoMo** at both 9/1 and 1/9 weights:
+  R@5 15.5% (vs baseline 57.2%). Confirms LHASH is a strong Phase 4 delete
+  candidate — it's not just null on LME, it actively breaks LoCoMo.
+- **1/9 (extreme vec) drops R@5 by ~7pp** across all flags — consistent
+  with the LME finding that mxbai-xs vec signal isn't strong enough to
+  dominate RRF.
+- **Wall-time anomaly**: baseline took 273s but every subsequent config
+  took 38-42s. Suggests baseline did the LoCoMo ingest and subsequent runs
+  reused the DB. Consistent with LoCoMo eval behavior.
+- **Scores differ between baseline (R@5=57.2%) and baseline-w91 (R@5=52.7%)
+  despite identical weights.** Unexplained. Possibly ingest vs non-ingest
+  state affects first-pass scoring. Worth a targeted investigation.
+
+### 🟢 Running (follow-up bs4wjrdqv, started 01:11)
+
+Stages 7-14 queued. 7 started at 01:11:19. Remaining stages:
+
+7. LME reranker × 7/3 weight — partially invalid if started before fix
+   commit (9cba9bc, 01:14), valid after
+8. LoCoMo Phase 1 single-flag ablation — rerun of null-on-LME on harder corpus
+9. LoCoMo reranker × 7/3 weight — should benefit from fix
+10. LoCoMo MRR drift 5-pass repro — will show if drift is LoCoMo-specific
+11. Combined winners on LoCoMo — based on Stage 6 which was invalid
+12. All-flags stacked (LME + LoCoMo)
+13. LLM-judge A/B (n=100, gemini) — content-flag effects on Judge-Acc
+14. Polarity-corrected rerun (synonyms=off, scope-norm=rank, expand=none)
+
+### 🟢 Infrastructure committed
+
+- `scripts/mrr-drift-bisect.sh` — git-bisect runner
+- `scripts/sweep-flags-llm.sh` — LLM-judge sweep runner
+- `scripts/follow-up-sweeps.sh` — 8-stage follow-up chain
+- `devnotes/architecture/phase5-kg-and-fact-aug-design.md` — Phase 5 design,
+  not implemented, needs sign-off
+
+### 🟡 Gotchas caught this session
+
+1. **Flag polarity bugs** — Phase 1 silently tested 3 no-ops:
+   `LOTL_MEMORY_SYNONYMS=on` (default on), `LOTL_MEMORY_SCOPE_NORM=on`
+   (needs `=rank`), `LOTL_MEMORY_EXPAND=keywords` (IS the default). Fixed
+   in Stage 14.
+2. **Reranker default filename** — caught via silent-no-op pattern, fixed.
+3. **sweep-flags.sh `env $overlay`** — correctly space-splits multi-var
+   overlays. No bug, just note.
+
+## Tomorrow's ordered action list
+
+1. Git bisect the MRR drift (mrr-drift-bisect.sh is ready)
+2. Read the follow-up `MASTER.md` once it lands
+3. Rerun Phase 3 reranker A/B with fix in place (LME + LoCoMo)
+4. Once reranker winner is known, rerun combined-winners
+5. Triage Stage 14 corrected-polarity results — does `synonyms=off` change
+   behavior? `scope-norm=rank`?
+6. Phase 4 graduation PR draft based on combined signal
+7. User sign-off on Phase 5 design before any schema migration

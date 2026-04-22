@@ -1,0 +1,9 @@
+# Stage 6: combined winners from Stages 1-4.
+# Placeholder — real rows get appended after the reranker sweeps conclude.
+# Template: stack the best reranker (or reranker=off) with expand-entities
+# and vec-min-sim-off, try both at baseline weights and 7/3.
+#
+# This config is REGENERATED inside the chain script — don't hand-edit unless
+# chaining is disabled.
+
+baseline

@@ -1,0 +1,20 @@
+# Phase 2 BM25/vec weight re-sweep.
+#
+# NOTE: append Phase 1 winner overlays to EACH non-baseline row after Phase 1
+# resolves. For example if `scope-norm` wins, add `LOTL_MEMORY_SCOPE_NORM=on`
+# to every non-baseline row below. This phase measures whether optimal BM25
+# weight shifts once Phase 1 winners are stacked.
+#
+# Current default: MEMORY_RRF_W_BM25=0.9 / MEMORY_RRF_W_VEC=0.1 (9:1).
+# The hypothesis: with `expand=entities` or `scope-norm` on, vec signal
+# becomes stronger and the optimal BM25 ratio may drop below 0.7.
+
+# Re-anchor the baseline under test config (same 9:1 as shipped constants)
+baseline              LOTL_MEMORY_RRF_W_BM25=0.9 LOTL_MEMORY_RRF_W_VEC=0.1
+
+bm25-0.7              LOTL_MEMORY_RRF_W_BM25=0.7 LOTL_MEMORY_RRF_W_VEC=0.3
+bm25-0.6              LOTL_MEMORY_RRF_W_BM25=0.6 LOTL_MEMORY_RRF_W_VEC=0.4
+bm25-0.5              LOTL_MEMORY_RRF_W_BM25=0.5 LOTL_MEMORY_RRF_W_VEC=0.5
+bm25-0.4              LOTL_MEMORY_RRF_W_BM25=0.4 LOTL_MEMORY_RRF_W_VEC=0.6
+bm25-0.3              LOTL_MEMORY_RRF_W_BM25=0.3 LOTL_MEMORY_RRF_W_VEC=0.7
+bm25-0.1              LOTL_MEMORY_RRF_W_BM25=0.1 LOTL_MEMORY_RRF_W_VEC=0.9

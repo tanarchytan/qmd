@@ -1,0 +1,13 @@
+# MRR drift investigation — 5 identical baseline runs.
+# SNAPSHOTS.md pinned baseline MRR at 0.917; Phase 1 re-run today shows 0.908.
+# 1pp drift. Is it deterministic, or bench-to-bench variance?
+#
+# All 5 rows are bit-identical in config — difference (if any) is pure variance
+# from worker scheduling, SQLite page ordering, etc. If all 5 converge on
+# ~0.907, drift from SNAPSHOTS is real and deserves git bisect.
+
+baseline
+pass-2
+pass-3
+pass-4
+pass-5

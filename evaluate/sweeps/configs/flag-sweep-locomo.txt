@@ -1,0 +1,13 @@
+# Phase 1 equivalent on LoCoMo — 9 flags at default 9/1 weight.
+# Baseline LoCoMo R@5 is ~67% — much more headroom than LME's 98%.
+# Flags that were null on LME may show signal here.
+
+baseline
+mmr-session          LOTL_MEMORY_MMR=session
+expand-keywords      LOTL_MEMORY_EXPAND=keywords
+expand-entities      LOTL_MEMORY_EXPAND=entities
+synonyms             LOTL_MEMORY_SYNONYMS=on
+scope-norm           LOTL_MEMORY_SCOPE_NORM=on
+lhash                LOTL_MEMORY_LHASH=on
+diversify            LOTL_RECALL_DIVERSIFY=on
+vec-min-sim-off      LOTL_VEC_MIN_SIM=0.0

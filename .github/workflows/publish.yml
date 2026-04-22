@@ -1,0 +1,212 @@
+name: Publish
+
+# Runs on version tags (`vX.Y.Z`, `vX.Y.Z-rc1`, etc.).
+#
+# Four jobs run in sequence; any failure stops the pipeline before anything
+# irreversible (npm publish, GitHub release):
+#
+#   1. test        — full cross-platform test matrix (same as CI)
+#   2. pack-audit  — build + `npm pack` dry-run + content sanity check
+#   3. publish     — `npm publish --provenance`
+#   4. smoke       — fresh `npm install -g` of the just-published version
+#                    and verify `lotl --version` matches the tag
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  # ------------------------------------------------------------------
+  # 1. Cross-platform test matrix (Ubuntu + macOS × Node 22/23)
+  # ------------------------------------------------------------------
+  test:
+    name: Test — Node ${{ matrix.node-version }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node-version: ["22", "23"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install SQLite (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+
+      - name: Install SQLite (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sqlite
+
+      - run: npm install
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Tests
+        run: npx vitest run --reporter=verbose --testTimeout 60000 test/
+        env:
+          CI: true
+          LD_LIBRARY_PATH: /usr/lib/x86_64-linux-gnu
+
+  # ------------------------------------------------------------------
+  # 2. Tarball audit — pack locally, verify expected contents
+  # ------------------------------------------------------------------
+  pack-audit:
+    name: Tarball audit
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - run: npm install
+      - run: npm run build
+
+      - name: npm pack (dry-run) + content sanity
+        run: |
+          npm pack --dry-run 2>&1 | tee /tmp/pack.log
+          echo "--- assertions ---"
+          # Expected shippable files
+          grep -q "bin/lotl" /tmp/pack.log || { echo "MISSING: bin/lotl"; exit 1; }
+          grep -q "dist/cli/lotl.js" /tmp/pack.log || { echo "MISSING: dist/cli/lotl.js"; exit 1; }
+          grep -q "skills/lotl/SKILL.md" /tmp/pack.log || { echo "MISSING: skills/lotl/SKILL.md"; exit 1; }
+          grep -q "openclaw.plugin.json" /tmp/pack.log || { echo "MISSING: openclaw.plugin.json"; exit 1; }
+          grep -q "README.md" /tmp/pack.log || { echo "MISSING: README.md"; exit 1; }
+          grep -q "LICENSE" /tmp/pack.log || { echo "MISSING: LICENSE"; exit 1; }
+          # Forbidden leaks — eval harness + dev tools should NOT ship
+          grep -qE "evaluate/|test/|devnotes/|graphify-out/|\.env|mcp\.token" /tmp/pack.log && { echo "LEAKED internal content into npm tarball"; exit 1; } || true
+          # Forbidden leftovers — legacy qmd binary shouldn't be in the tarball
+          grep -qE "bin/qmd\b|dist/cli/qmd\.js\b" /tmp/pack.log && { echo "LEAKED legacy qmd binary"; exit 1; } || true
+          echo "tarball looks clean ✓"
+
+      - name: Version consistency — package.json vs tag
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "MISMATCH: package.json=$PKG_VERSION tag=$TAG_VERSION"
+            exit 1
+          fi
+          echo "package.json ($PKG_VERSION) matches tag ($TAG_VERSION) ✓"
+
+      - name: Version consistency — openclaw.plugin.json synced
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          OC=$(node -p "require('./openclaw.plugin.json').version")
+          if [ "$PKG" != "$OC" ]; then
+            echo "MISMATCH: package.json=$PKG openclaw.plugin.json=$OC"
+            echo "Run \`npm run build\` to sync — the build script does this automatically."
+            exit 1
+          fi
+          echo "openclaw.plugin.json synced with package.json ✓"
+
+      - name: CHANGELOG entry exists for this version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! grep -q "^## \[$VERSION\] - " CHANGELOG.md; then
+            echo "MISSING: '## [$VERSION] - YYYY-MM-DD' entry in CHANGELOG.md"
+            exit 1
+          fi
+          echo "CHANGELOG.md has [$VERSION] ✓"
+
+  # ------------------------------------------------------------------
+  # 3. Publish to npm + create GitHub release
+  # ------------------------------------------------------------------
+  publish:
+    name: Publish to npm + GitHub release
+    runs-on: ubuntu-latest
+    needs: [test, pack-audit]
+
+    permissions:
+      contents: write   # create GitHub releases
+      id-token: write   # npm provenance via OIDC
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - run: npm install
+      - run: npm run build
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+
+      - name: Extract changelog entry
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ./scripts/extract-changelog.sh "$VERSION" > /tmp/release-notes.md
+          # Guard: release notes file must be non-empty
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "Release notes are empty — extract-changelog.sh failed or CHANGELOG entry has no content."
+            exit 1
+          fi
+
+      - name: Create GitHub release
+        run: |
+          # Mark tags with hyphens (v1.0.0-rc1, v1.0.0-beta.2, etc.) as pre-release.
+          PRERELEASE_FLAG=""
+          case "$GITHUB_REF_NAME" in
+            *-*) PRERELEASE_FLAG="--prerelease" ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file /tmp/release-notes.md \
+            $PRERELEASE_FLAG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ------------------------------------------------------------------
+  # 4. Post-publish smoke — npm install -g, run the binary
+  # ------------------------------------------------------------------
+  smoke:
+    name: Post-publish smoke test
+    runs-on: ubuntu-latest
+    needs: publish
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+
+      - name: Wait for npm registry to index the new version
+        run: sleep 30
+
+      - name: Install the published package globally
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm install -g "@tanarchy/lotl@$VERSION"
+
+      - name: Verify version output
+        run: |
+          EXPECTED="${GITHUB_REF_NAME#v}"
+          OUTPUT=$(lotl --version)
+          echo "Output: $OUTPUT"
+          # `lotl --version` prints "lotl X.Y.Z (commit)" — check the version substring
+          if ! echo "$OUTPUT" | grep -q "$EXPECTED"; then
+            echo "MISMATCH: expected '$EXPECTED' in '$OUTPUT'"
+            exit 1
+          fi
+          echo "published binary reports $EXPECTED ✓"
+
+      - name: Verify `lotl status` runs without crashing
+        run: |
+          lotl status || echo "status exited non-zero — expected when no collections configured, acceptable"

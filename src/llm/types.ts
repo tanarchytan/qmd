@@ -1,0 +1,211 @@
+/**
+ * llm/types.ts — shared types, default model URIs, and embedding format helpers.
+ *
+ * Split out from src/llm.ts. Zero runtime dependencies — safe to import from any
+ * llm/ submodule without risking circular imports.
+ */
+
+// =============================================================================
+// Default model URIs
+// =============================================================================
+
+// Default local embed model — HuggingFace repo id for @huggingface/transformers
+// (Path A backend in src/llm/transformers-embed.ts). Promoted 2026-04-13 after
+// LME _s n=500 A/B: 94.2% R@5 in 14m49s vs MiniLM fp32 baseline 93.2% / 23m33s.
+// Override via LOTL_EMBED_MODEL.
+export const DEFAULT_EMBED_MODEL = "mixedbread-ai/mxbai-embed-xsmall-v1";
+
+// Rerank + generate have no local backend — they require a remote provider
+// (RemoteLLM, configured via LOTL_RERANK_PROVIDER / LOTL_QUERY_EXPANSION_PROVIDER).
+// These constants are kept only as informational defaults; the actual model
+// routing happens through the remote provider's own model selection.
+export const DEFAULT_RERANK_MODEL = "zerank-1";
+export const DEFAULT_GENERATE_MODEL = "gemini-2.0-flash";
+
+// Legacy *_URI aliases kept for backwards compat with any external consumers.
+export const DEFAULT_EMBED_MODEL_URI = DEFAULT_EMBED_MODEL;
+export const DEFAULT_RERANK_MODEL_URI = DEFAULT_RERANK_MODEL;
+export const DEFAULT_GENERATE_MODEL_URI = DEFAULT_GENERATE_MODEL;
+
+// =============================================================================
+// Embedding Formatting Functions
+// =============================================================================
+
+/** Nomic-style task prefix for query embeddings. */
+export function formatQueryForEmbedding(query: string, _modelUri?: string): string {
+  return `task: search result | query: ${query}`;
+}
+
+/** Nomic-style title+text format for document embeddings. */
+export function formatDocForEmbedding(text: string, title?: string, _modelUri?: string): string {
+  return `title: ${title || "none"} | text: ${text}`;
+}
+
+// =============================================================================
+// LLM data types
+// =============================================================================
+
+/**
+ * Token with log probability
+ */
+export type TokenLogProb = {
+  token: string;
+  logprob: number;
+};
+
+/**
+ * Embedding result
+ */
+export type EmbeddingResult = {
+  embedding: number[];
+  model: string;
+};
+
+/**
+ * Generation result with optional logprobs
+ */
+export type GenerateResult = {
+  text: string;
+  model: string;
+  logprobs?: TokenLogProb[];
+  done: boolean;
+};
+
+/**
+ * Rerank result for a single document
+ */
+export type RerankDocumentResult = {
+  file: string;
+  score: number;
+  index: number;
+  /** LLM-extracted relevant content (only present when using LLM rerank mode) */
+  extract?: string;
+};
+
+/**
+ * Batch rerank result
+ */
+export type RerankResult = {
+  results: RerankDocumentResult[];
+  model: string;
+};
+
+/**
+ * Model info
+ */
+export type ModelInfo = {
+  name: string;
+  exists: boolean;
+  path?: string;
+};
+
+/**
+ * Options for embedding
+ */
+export type EmbedOptions = {
+  model?: string;
+  isQuery?: boolean;
+  title?: string;
+  /** Override remote timeout for this operation (ms). */
+  timeoutMs?: number;
+};
+
+/**
+ * Options for text generation
+ */
+export type GenerateOptions = {
+  model?: string;
+  maxTokens?: number;
+  temperature?: number;
+  /** Override remote timeout for this operation (ms). */
+  timeoutMs?: number;
+};
+
+/**
+ * Options for reranking
+ */
+export type RerankOptions = {
+  model?: string;
+  /** Override remote timeout for this operation (ms). */
+  timeoutMs?: number;
+};
+
+/**
+ * Options for LLM sessions
+ */
+export type LLMSessionOptions = {
+  /** Max session duration in ms (default: 10 minutes) */
+  maxDuration?: number;
+  /** External abort signal */
+  signal?: AbortSignal;
+  /** Debug name for logging */
+  name?: string;
+};
+
+/**
+ * Abstract LLM interface — implemented by RemoteLLM (cloud) and TransformersEmbedBackend (local embed).
+ */
+export interface LLM {
+  /** Get embeddings for text */
+  embed(text: string, options?: EmbedOptions): Promise<EmbeddingResult | null>;
+
+  /** Get embeddings for a batch of texts (some impls parallelize) */
+  embedBatch(texts: string[], options?: EmbedOptions): Promise<(EmbeddingResult | null)[]>;
+
+  /** Generate text completion */
+  generate(prompt: string, options?: GenerateOptions): Promise<GenerateResult | null>;
+
+  /** Check if a model exists/is available */
+  modelExists(model: string): Promise<ModelInfo>;
+
+  /**
+   * Expand a search query into multiple variations for different backends.
+   * Returns a list of Queryable objects.
+   */
+  expandQuery(query: string, options?: { context?: string, includeLexical?: boolean }): Promise<Queryable[]>;
+
+  /**
+   * Rerank documents by relevance to a query.
+   * Returns list of documents with relevance scores (higher = more relevant).
+   */
+  rerank(query: string, documents: RerankDocument[], options?: RerankOptions): Promise<RerankResult>;
+
+  /** Dispose of resources */
+  dispose(): Promise<void>;
+}
+
+/**
+ * Session interface for scoped LLM access with lifecycle guarantees
+ */
+export interface ILLMSession {
+  embed(text: string, options?: EmbedOptions): Promise<EmbeddingResult | null>;
+  embedBatch(texts: string[], options?: EmbedOptions): Promise<(EmbeddingResult | null)[]>;
+  expandQuery(query: string, options?: { context?: string; includeLexical?: boolean }): Promise<Queryable[]>;
+  rerank(query: string, documents: RerankDocument[], options?: RerankOptions): Promise<RerankResult>;
+  /** Whether this session is still valid (not released or aborted) */
+  readonly isValid: boolean;
+  /** Abort signal for this session (aborts on release or maxDuration) */
+  readonly signal: AbortSignal;
+}
+
+/**
+ * Supported query types for different search backends
+ */
+export type QueryType = 'lex' | 'vec' | 'hyde';
+
+/**
+ * A single query and its target backend type
+ */
+export type Queryable = {
+  type: QueryType;
+  text: string;
+};
+
+/**
+ * Document to rerank
+ */
+export type RerankDocument = {
+  file: string;
+  text: string;
+  title?: string;
+};
