@@ -157,10 +157,10 @@ See [`devnotes/metrics/metric-discipline.md`](devnotes/metrics/metric-discipline
 - **`LOTL_VEC_MIN_SIM=0.1`** — overrides the adaptive cosine acceptance floor (tight-cluster q8 models need this; default floor prunes too aggressively).
 
 **Under the hood (all shipped, no config needed):**
-- Rank-based **weighted RRF fusion** (0.9 BM25 / 0.1 vec); proper rank normalization, not additive scores.
+- Rank-based **weighted RRF fusion** (0.8 BM25 / 0.2 vec, Phase 6 hardcoded v1.0.0); proper rank normalization, not additive scores.
 - **Keyword expansion** — zero-LLM sub-query fanout (default on).
-- **Synonym expansion** — curated preference/temporal dict (default on).
-- **Cross-encoder rerank** available via `LOTL_MEMORY_RERANK=on` (optional, +1-2pp MRR).
+- **Synonym expansion** — hardcoded **off** as of v1.0.0 (proved net-negative in Phase 6 sweeps).
+- **Cross-encoder rerank** available via `LOTL_MEMORY_RERANK=on` (optional, +1-2pp MRR; blend hardcoded 0.5/0.5).
 
 All tunables hardcoded in `src/store/constants.ts` (validated at n=500 LME). See `docs/ROADMAP.md` "2026-04-17" for full sweep history.
 
@@ -290,8 +290,8 @@ Entity names are auto-normalized: "David Gillot" → "david_gillot".
           └───────────┬───────────┘
                       ▼
               RRF Fusion (k=60)
-              BM25 lists: 2× weight
-              Vector lists: 1× weight
+              BM25 weight: 0.8
+              Vector weight: 0.2
                       │
                       ▼
            Zero-LLM Score Boosts
@@ -305,10 +305,10 @@ Entity names are auto-normalized: "David Gillot" → "david_gillot".
               (ZeroEntropy / SiliconFlow / Gemini / OpenAI)
                       │
                       ▼
-           Position-Aware Blend
-           Rank 1-3:  75% RRF / 25% reranker
-           Rank 4-10: 60% / 40%
-           Rank 11+:  40% / 60%
+           Rerank Blend (hardcoded v1.0.0)
+           50% RRF / 50% reranker
+           (was position-aware pre-Phase-6;
+            sweep showed flat 0.5/0.5 wins)
                       │
                       ▼
               Final Results
