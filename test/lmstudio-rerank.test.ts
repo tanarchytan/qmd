@@ -105,3 +105,63 @@ describe("RemoteLLM.rerank — LM Studio chat shim", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(3);
   }, 10_000);
 });
+
+describe("RemoteLLM.expandQuery — LM Studio chat shim", () => {
+  let fetchSpy: MockInstance<typeof globalThis.fetch>;
+  beforeEach(() => { fetchSpy = vi.spyOn(globalThis, "fetch"); });
+  afterEach(() => { fetchSpy.mockRestore(); });
+
+  const makeExpand = () => new RemoteLLM({
+    queryExpansion: {
+      provider: "api",
+      apiKey: "lm-studio",
+      url: "http://10.0.0.116:1234/v1",
+      model: "qwen/qwen3.6-35b-a3b",
+    },
+  });
+
+  test("expandQuery falls back to reasoning_content when content is empty (Qwen3)", async () => {
+    fetchSpy.mockResolvedValue(jsonResponse({
+      choices: [{
+        message: {
+          content: "",
+          reasoning_content: "lex: cat pet feline\nvec: small carnivorous mammal\nhyde: a cat is a small domesticated carnivore",
+        },
+      }],
+    }));
+
+    const result = await makeExpand().expandQuery("what are cats");
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.some(r => r.text.includes("cat"))).toBe(true);
+  });
+});
+
+describe("RemoteLLM.chatComplete — LM Studio chat shim", () => {
+  let fetchSpy: MockInstance<typeof globalThis.fetch>;
+  beforeEach(() => { fetchSpy = vi.spyOn(globalThis, "fetch"); });
+  afterEach(() => { fetchSpy.mockRestore(); });
+
+  test("chatComplete falls back to reasoning_content when content is empty (Qwen3)", async () => {
+    fetchSpy.mockResolvedValue(jsonResponse({
+      choices: [{
+        message: {
+          content: "",
+          reasoning_content: "the answer is 42",
+        },
+      }],
+    }));
+
+    // chatComplete reads from this.config.queryExpansion (it's the freeform
+    // LLM channel — same provider used for memory extraction etc.).
+    const llm = new RemoteLLM({
+      queryExpansion: {
+        provider: "api",
+        apiKey: "lm-studio",
+        url: "http://10.0.0.116:1234/v1",
+        model: "qwen/qwen3.6-35b-a3b",
+      },
+    });
+    const text = await llm.chatComplete("what is the answer");
+    expect(text).toBe("the answer is 42");
+  });
+});
