@@ -87,7 +87,7 @@ const LLM_CONFIG: Record<LLMProvider, { url: string; model: string; keyEnv: stri
   // LM Studio (local OpenAI-compatible). Same wiring as evaluate/longmemeval/eval.mts.
   // See evaluate/longmemeval/lmstudio-two-pass.sh for model-swap orchestration.
   lmstudio: {
-    url: `http://${process.env.LOTL_LMSTUDIO_HOST || "10.0.0.113:1234"}/v1/chat/completions`,
+    url: `http://${process.env.LOTL_LMSTUDIO_HOST || "localhost:1234"}/v1/chat/completions`,
     model: process.env.LOTL_LMSTUDIO_GEN_MODEL || "meta-llama-3.1-8b-instruct",
     keyEnv: "LOTL_LMSTUDIO_KEY",
   },

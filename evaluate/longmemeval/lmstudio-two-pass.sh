@@ -7,7 +7,7 @@
 #         Predictions come from the llm cache (deterministic replay at temp=0).
 #
 # Env overrides:
-#   LOTL_LMSTUDIO_HOST         (default 10.0.0.113:1234)
+#   LOTL_LMSTUDIO_HOST         (default localhost:1234)
 #   LOTL_LMSTUDIO_GEN_MODEL    (default meta-llama-3.1-8b-instruct)
 #   LOTL_LMSTUDIO_JUDGE_MODEL  (default qwen/qwen3.6-35b-a3b)
 #   LOTL_PROMPT_RULES          (default v14 — the audit CoT prompt)
@@ -17,7 +17,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-HOST="${LOTL_LMSTUDIO_HOST:-10.0.0.113:1234}"
+HOST="${LOTL_LMSTUDIO_HOST:-localhost:1234}"
 GEN_MODEL="${LOTL_LMSTUDIO_GEN_MODEL:-meta-llama-3.1-8b-instruct}"
 JUDGE_MODEL="${LOTL_LMSTUDIO_JUDGE_MODEL:-qwen/qwen3.6-35b-a3b}"
 export LOTL_PROMPT_RULES="${LOTL_PROMPT_RULES:-v14}"

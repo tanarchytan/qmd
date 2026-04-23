@@ -9,7 +9,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
-HOST="${LOTL_LMSTUDIO_HOST:-10.0.0.113:1234}"
+HOST="${LOTL_LMSTUDIO_HOST:-localhost:1234}"
 # Steps A + C need llama gen cache + qwen judge. Step B spawns smoke-gemma-validate.sh
 # which expects LOTL_LMSTUDIO_GEN_MODEL / LOTL_LMSTUDIO_JUDGE_MODEL to be UNSET so
 # its gemma defaults win. So we keep GEN_MODEL / JUDGE_MODEL as local vars here,
