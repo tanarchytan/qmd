@@ -438,7 +438,7 @@ via llm-cache + deterministic temp=0 + seed=42.
 
 ### Defaults wired into the harness
 
-- **Host:** `http://10.0.0.113:1234` (override via `LOTL_LMSTUDIO_HOST`)
+- **Host:** `http://localhost:1234` (override via `LOTL_LMSTUDIO_HOST`)
 - **Generator:** `meta-llama-3.1-8b-instruct` Q4_K_M (override via `LOTL_LMSTUDIO_GEN_MODEL`)
 - **Judge:** `qwen/qwen3.6-35b-a3b` Q4_K_M (override via `LOTL_LMSTUDIO_JUDGE_MODEL`)
 - **Alternative stack:** `google/gemma-4-e4b` (gen) + `google/gemma-4-26b-a4b` (judge) — 4–5 parallel judge slots fit, materially faster judge pass. See `evaluate/scripts/smoke-gemma-validate.sh`.

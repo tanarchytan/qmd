@@ -77,12 +77,12 @@ const LLM_CONFIG: Record<LLMProvider, { url: string; model: string; keyEnv: stri
     keyEnv: "POE_API_KEY",
   },
   // LM Studio (local, OpenAI-compatible) — no real API key needed, send placeholder.
-  // Host+port via LOTL_LMSTUDIO_HOST (default 10.0.0.113:1234). Models via
+  // Host+port via LOTL_LMSTUDIO_HOST (default localhost:1234). Models via
   // LOTL_LMSTUDIO_GEN_MODEL (default meta-llama-3.1-8b-instruct) +
   // LOTL_LMSTUDIO_JUDGE_MODEL (default qwen/qwen3.6-35b-a3b). Model swap
   // handled explicitly via loadLmStudioModel/unloadLmStudioModel.
   lmstudio: {
-    url: `http://${process.env.LOTL_LMSTUDIO_HOST || "10.0.0.113:1234"}/v1/chat/completions`,
+    url: `http://${process.env.LOTL_LMSTUDIO_HOST || "localhost:1234"}/v1/chat/completions`,
     model: process.env.LOTL_LMSTUDIO_GEN_MODEL || "meta-llama-3.1-8b-instruct",
     keyEnv: "LOTL_LMSTUDIO_KEY",
   },
@@ -295,7 +295,7 @@ const JUDGE_RESPONSE_SCHEMA = {
 // even when gen + judge models together exceed VRAM.
 // -----------------------------------------------------------------------------
 async function lmStudioAdmin(action: "load" | "unload", model: string): Promise<void> {
-  const host = process.env.LOTL_LMSTUDIO_HOST || "10.0.0.113:1234";
+  const host = process.env.LOTL_LMSTUDIO_HOST || "localhost:1234";
   const url = `http://${host}/api/v1/models/${action}`;
   const resp = await fetch(url, {
     method: "POST",

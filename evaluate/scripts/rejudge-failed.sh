@@ -60,7 +60,7 @@ if [[ -z "$BENCH" || -z "$TAG" ]]; then
   exit 2
 fi
 
-HOST="${LOTL_LMSTUDIO_HOST:-10.0.0.113:1234}"
+HOST="${LOTL_LMSTUDIO_HOST:-localhost:1234}"
 # Flag wins; env is fallback; built-in default is final.
 JUDGE_MODEL="${JUDGE_MODEL_FLAG:-${LOTL_LMSTUDIO_JUDGE_MODEL:-qwen/qwen3.6-35b-a3b}}"
 GEN_MODEL="${GEN_MODEL_FLAG:-${LOTL_LMSTUDIO_GEN_MODEL:-meta-llama-3.1-8b-instruct}}"

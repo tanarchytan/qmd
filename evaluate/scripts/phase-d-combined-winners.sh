@@ -32,7 +32,7 @@ for arg in "$@"; do
   esac
 done
 
-HOST="${LOTL_LMSTUDIO_HOST:-10.0.0.113:1234}"
+HOST="${LOTL_LMSTUDIO_HOST:-localhost:1234}"
 
 # --- Phase D rerank winner (transformers.js ONNX default) -----------------
 export LOTL_MEMORY_RERANK=on

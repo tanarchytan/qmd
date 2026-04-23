@@ -15,7 +15,7 @@
  * Usage:
  *   node evaluate/scripts/adversarial-rejudge.mjs \
  *     evaluate/longmemeval/results-phase-b-lme-v14-gemma-pass1.adversarial.json \
- *     [--host 10.0.0.113:1234] [--model google/gemma-4-26b-a4b]
+ *     [--host localhost:1234] [--model google/gemma-4-26b-a4b]
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -43,7 +43,7 @@ const RESPONSE_SCHEMA = {
 function parseArgs(argv) {
   const args = {
     input: argv[2],
-    host: process.env.LOTL_LMSTUDIO_HOST || "10.0.0.113:1234",
+    host: process.env.LOTL_LMSTUDIO_HOST || "localhost:1234",
     model: process.env.LOTL_EVAL_LMSTUDIO_JUDGE_MODEL || process.env.LOTL_LMSTUDIO_JUDGE_MODEL || "google/gemma-4-26b-a4b",
   };
   for (let i = 3; i < argv.length; i++) {
