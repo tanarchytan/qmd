@@ -523,9 +523,14 @@ export class RemoteLLM implements LLM {
     }, { provider, operation: "rerank", timeoutMs });
 
     const data = await resp.json() as {
-      choices?: Array<{ message?: { content?: string } }>;
+      choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>;
     };
-    const rawText = data.choices?.[0]?.message?.content || "";
+    // Qwen3 thinking-models route structured output into `reasoning_content`
+    // instead of `content` even with enable_thinking:false. Fall back so the
+    // rerank doesn't silently return 0 results. Eval harness was patched
+    // 2026-04-21; production missed the same fix until 2026-04-23.
+    const msg = data.choices?.[0]?.message;
+    const rawText = msg?.content || msg?.reasoning_content || "";
     const parsed = this.parsePlainTextExtracts(rawText, documents.length);
     if (parsed.length === 0 && rawText.trim() !== "NONE") {
       process.stderr.write(`[rerank llm] unexpected response format: ${rawText.slice(0, 200)}\n`);

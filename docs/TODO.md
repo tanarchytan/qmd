@@ -1,91 +1,59 @@
 # Lotl TODO — Optimization Phases
 
-> Last updated: 2026-04-21 morning.
+> Last updated: 2026-04-23.
 >
-> **2026-04-21 session summary** — Overnight: Claude Code crashed, SIGHUP'd
-> all background bash children. Lost ~11h of compute (Phase 6 queue never
-> fired; LoCoMo weight sweep stopped at 3/10 configs; big ONNX rerankers
-> stopped at 1/4). Morning triage:
+> **v1.0.0 shipped 2026-04-21.** All pre-release sprints (Phase 6 sweeps,
+> combined-winners #38, #36 adversarial judge, Qwen3 `reasoning_content`
+> patch, LOTL_EVAL_* bridge) landed. Numbers: LME R@5 86.2% / MRR 0.888 /
+> JudgeCorrect 73.8%; LoCoMo R@5 60.0% / MRR 0.467. SNAPSHOTS + CHANGELOG
+> filled at release.
 >
-> - **LME weight sweep** (yesterday, 10/10): rr-8-2 wins — R@5 94.3% / MRR
->   0.920 / NDCG@10 0.916 with jina-tiny rerank. BM25-heavy + rerank is
->   the winning regime; vec-heavy regresses.
-> - **LoCoMo weight sweep**: 3/10 configs done (rr-9-1 avgR5=0.575 wins,
->   rr-8-2 0.572, rr-7-3 0.569). Same BM25-heavy pattern. Tail configs
->   skipped (vec-heavy will tank per LME data). #48 marked COMPLETED.
-> - **Big ONNX rerankers** (#49/50/51): only baseline finished. Deferred
->   post-v1.0 — BEIR top-3 GGUF via LM Studio (#53) is a faster + stronger
->   replacement.
-> - **Phase 6 queue re-fired** this morning with `--skip-wait`. Order now:
->   max-chars (biggest expected signal) → MMR×K → rerank blend → expand×syn.
->   4 sweeps, ~5.5h wall. Max-chars 3/5 done (500/1000/2000), 6000 in flight.
-> - **Watchdog shipped** (`phase6-watchdog.sh`): heartbeat file every 60s,
->   5-retry self-heal on transient errors, `--status` flag. Sweep-flags.sh
->   is now resume-friendly (skip-if-done per config, reuse-incomplete-dir
->   per sweep).
-> - **Agent-side check**: cron `7 */2 * * *` — I check every 2h and re-fire
->   the watchdog if dead. Survives everything except a Claude crash itself.
-> - **LM Studio host**: still offline until user can physically restart.
+> **v1.1 sprint open** — full plan at
+> `~/.claude/plans/i-also-got-these-calm-hedgehog.md`. Thesis: close the
+> ~20pp multi-session R@5 gap vs MemPalace via fact-augmented retrieval.
 >
-> See `devnotes/sessions/session-2026-04-20-lmstudio-outage.md` and
-> `devnotes/sessions/tomorrow-lmstudio-plan-20260421.md`.
->
-> **Reading order:** 3-category work dashboard below → current best →
-> completed phases → historical / backlog.
+> **Reading order:** v1.1 dashboard below → current best → completed
+> phases → historical / backlog.
 >
 > ---
 >
-> ## Work dashboard — 3 categories
+> ## v1.1 sprint dashboard
 >
-> Organized by what the work needs, not by phase. Each row maps to a
-> numbered task in the tasks backend for tracking.
->
-> ### 1. Code — zero external dependency, doable anytime
+> ### Sprint 1 — housekeeping (open)
 >
 > | # | Task | Status |
 > |---|------|--------|
-> | #47 | `LOTL_EVAL_*` env namespace bridge | **DONE** (compat shipped; full code migration is post-release cleanup) |
-> | #41 skeleton | `evaluate/SNAPSHOTS.md` v1.0.0 GA tables with TBD cells | **DONE** (waits for #38 numbers to fill) |
-> | #36 scaffold | `adversarial-gen.mjs` runner + v1/v2 prompts | **DONE** (LLM call staged; see CAT 3) |
-> | #38 scaffold | `phase-d-combined-winners.sh` env stack + dry-run | **DONE** (fires in CAT 3 when ready) |
-> | Phase 6 env knobs | Exposed `LOTL_MEMORY_RERANK_CANDIDATE_LIMIT` / `LOTL_MEMORY_RERANK_BLEND_ORIGINAL` / `LOTL_MEMORY_RERANK_BLEND_RERANK` | **DONE** |
-> | Phase 6 configs | max-chars / MMR×K / blend α / expand×syn sweep configs + queue script | **DONE** |
-> | Phase 6 summarizer | `summarize-phase6.mjs` auto-ranks winners across sweeps | **DONE** |
-> | Tomorrow plan doc | `tomorrow-lmstudio-plan-20260421.md` 6-step load order | **DONE** |
+> | S1.1 | Refresh this TODO to reflect v1.0.0 shipped + v1.1 sprint | **DONE** 2026-04-23 |
+> | S1.2 | #32 llama+qwen re-fire after cache flush | queued — LM Studio required |
+> | S1.3 | `gte-small` n=500 follow-up (Phase 11.8) — gate MRR ≥ 0.920 → default swap | queued — ~15-20 min local CPU |
+> | S1.4 | LoCoMo golden audit — apply 99 patches | queued — ~3h |
+> | S1.5 | `lmstudio-rerank` smoke tests (qwen3 reasoning_content, timeout, host-down) — also fixed prod `remote.ts:528` bug that was eval-only before | **DONE** 2026-04-23 |
 >
-> ### 2. CPU — ONNX / local compute, running now or queued
+> ### Sprint 2 — Phase 5 fact-aug (gated on Sprint 1 clean)
 >
 > | # | Task | Status |
 > |---|------|--------|
-> | #48 LoCoMo | rerank weight sweep jina-tiny (10 configs) | **in flight** 3/10 done (rr-9-1/8-2/7-3 ✓, baseline failed — refire standalone later) |
-> | #49 / #50 / #51 | big ONNX rerankers (mxbai-base-v1, gte-modernbert, tomaarsen-modernbert) on LoCoMo 7/3 | **in flight** 1/4 configs done (baseline ✓), ~12-24h CPU wall |
-> | #57 | Phase 6 max-chars sweep (500/1000/2000/6000/7500) — **highest expected signal, fires first in Phase 6 queue** | **queued** (~70 min wall) |
-> | #54 | Phase 6 MMR × K-pool sweep (8 configs) | **queued** (~2h wall) |
-> | #55 | Phase 6 rerank blend α sweep (5 configs) | **queued** (~70 min wall) |
-> | #56 | Phase 6 expand × synonyms sweep (6 configs) | **queued** (~85 min wall) |
+> | S2.1 | Re-fire `extract-facts-batch.mjs` on LME n=500 — post-`9bee79a` fix never ran | queued — LM Studio |
+> | S2.2 | A/B `EMBED_SOURCE=content` vs `fact` on multi-session bucket | **DECISION GATE** — ≥+2pp R@5 to continue |
+> | S2.3 | Implement `LOTL_MEMORY_EMBED_SOURCE=dual` (3-list RRF) — currently falls back to content silently | deferred until S2.2 passes |
+> | S2.4 | A/B dual vs fact vs content | deferred |
+> | S2.5 | KG re-test with fact-populated triples (`LOTL_MEMORY_KG=on`) | deferred |
 >
-> CPU chain = CAT 2 runs autonomously via `phase6-queue.sh`
-> (currently waiting on #48/#49-51 SUMMARY.md). Total ~5.5 h after
-> current blockers clear. No user intervention needed until tomorrow.
+> ### Sprint 3 — v1.1 release prep
 >
-> ### 3. LM Studio — blocked until host returns, sequenced for tomorrow
+> | # | Task | Status |
+> |---|------|--------|
+> | S3.1 | CHANGELOG + SNAPSHOTS update | queued |
+> | S3.2 | `/release 1.1.0` (user fires) | queued |
 >
-> Full plan: [`devnotes/sessions/tomorrow-lmstudio-plan-20260421.md`](../devnotes/sessions/tomorrow-lmstudio-plan-20260421.md).
+> ### Shipped between v1.0.0 and v1.1 sprint
 >
-> | # | Task | Load step | Depends on |
-> |---|------|-----------|------------|
-> | #33 | Phase B gemma JUDGE-ONLY rerun from pass1 cache | Step 1: `gemma-4-26b-a4b` | pass1.json (saved) |
-> | Phase 5b batch extract | populate `fact_embedding` + KG triples | Step 2: `gemma-4-e4b` | — |
-> | #38 | combined-winners full run | Step 2-3: `gemma-4-e4b` → `gemma-4-26b-a4b` | Phase 6 winners (CAT 2) |
-> | #36 | adversarial plausibility (judge-leniency test) | Step 3: `gemma-4-26b-a4b` | #38 results |
-> | #32 | llama+qwen cross-stack baseline | Step 4-5: `meta-llama-3.1-8b-instruct` → `qwen/qwen3.6-35b-a3b` | — (parallel with #38 if second host available) |
-> | #53 | BEIR top-3 GGUF rerank sweep | Step 6: swap per reranker | — (independent) |
-> | #52 | mxbai-rerank-v2 GGUF test | covered by #53 | — |
-> | #41 | SNAPSHOTS.md + CHANGELOG v1.0.0 fill | Step 7 (no LM Studio) | #38 results |
-> | #42 | v1.0.0 GA release (`/release 1.0.0`) | Step 7 (no LM Studio) | #41 |
->
-> **Critical path to release**: #33 → Phase 5b → #38 → #36 → #41 → #42.
-> Everything else is parallel / validation / post-release.
+> | Date | Change | Commit |
+> |---|---|---|
+> | 2026-04-23 | OpenClaw plugin: wire `qmd_memory_push_pack` / `_recall_tiered` / `_reflect` tools (MCP server already had them; plugin surface was missing) | `0a501d9` |
+> | 2026-04-23 | `phase6-watchdog.sh`: `IMAGENAME eq bash.exe` filter to stop PID-recycle false positives | `0a501d9` |
+> | 2026-04-23 | LMStudio default host localhost (was 10.0.0.116, prior 113, prior 105) — override via `LOTL_LMSTUDIO_HOST` in `~/.config/lotl/.env` | `83bc7a1` |
+> | 2026-04-23 | `RemoteLLM.rerank()` LLM chat path: fall back to `message.reasoning_content` for Qwen3 thinking models. Eval harness was patched 2026-04-21; production path missed the same fix until now. `test/lmstudio-rerank.test.ts` smoke tests added. | pending |
 
 ---
 
@@ -402,10 +370,10 @@ If wins, re-sweep RRF weights (expect shift toward vec-heavy).
 - [ ] Cross-session signal routing (Tinkerclaw Round Table)
 
 ### Shipped but unexercised by eval
-- `memoryReflect` — post-retrieval LLM synthesis (API required)
+- `memoryReflect` — post-retrieval LLM synthesis (API required). MCP server wired 2026-04-17; OpenClaw plugin wired 2026-04-23.
 - `runReflectionPass` — periodic reflection (API required)
-- `memoryRecallTiered` — tier-grouped recall (unit tested, MCP wired 2026-04-17)
-- `memoryPushPack` — pre-query bundle (unit tested, MCP wired 2026-04-17)
+- `memoryRecallTiered` — tier-grouped recall (unit tested; MCP server wired 2026-04-17; OpenClaw plugin wired 2026-04-23).
+- `memoryPushPack` — pre-query bundle (unit tested; MCP server wired 2026-04-17; OpenClaw plugin wired 2026-04-23).
 
 ---
 
