@@ -46,6 +46,21 @@ import type {
 } from "./types.js";
 
 // =============================================================================
+// One-time stderr warnings for silently-degraded paths.
+// Without these, missing-backend conditions look like "search just returns
+// fewer results" with no signal that an optional pipeline stage was skipped.
+// Set LOTL_QUIET_FALLBACK=1 to suppress (eval harnesses already account for
+// no-backend mode and don't need the noise).
+// =============================================================================
+const _fallbackWarned = new Set<string>();
+function warnFallbackOnce(kind: string, msg: string): void {
+  if (process.env.LOTL_QUIET_FALLBACK === "1") return;
+  if (_fallbackWarned.has(kind)) return;
+  _fallbackWarned.add(kind);
+  process.stderr.write(`[lotl] ${msg}\n`);
+}
+
+// =============================================================================
 // Zero-LLM search boosts (applied after RRF, before reranking)
 // =============================================================================
 
@@ -391,7 +406,13 @@ async function getEmbedding(text: string, model: string, isQuery: boolean, sessi
     return result?.embedding || null;
   }
   const local = await getLocalEmbedBackend();
-  if (!local) return null;
+  if (!local) {
+    warnFallbackOnce(
+      "embed",
+      "vector search disabled — no remote embed configured (LOTL_EMBED_PROVIDER) and LOTL_EMBED_BACKEND≠transformers. BM25 only.",
+    );
+    return null;
+  }
   const result = await local.embed(formattedText, { model, isQuery });
   return result?.embedding || null;
 }
@@ -486,6 +507,12 @@ export async function expandQuery(query: string, model: string = DEFAULT_QUERY_M
       // fall through
     }
   }
+  if (!remoteConfig?.queryExpansion && !llmOverride) {
+    warnFallbackOnce(
+      "expand",
+      "query expansion disabled — no remote queryExpansion configured (LOTL_QUERY_EXPANSION_PROVIDER). Searching with raw query only.",
+    );
+  }
   return [];
 }
 
@@ -556,6 +583,12 @@ export async function rerank(query: string, documents: { file: string; text: str
   // score of 0 and fall to the bottom of the list — but the cached/already-
   // ranked docs (from FTS+vector RRF) still come through, so search continues
   // to work. This is the post-cleanup graceful-degradation path.
+  if (!remoteConfig?.rerank && !llmOverride && uncachedDocsByChunk.size > 0) {
+    warnFallbackOnce(
+      "rerank",
+      `rerank disabled for ${uncachedDocsByChunk.size} uncached doc(s) — no remote rerank configured (LOTL_RERANK_PROVIDER). They land at the bottom of the list.`,
+    );
+  }
 
   return documents
     .map(doc => ({ file: doc.file, score: cachedResults.get(doc.text) || 0 }))
