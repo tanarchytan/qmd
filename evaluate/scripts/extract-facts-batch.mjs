@@ -133,7 +133,11 @@ async function ensureEmbedder() {
   const mod = await import(toUrl(join(LOTL_DIR, "src/llm/transformers-embed.ts")));
   // Match the DB's embedder. mxbai-xs is the shipped default.
   const model = process.env.LOTL_EMBED_MODEL || "mixedbread-ai/mxbai-embed-xsmall-v1";
-  const backend = await mod.createTransformersEmbedBackend({ model, dtype: "q8" });
+  // createTransformersEmbedBackend takes positional args (model, dtype, fileName, device)
+  // — NOT an options object. Object-form silently smuggles {model:"…",dtype:"q8"} into the
+  // pipeline call, where transformers.js's pathJoin chokes on it ("part.replace is not a
+  // function"). The 9bee79a "fix" in CHANGELOG used the wrong shape; this is the real fix.
+  const backend = await mod.createTransformersEmbedBackend(model, "q8");
   embedBatch = async (texts) => {
     const results = await backend.embedBatch(texts);
     return results.map((r) => r?.embedding ?? null);
@@ -202,7 +206,7 @@ for (const row of rows) {
 
     done++;
   } catch (e) {
-    process.stderr.write(`[extract] failed id=${row.id}: ${e.message}\n`);
+    console.error(`[extract] failed id=${row.id}:`, e.stack || e.message || e);
     failed++;
   }
   if ((done + skipped + failed) % 25 === 0) {
