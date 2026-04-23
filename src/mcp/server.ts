@@ -1123,11 +1123,12 @@ Intent-aware lex (C++ performance, not sports):
         object: z.string().optional().describe("Value filter (partial match)"),
         as_of: z.number().optional().describe("Timestamp (ms) — show facts valid at this time"),
         limit: z.number().optional().describe("Max results (default: 50)"),
+        scope: z.string().optional().describe("Narrow to a specific scope (e.g. agent ID). Default: cross-scope (all scopes + global)."),
       },
     },
-    async ({ subject, predicate, object, as_of, limit }) => {
+    async ({ subject, predicate, object, as_of, limit, scope }) => {
       const db = store.internal.db;
-      const results = knowledgeQuery(db, { subject, predicate, object, as_of, limit });
+      const results = knowledgeQuery(db, { subject, predicate, object, as_of, limit, scope });
       if (results.length === 0) {
         return { content: [{ type: "text", text: "No facts found." }] };
       }
