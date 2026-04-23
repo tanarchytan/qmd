@@ -236,8 +236,9 @@ query string + scope + category + tier + limit
 │     cross-encoder ms-marco-MiniLM-L6) or remote              │
 │   Strong-signal skip OFF by default (opt-in via              │
 │     LOTL_RERANK_STRONG_SIGNAL_SKIP=on)                        │
-│   Min-max normalize logits → blend 10% RRF + 90% rerank     │
-│   (0.1/0.9 validated at n=500: MRR 0.937 vs 0.920 baseline) │
+│   Min-max normalize logits → blend 50% RRF + 50% rerank     │
+│   (0.5/0.5 hardcoded in v1.0.0 Phase 6; old 0.1/0.9 was      │
+│   additive-pipeline artifact, +0.002 MRR over 0.7/0.3 blend) │
 └─────────────────────────────────────────────────────────────┘
    │
    ▼
@@ -269,8 +270,8 @@ for production tunables (avoids accidental misconfiguration).
 | MEMORY_RRF_W_VEC | 0.2 | Vec list weight (low — mxbai-xs vec is weak on LME) |
 | MEMORY_FTS_OVERFETCH | 10 | FTS candidate pool = limit × 10 |
 | MEMORY_VEC_K_MULTIPLIER | 3 | Vec candidate pool = limit × 3 |
-| MEMORY_RERANK_BLEND_ORIGINAL | 0.1 | Original score weight in rerank blend |
-| MEMORY_RERANK_BLEND_RERANK | 0.9 | Cross-encoder score weight |
+| MEMORY_RERANK_BLEND_ORIGINAL | 0.5 | Original score weight in rerank blend (Phase 6 hardcode) |
+| MEMORY_RERANK_BLEND_RERANK | 0.5 | Cross-encoder score weight (Phase 6 hardcode) |
 | STRONG_SIGNAL_MIN_SCORE | 0.85 | Rerank skip gate (off by default) |
 | STRONG_SIGNAL_MIN_GAP | 0.15 | Rerank skip gap threshold |
 
@@ -469,7 +470,7 @@ mix from all three tiers in one call (e.g. 5 from core + 10 from working
 │       │        keyword / phrase / decay / temporal  │
 │       ├─ D   sort                                  │
 │       ├─ E   rerank (LOTL_MEMORY_RERANK=on)         │
-│       │        10% RRF + 90% cross-encoder blend   │
+│       │        50% RRF + 50% cross-encoder blend   │
 │       ├─ F1  KG injection (LOTL_MEMORY_KG=on)       │
 │       ├─ F2  dialog diversity (MMR-lite)           │
 │       └─ F3  touch access counts (batched)         │
@@ -560,9 +561,16 @@ src/
 
 ## Performance (LongMemEval _s n=500, mxbai-xs q8, 2026-04-17)
 
+> **Note**: numbers below are pre-Phase-6 (2026-04-17). For v1.0.0 GA
+> headline numbers (RRF 0.8/0.2, rerank blend 0.5/0.5, synonyms off,
+> jina-tiny rerank), see `evaluate/SNAPSHOTS.md` and `CHANGELOG.md`.
+> The pre-Phase-6 retrieval-only baseline below is kept for historical
+> comparison.
+
 ### Without rerank (production default)
 
-With rank-based RRF + keyword expansion + synonym expansion (all default):
+With rank-based RRF + keyword expansion + synonym expansion (the latter
+hardcoded off in v1.0.0; numbers below predate that change):
 
 | Bucket | n | recall_any@5 | R@5 (frac) | MRR | NDCG@10 |
 |---|---|---|---|---|---|
@@ -576,7 +584,7 @@ With rank-based RRF + keyword expansion + synonym expansion (all default):
 
 Wall: ~15 min (workers=2, microbatch=64, Windows native).
 
-### With rerank (LOTL_MEMORY_RERANK=on, normalized 0.7/0.3 blend)
+### With rerank (LOTL_MEMORY_RERANK=on, normalized 0.7/0.3 blend — pre-Phase-6 numbers)
 
 | Metric | No rerank | With rerank | Delta |
 |---|---|---|---|

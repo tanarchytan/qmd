@@ -180,13 +180,13 @@ production library stay as `LOTL_*`.
 | Var | Default | Effect |
 |-----|---------|--------|
 | `LOTL_RECALL_RAW` | off | Disable ALL post-RRF logic — no keyword/quoted/temporal boost, no decay weighting, no query expansion, no rerank. Pure BM25 + vector RRF. Used for apples-to-apples baseline comparisons (e.g. matching MemPalace's raw ChromaDB recipe). |
-| `LOTL_MEMORY_RRF_W_BM25` / `LOTL_MEMORY_RRF_W_VEC` | 0.9 / 0.1 | RRF fusion weights. LME n=500 winner at rr-8-2 (0.8 / 0.2) with rerank on: R@5 94.3% / MRR 0.920. Vec-heavy (<0.5 BM25) **regresses** because mxbai-xs vec can't supply a good candidate pool — rerank can't recover from a bad pool. |
+| `LOTL_MEMORY_RRF_W_BM25` / `LOTL_MEMORY_RRF_W_VEC` | 0.8 / 0.2 (Phase 6 hardcode) | RRF fusion weights. Phase 6 sweep winner. Vec-heavy (<0.5 BM25) **regresses** because mxbai-xs vec can't supply a good candidate pool — rerank can't recover from a bad pool. Env-overridable for future sweeps. |
 | `LOTL_MEMORY_RERANK` | off | Set to `on` to enable cross-encoder rerank (transformers backend by default; remote via `LOTL_RERANK_BACKEND=remote`). +0.9 to +1.2pp R@5 / +0.013 MRR at BM25-heavy weights; **regresses at vec-heavy weights**. |
-| `LOTL_MEMORY_RERANK_CANDIDATE_LIMIT` | 40 | How many candidates feed the cross-encoder. Bigger pool → more chance the answer is in-pool for rerank to find, at linear cost in rerank wall. Swept in Phase 6. |
-| `LOTL_MEMORY_RERANK_BLEND_ORIGINAL` / `LOTL_MEMORY_RERANK_BLEND_RERANK` | 0.7 / 0.3 | How the normalized RRF score is blended with the normalized rerank score. α=1.0/0.0 = RRF only (sanity). α=0.0/1.0 = pure rerank order. Both sides min-max normalized to [0,1] so the ratio is meaningful. Swept in Phase 6. |
+| `LOTL_MEMORY_RERANK_CANDIDATE_LIMIT` | 40 (hardcoded v1.0.0) | How many candidates feed the cross-encoder. Phase 6 hardcoded. |
+| `LOTL_MEMORY_RERANK_BLEND_ORIGINAL` / `LOTL_MEMORY_RERANK_BLEND_RERANK` | 0.5 / 0.5 (Phase 6 hardcode) | How the normalized RRF score is blended with the normalized rerank score. α=1.0/0.0 = RRF only (sanity). α=0.0/1.0 = pure rerank order. Both sides min-max normalized to [0,1] so the ratio is meaningful. |
 | `LOTL_MEMORY_MMR` | off | Set to `session` to enable session-diversity MMR. Penalizes repeat picks from the same session when candidates cluster tight on a topic. |
 | `LOTL_MEMORY_EXPAND` | `keywords` | Zero-LLM multi-query expansion. `keywords` (default) fans out to top-N keyword groups. `entities` uses named entities. `off` disables. |
-| `LOTL_MEMORY_SYNONYMS` | on | BM25 synonym expansion. Set to `off` to disable. |
+| `LOTL_MEMORY_SYNONYMS` | off (Phase 6 hardcode) | BM25 synonym expansion. Phase 6 sweep proved net-negative — hardcoded off in `src/memory/index.ts`. Dictionary still in `src/store/constants.ts:127` for future sweeps. |
 | `LOTL_MEMORY_KG` | off | Set to `on` to inject knowledge-graph facts into the candidate pool on weak recall (< K hits). Requires populated KG via `extract-facts-batch.mjs`. |
 
 ### Answer-prompt
@@ -332,9 +332,13 @@ list of tested + failed models (F2LLM, harrier, gemma, nomic, jina, me5).
 
 Enabled via `LOTL_MEMORY_RERANK=on`. Default model:
 `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params, q8, ~5-10ms/pair).
+v1.0.0 GA stack uses `jina-reranker-v1-tiny-en` via remote (LM Studio) for
+the headline numbers.
 
-Adds +1.7pp MRR at 0.1/0.9 blend (10% original + 90% cross-encoder).
-Wall time: +33% (~20 min vs ~15 min for n=500).
+Phase 6 hardcoded the original/rerank blend at 0.5/0.5 (Phase 4 pre-RRF
+data showed +1.7pp MRR at 0.1/0.9 blend, but that was an artifact of the
+old additive pipeline; on rank-based RRF with normalized scores 0.5/0.5
+wins by +0.002 MRR). Wall time: +33% (~20 min vs ~15 min for n=500).
 
 ### Properties
 
