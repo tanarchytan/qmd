@@ -366,9 +366,12 @@ export class RemoteLLM implements LLM {
           body: JSON.stringify(body),
         }, { provider, operation: "generate", timeoutMs });
         const data = await resp.json() as {
-          choices?: Array<{ message?: { content?: string } }>;
+          choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>;
         };
-        const text = data.choices?.[0]?.message?.content || "";
+        // Qwen3 thinking-models route output to reasoning_content even with
+        // enable_thinking:false; match the rerank-path fallback (commit 006bde3).
+        const msg = data.choices?.[0]?.message;
+        const text = msg?.content || msg?.reasoning_content || "";
         return this.parseExpansionResult(text, query, includeLexical);
       }
     } catch (err) {
@@ -439,13 +442,17 @@ export class RemoteLLM implements LLM {
           seed: SEED,
         };
         if (cfg.model) body.model = cfg.model;
+        if (cfg.model && cfg.model.toLowerCase().includes('qwen3')) body.enable_thinking = false;
         const resp = await fetchWithRetry(url, {
           method: "POST",
           headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify(body),
         }, { provider: cfg.provider, operation: "generate", timeoutMs: this.config.timeoutsMs?.generate });
-        const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }> };
-        return data.choices?.[0]?.message?.content || null;
+        const data = await resp.json() as { choices?: Array<{ message?: { content?: string; reasoning_content?: string } }> };
+        // Qwen3 thinking-models route output to reasoning_content even with
+        // enable_thinking:false. Match the rerank fallback (commit 006bde3).
+        const msg = data.choices?.[0]?.message;
+        return msg?.content || msg?.reasoning_content || null;
       }
     } catch (err) {
       process.stderr.write(`[chatComplete] error: ${err}\n`);
