@@ -3,6 +3,19 @@
 Complete table of every `process.env.LOTL_*` read in `src/`, with the EXACT
 value the code checks for. Grep-sourced from `src/` 2026-04-19.
 
+> ⚠️ **Stale post-v1.0.0** — the v1.0.0 dead-knob cleanup
+> (commits `2616d89` + `760c007`) removed several env vars listed below:
+> `LOTL_RECALL_DIVERSIFY` (superseded by `LOTL_MEMORY_MMR=session`),
+> `LOTL_MEMORY_LHASH` (parked harmful), `LOTL_STRICT_DIM_MISMATCH`
+> (hardcoded auto-reindex), `LOTL_TRANSFORMERS_QUIET`,
+> `LOTL_TRANSFORMERS_DIRECT_MAXLEN`, plus several `LOTL_GEMINI_EMBED_*` knobs.
+> Phase 6 ALSO hardcoded `LOTL_MEMORY_SYNONYMS=off` and
+> `LOTL_MEMORY_RERANK_BLEND_ORIGINAL/RERANK=0.5/0.5` in
+> `src/store/constants.ts` + `src/memory/index.ts`.
+> For the post-v1.0.0 canonical list, run `git grep "process.env.LOTL_" src/`.
+> This devnote is preserved as a 2026-04-19 snapshot — still the best record
+> of WHY each polarity is what it is, just outdated on the WHICH.
+
 **Why this exists:** today (2026-04-19) we caught **5 silent-no-op bugs** in
 Phase 1 sweeps because I assumed `=on` enables every flag. It doesn't.
 Some flags need specific values (`=session`, `=rank`, `=cross-encoder`),
