@@ -33,6 +33,7 @@ where the last one left off.
 |---|---|---|---|---|---|---|---|---|
 | 2026-04-07 | (v2.1.0) | initial fork | `dev @ c846ac7` | — | — | — | — | `chore: merge upstream v2.1.0` — full merge, not a cherry-pick audit |
 | 2026-04-14 | `cfd640e` | `c846ac7` (2026-04-07 v2.1.0 merge) | `dev @ 87424b0` | **13** | 4 | 7 | 2 | First post-cleanup audit. **100% coverage** of the 13 truly new commits since the v2.1.0 merge. |
+| 2026-04-23 | `e8de7ca` | `cfd640e` (2026-04-14 last audit) | `main @ 8da6b8d` | **2** | 1 | 1 | 0 | Post-v1.0.0 audit. Just one new upstream commit (`e8de7ca`) since 2026-04-14 — already not applicable (LlamaCpp probe surface we removed). Took the deferred `3023ab3` security bump via `vite^7.3.2` override (vitest pin held). |
 
 ---
 
@@ -48,6 +49,12 @@ Format: upstream hash → our commit, with a one-line rationale.
 | `9dd8a73` | `87424b0` | fix(mcp): enableProductionMode before getDefaultDbPath | SDK consumers importing MCP server directly hit the production-mode guard otherwise |
 | `0adbdeb` | `87424b0` | fix(store): surface actionable sqlite-vec guidance | Tracks `_sqliteVecUnavailableReason` so error messages include original cause |
 | `17074ea` | `87424b0` | fix: include line in CLI --json search output | JSON consumers can navigate to the right source line |
+
+### 2026-04-23 audit
+
+| Upstream | Our commit | Subject | Why |
+|---|---|---|---|
+| `3023ab3` | this audit | fix: bump transitive deps for security alerts | Took the vite portion via `vite^7.3.2` override in package.json (resolves GHSA-4w7w-66w2-5vf9 path traversal, GHSA-v2wj-q39q-566r fs.deny bypass, GHSA-p9ff-h696-f583 WebSocket file read). Hono + node-server were already overridden in earlier audit. uv/Python deps in `finetune/` aren't part of our tree. |
 
 ---
 
@@ -84,6 +91,12 @@ Re-evaluate ONLY if we re-add the corresponding subsystem.
 | `fee576b` | fix: migrate legacy lowercase paths on reindex | Part of handelize chain (see below) |
 | `9fb9de4` | fix: preserve original case in handelize() | Part of handelize chain (see below) |
 
+### 2026-04-23 audit
+
+| Upstream | Subject | Why skipped |
+|---|---|---|
+| `e8de7ca` | fix(cli): make status device probe opt-in | Same surface area as `26e3d0c` above — gates a node-llama-cpp `getDeviceInfo()` probe behind an env var. Our `src/cli/lotl.ts:147` `showStatus()` doesn't call `getDefaultLlamaCpp()` at all; the LlamaCpp probe was removed in our 2026-04-13 cleanup so there's nothing to gate. |
+
 **Handelize chain context:** upstream's `9fb9de4` → `9c9de94` → `828823d` → `fee576b` is a "tried to remove `.toLowerCase()`, broke things, reverted, added migration for the broken window" cycle. We never participated in that experiment — our `src/store/documents.ts:50` always had `.toLowerCase()` — so the entire chain is a no-op for us.
 
 **Older audit hits (skipped during prior merge cycles, listed for reference):**
@@ -106,7 +119,8 @@ time to do them properly + add tests.
 | Upstream | Subject | Why deferred | Effort estimate |
 |---|---|---|---|
 | `8404cc3` | fix(uri): include index in custom qmd links | Adds index segment to `lotl://` URI parsing so CLI commands can switch indexes inline. Requires schema change to `VirtualPath` type (add optional `indexName` field) plus call sites in get/multi-get. | ~30-60 min code + tests |
-| `3023ab3` | fix: bump transitive deps for security alerts | Need to cross-reference against our `package-lock.json` since dep set diverged after node-llama-cpp removal. May require updating multiple deps independently. | ~30 min audit + npm audit fix |
+
+`3023ab3` (security deps bump) closed via `vite^7.3.2` override in 2026-04-23 audit.
 
 ---
 
