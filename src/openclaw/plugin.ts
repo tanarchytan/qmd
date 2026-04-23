@@ -35,6 +35,7 @@ import { loadQmdEnv } from "../env.js";
 import { openDatabase, loadSqliteVec } from "../db.js";
 import {
   memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats,
+  memoryPushPack, memoryRecallTiered, memoryReflect,
   extractAndStore, runDecayPass, runCleanupPass, runReflectionPass, knowledgeStore, knowledgeQuery,
   knowledgeInvalidate, knowledgeEntities,
 } from "../memory/index.js";
@@ -416,6 +417,44 @@ const qmdPlugin = definePluginEntry({
         execute: async () => {
           const stats = memoryStats(_db);
           return { content: [{ type: "text" as const, text: `Total: ${stats.total}\nTiers: ${JSON.stringify(stats.byTier)}\nCategories: ${JSON.stringify(stats.byCategory)}` }] };
+        },
+      },
+      {
+        name: "qmd_memory_push_pack",
+        description: "Session-start memory primer — returns core + important-recent + hot-tail memories for scope",
+        parameters: { type: "object", properties: { windowDays: { type: "number" }, maxEntries: { type: "number" }, minImportance: { type: "number" } } },
+        execute: async (_id: string, params: any) => {
+          const pack = memoryPushPack(_db, { scope: activeScope, ...params });
+          if (pack.length === 0) return { content: [{ type: "text" as const, text: "No memories in pack." }] };
+          const lines = pack.map(m => `${m.tier} [${m.reason}]: ${m.text.slice(0, 120)}`).join("\n");
+          return { content: [{ type: "text" as const, text: lines }] };
+        },
+      },
+      {
+        name: "qmd_memory_recall_tiered",
+        description: "Recall memories from a specific tier (core, working, peripheral)",
+        parameters: { type: "object", properties: { query: { type: "string" }, tier: { type: "string" }, limit: { type: "number" }, perTierLimit: { type: "number" } }, required: ["query"] },
+        execute: async (_id: string, params: any) => {
+          const result = await memoryRecallTiered(_db, { query: params.query, scope: activeScope, ...params });
+          const formatTier = (label: string, mems: typeof result.core) =>
+            mems.length > 0 ? `${label} (${mems.length}):\n  ${mems.map(m => `[${m.category}] ${m.text}`).join("\n  ")}` : "";
+          const text = [formatTier("core", result.core), formatTier("working", result.working), formatTier("peripheral", result.peripheral)].filter(Boolean).join("\n\n");
+          return { content: [{ type: "text" as const, text: text || "No memories found." }] };
+        },
+      },
+      {
+        name: "qmd_memory_reflect",
+        description: "Ask a question and get a facts-only answer synthesized from recent memories",
+        parameters: { type: "object", properties: { question: { type: "string" }, maxFacts: { type: "number" } }, required: ["question"] },
+        execute: async (_id: string, params: any) => {
+          const maxFacts = params.maxFacts ?? 5;
+          const memories = await memoryRecall(_db, { query: params.question, scope: activeScope, limit: 10 });
+          const reflected = await memoryReflect(params.question, memories, { maxFacts });
+          const text = reflected
+            ?? (memories.length > 0
+                ? memories.slice(0, maxFacts).map(m => `- [${m.category}] ${m.text}`).join("\n")
+                : "No memories found.");
+          return { content: [{ type: "text" as const, text }] };
         },
       },
     ];

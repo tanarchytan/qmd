@@ -61,7 +61,7 @@ fi
 is_pid_alive() {
   local pid=$1
   [[ -z "$pid" ]] && return 1
-  tasklist //FI "PID eq $pid" //NH 2>/dev/null | grep -q "$pid"
+  tasklist //FI "PID eq $pid" //FI "IMAGENAME eq bash.exe" //NH 2>/dev/null | grep -q "$pid"
 }
 
 LOCKFILE=evaluate/logs/phase6-watchdog.lock
