@@ -10,7 +10,7 @@ A unified search + memory + knowledge-graph system that runs on what's already o
 
 **Lotl** = *Living-off-the-Land* (the cybersecurity term for "use what's already there to avoid new infrastructure"). Repurposed here: FTS5 + sqlite-vec + local ONNX embeddings via `@huggingface/transformers`. Cloud APIs (ZeroEntropy, SiliconFlow, Nebius, Gemini, OpenAI) are opt-in, not required.
 
-> Evolved from a fork of [tobi/qmd](https://github.com/tobilu/qmd) — see the origin story below. CLI binary `lotl` is the canonical name; `qmd` stays as an alias for existing installs. Env vars are `LOTL_*`; `qmd://` virtual-path callers should migrate to `lotl://`.
+> Evolved from a fork of [tobi/qmd](https://github.com/tobilu/qmd) — see the origin story below. CLI binary `lotl` is the canonical name (the `qmd` alias was dropped at v1.0.0 — hard break over back-compat). Env vars are `LOTL_*`; virtual paths are `lotl://`.
 
 ```sh
 npm install -g @tanarchy/lotl
@@ -381,7 +381,7 @@ await store.close()
 
 ```sh
 npx tsx src/cli/lotl.ts <command>   # Run CLI from source (dev mode)
-npm link                            # Install globally as 'qmd'
+npm link                            # Install globally as 'lotl'
 npx vitest run test/                # Run tests
 npm run build                       # Compile TypeScript to dist/
 npm run typecheck                   # tsc --noEmit (no emit, just type-check)

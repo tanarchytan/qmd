@@ -13,7 +13,7 @@ allowed-tools: Bash(lotl:*), mcp__lotl__*
 
 ## Status
 
-!`qmd status 2>/dev/null || echo "Not installed: npm install -g @tanarchy/lotl@dev"`
+!`lotl status 2>/dev/null || echo "Not installed: npm install -g @tanarchy/lotl@dev"`
 
 ## Install
 
@@ -79,7 +79,7 @@ openclaw gateway restart
 ```json
 {
   "mcpServers": {
-    "lotl": { "command": "qmd", "args": ["mcp"] }
+    "lotl": { "command": "lotl", "args": ["mcp"] }
   }
 }
 ```
@@ -88,7 +88,7 @@ openclaw gateway restart
 ```json
 {
   "mcpServers": {
-    "lotl": { "command": "qmd", "args": ["mcp"] }
+    "lotl": { "command": "lotl", "args": ["mcp"] }
   }
 }
 ```
@@ -269,33 +269,33 @@ First query gets 2x weight in fusion — put your best guess first.
 ## CLI
 
 ```bash
-qmd query "question"              # Auto-expand + rerank
-qmd query $'lex: X\nvec: Y'       # Structured
-qmd query --json --explain "q"    # Show score traces
-qmd search "keywords"             # BM25 only (no LLM)
-qmd get "#abc123"                 # By docid
-qmd multi-get "journals/2026-*.md" -l 40  # Batch by glob
-qmd memory store "I prefer TypeScript"    # Store (auto-classify)
-qmd memory recall "what language"         # Search memories
-qmd memory extract "conversation text"    # Extract from conversation
-qmd memory stats                          # Stats by tier/category
-qmd memory decay                          # Run decay pass
-qmd memory import conversations.json      # Import conversations
-qmd memory export memories.json           # Export all memories
+lotl query "question"              # Auto-expand + rerank
+lotl query $'lex: X\nvec: Y'       # Structured
+lotl query --json --explain "q"    # Show score traces
+lotl search "keywords"             # BM25 only (no LLM)
+lotl get "#abc123"                 # By docid
+lotl multi-get "journals/2026-*.md" -l 40  # Batch by glob
+lotl memory store "I prefer TypeScript"    # Store (auto-classify)
+lotl memory recall "what language"         # Search memories
+lotl memory extract "conversation text"    # Extract from conversation
+lotl memory stats                          # Stats by tier/category
+lotl memory decay                          # Run decay pass
+lotl memory import conversations.json      # Import conversations
+lotl memory export memories.json           # Export all memories
 ```
 
 ## Setup
 
 ```bash
-qmd collection add ~/notes --name notes
-qmd embed
+lotl collection add ~/notes --name notes
+lotl embed
 ```
 
 ## Verification
 
 ```bash
-qmd status                                # Check index health
-qmd memory store "test" && qmd memory recall "test"  # Test memory
+lotl status                                # Check index health
+lotl memory store "test" && lotl memory recall "test"  # Test memory
 openclaw plugins doctor                   # Check plugin (OpenClaw)
 node setup/scripts/selfcheck.mjs          # Probe endpoints
 node setup/scripts/config-validate.mjs    # Validate config
@@ -304,8 +304,8 @@ node setup/scripts/config-validate.mjs    # Validate config
 ## Troubleshooting
 
 - **Plugin not loading**: `openclaw plugins doctor`, then `rm -rf /tmp/jiti/` and restart gateway
-- **No embeddings**: `qmd embed -f` to force re-embed
-- **Dimension mismatch** after provider change: `qmd embed -f`
+- **No embeddings**: `lotl embed -f` to force re-embed
+- **Dimension mismatch** after provider change: `lotl embed -f`
 - **API key issues**: `node setup/scripts/selfcheck.mjs` to probe endpoints
 - **Config issues**: `node setup/scripts/config-validate.mjs`
-- **Not starting**: check `which qmd`, try `qmd mcp` manually
+- **Not starting**: check `which lotl`, try `lotl mcp` manually
