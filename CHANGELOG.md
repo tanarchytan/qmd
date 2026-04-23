@@ -2,6 +2,75 @@
 
 ## [Unreleased]
 
+### Added
+
+- **OpenClaw plugin memory tool wiring** — `qmd_memory_push_pack`,
+  `qmd_memory_recall_tiered`, `qmd_memory_reflect` now registered in
+  `src/openclaw/plugin.ts`. MCP server already had the equivalents from
+  2026-04-17; the plugin surface was missing them so OpenClaw users
+  couldn't reach these capabilities without dropping into raw MCP.
+- **Silent-fallback warnings** in `src/store/search.ts` — vector embed,
+  query expansion, and rerank paths now emit a one-time stderr warning
+  when they silently no-op due to no backend configured. Dedupe via a
+  module-scoped Set so it fires once per process, not per query.
+  `LOTL_QUIET_FALLBACK=1` suppresses (eval harness intentionally runs
+  in no-backend baseline mode and doesn't need the noise).
+- **`test/lmstudio-rerank.test.ts`** — smoke tests for the OpenAI-shim
+  rerank path: normal content response, Qwen3 `reasoning_content`
+  fallback, timeout, host-unreachable.
+- **`test/silent-fallback-warnings.test.ts`** — 4 cases covering rerank
+  warn-once, dedupe across repeated calls, `LOTL_QUIET_FALLBACK`
+  suppression, and expand-query warn path.
+
+### Fixed
+
+- **`src/llm/remote.ts` LLM-chat rerank path** missed the same Qwen3
+  `reasoning_content` fallback that the eval harness got in v1.0.0.
+  Production path read only `message.content`, so qwen3 thinking models
+  produced silent empty reranks with no error. Fix mirrors the eval-
+  harness pattern: `content || reasoning_content`.
+- **`evaluate/scripts/extract-facts-batch.mjs`** — the post-v1.0.0
+  "9bee79a fix" called `createTransformersEmbedBackend({model,dtype})`,
+  but the function signature is positional `(model, dtype, fileName,
+  device)`. The object got smuggled into `pipeline()`'s `modelId` slot
+  and crashed deep in `@huggingface/transformers`' `pathJoin` with
+  `part.replace is not a function`. Only surfaced on rows with
+  non-empty facts (first row to trigger embedder creation), making it
+  look intermittent. Positional fix + widened catch-block stack trace
+  so the next silent transformers.js failure surfaces properly.
+- **`evaluate/scripts/phase6-watchdog.sh` PID-recycle** — `tasklist`
+  filter now includes `IMAGENAME eq bash.exe` so recycled PIDs reassigned
+  to non-bash processes don't fake a live watchdog. Caught live 2026-04-21
+  when 2x watchdog fires left 16 eval.mts processes.
+
+### Changed
+
+- **`LOTL_LMSTUDIO_HOST` default → `localhost:1234`** across the eval
+  harness (previously `10.0.0.116:1234`, prior `10.0.0.113:1234`, prior
+  `10.0.0.105:1234`). This was the third bulk source-code rename chasing
+  a DHCP-drifting host in as many weeks. Users on a remote LM Studio
+  box set the override in `~/.config/lotl/.env` once and stop eating
+  commits when their DHCP lease rotates.
+- **README RRF defaults** refreshed to match Phase-6 hardcodes: fusion
+  weights 0.8/0.2 (from 0.9/0.1), rerank blend flat 0.5/0.5 (from
+  position-aware 75/25 → 60/40 → 40/60), synonyms hardcoded off. The
+  README was last touched pre-Phase-6 and drifted over the v1.0.0 ship.
+
+### Eval
+
+- **Phase 11.8 gte-small n=500 follow-up** — gate fail: rAny@5 97.8%
+  (floor 98.4%) and MRR 0.912 (floor 0.917). The n=100 +0.4pp MRR
+  didn't replicate at n=500. mxbai-xs q8 stays production default.
+  Lesson: future Phase 11 candidates should gate at n=500 directly;
+  n=100 can't discriminate near-tied embedders at this MRR ceiling.
+- **LoCoMo golden audit cross-ref** executed against v1.0.0 release
+  numbers (`results-phase-b-locomo-v14-gemma-pass2.json`). 11
+  score-corrupting opportunities identified (not 99 as the release
+  plan assumed — the 99 count was from dial481/locomo-audit's total
+  errors before filtering against our matched rows). Theoretical
+  ceiling 73.5% (+5.6pp) if all 11 corrected. Re-judging the 11
+  against corrected gold text deferred until LM Studio is free.
+
 ## [1.0.0] - 2026-04-21 — 🦎 Lotl GA
 
 **First stable release.** Headline numbers landed via Phase 6 squeeze sweeps
