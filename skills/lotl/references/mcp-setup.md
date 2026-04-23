@@ -4,8 +4,8 @@
 
 ```bash
 npm install -g @tanarchy/lotl@dev
-qmd collection add ~/path/to/markdown --name myknowledge
-qmd embed
+lotl collection add ~/path/to/markdown --name myknowledge
+lotl embed
 ```
 
 ## Configure MCP Client
@@ -14,7 +14,7 @@ qmd embed
 ```json
 {
   "mcpServers": {
-    "lotl": { "command": "qmd", "args": ["mcp"] }
+    "lotl": { "command": "lotl", "args": ["mcp"] }
   }
 }
 ```
@@ -23,7 +23,7 @@ qmd embed
 ```json
 {
   "mcpServers": {
-    "lotl": { "command": "qmd", "args": ["mcp"] }
+    "lotl": { "command": "lotl", "args": ["mcp"] }
   }
 }
 ```
@@ -39,7 +39,7 @@ openclaw plugins install @tanarchy/lotl@dev
 {
   "mcp": {
     "servers": {
-      "lotl": { "command": "qmd", "args": ["mcp"] }
+      "lotl": { "command": "lotl", "args": ["mcp"] }
     }
   }
 }
@@ -48,9 +48,9 @@ openclaw plugins install @tanarchy/lotl@dev
 ## HTTP Mode
 
 ```bash
-qmd mcp --http              # Port 8181
-qmd mcp --http --daemon     # Background
-qmd mcp stop                # Stop daemon
+lotl mcp --http              # Port 8181
+lotl mcp --http --daemon     # Background
+lotl mcp stop                # Stop daemon
 ```
 
 ## Tools
@@ -190,7 +190,7 @@ Entity count, fact count, expired count.
 
 ## Troubleshooting
 
-- **Not starting**: `which qmd`, `qmd mcp` manually
-- **No results**: `qmd collection list`, `qmd embed`
+- **Not starting**: `which lotl`, `lotl mcp` manually
+- **No results**: `lotl collection list`, `lotl embed`
 - **Slow first search**: Normal, models loading (~3GB)
 - **API errors**: `node setup/scripts/selfcheck.mjs`
