@@ -26,14 +26,14 @@
 > | S1.1 | Refresh this TODO to reflect v1.0.0 shipped + v1.1 sprint | **DONE** 2026-04-23 |
 > | S1.2 | #32 llama+qwen re-fire after cache flush | queued — LM Studio required |
 > | S1.3 | `gte-small` n=500 follow-up (Phase 11.8) — **GATE FAIL**: rAny@5 97.8% (need ≥98.4%), MRR 0.912 (need ≥0.917). n=100 lift didn't replicate. mxbai-xs stays default. | **DONE** 2026-04-23 |
-> | S1.4 | LoCoMo golden audit — apply 99 patches | queued — ~3h |
+> | S1.4 | LoCoMo golden audit cross-ref ran 2026-04-23 — `evaluate/logs/locomo-audit-20260423.log`. 11 score-corrupting opportunities (not 99); current 67.9% → ceiling 73.5% (+5.6pp). Re-judging the 11 needs LM Studio (deferred until S2.1 done). | partially done |
 > | S1.5 | `lmstudio-rerank` smoke tests (qwen3 reasoning_content, timeout, host-down) — also fixed prod `remote.ts:528` bug that was eval-only before | **DONE** 2026-04-23 |
 >
 > ### Sprint 2 — Phase 5 fact-aug (gated on Sprint 1 clean)
 >
 > | # | Task | Status |
 > |---|------|--------|
-> | S2.1 | Re-fire `extract-facts-batch.mjs` on LME n=500 — post-`9bee79a` fix never ran | queued — LM Studio |
+> | S2.1 | Re-fire `extract-facts-batch.mjs` on LME n=500. **Started 2026-04-23 22:50, paused 22:59 at 47/23867 populated** (23820 remaining). Real bug: `9bee79a` used wrong call shape `{model,dtype}` instead of positional `(model,"q8")` — fixed in `3334380`. DB backed up at `lme-s-mxbai-n500-v17.sqlite.pre-phase5b-20260423.bak`. LLM cache at 345 entries. Resumable by re-running same command — loop skips rows where `fact_text IS NOT NULL`. | **IN PROGRESS** — resume tomorrow |
 > | S2.2 | A/B `EMBED_SOURCE=content` vs `fact` on multi-session bucket | **DECISION GATE** — ≥+2pp R@5 to continue |
 > | S2.3 | Implement `LOTL_MEMORY_EMBED_SOURCE=dual` (3-list RRF) — currently falls back to content silently | deferred until S2.2 passes |
 > | S2.4 | A/B dual vs fact vs content | deferred |
