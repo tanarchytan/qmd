@@ -53,7 +53,7 @@
 > | 2026-04-23 | OpenClaw plugin: wire `qmd_memory_push_pack` / `_recall_tiered` / `_reflect` tools (MCP server already had them; plugin surface was missing) | `0a501d9` |
 > | 2026-04-23 | `phase6-watchdog.sh`: `IMAGENAME eq bash.exe` filter to stop PID-recycle false positives | `0a501d9` |
 > | 2026-04-23 | LMStudio default host localhost (was 10.0.0.116, prior 113, prior 105) — override via `LOTL_LMSTUDIO_HOST` in `~/.config/lotl/.env` | `83bc7a1` |
-> | 2026-04-23 | `RemoteLLM.rerank()` LLM chat path: fall back to `message.reasoning_content` for Qwen3 thinking models. Eval harness was patched 2026-04-21; production path missed the same fix until now. `test/lmstudio-rerank.test.ts` smoke tests added. | pending |
+> | 2026-04-23 | `RemoteLLM.rerank()` LLM chat path: fall back to `message.reasoning_content` for Qwen3 thinking models. Eval harness was patched 2026-04-21; production path missed the same fix until now. `test/lmstudio-rerank.test.ts` smoke tests added. | `006bde3` |
 
 ---
 
