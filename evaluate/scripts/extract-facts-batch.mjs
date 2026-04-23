@@ -162,7 +162,16 @@ let vecFactStmt = null; // lazy — only prepare after we know embed dim
 // first few turns of each session-level memory.
 const MAX_INPUT_CHARS = Number(process.env.LOTL_EXTRACT_MAX_INPUT_CHARS ?? 10000);
 
-for (const row of rows) {
+// Concurrency: fire N LLM calls in parallel. LM Studio's `parallel` slot
+// count on the loaded model gates the actual server-side concurrency;
+// extra client requests just queue. Default 8 matches the typical gemma
+// gen-model parallel config (per evaluate/scripts/smoke-all-lmstudio.sh
+// PARALLEL_V14=8). Set LOTL_EXTRACT_PARALLEL=1 to revert to serial.
+const PARALLEL = Math.max(1, Number(process.env.LOTL_EXTRACT_PARALLEL ?? 8));
+
+// Process one row end-to-end. Each Promise resolves with a status tag
+// so the chunk-level Promise.all can update counters without races.
+async function processRow(row) {
   try {
     const input = row.text.length > MAX_INPUT_CHARS
       ? row.text.slice(0, MAX_INPUT_CHARS) + "\n[…truncated]"
@@ -170,15 +179,23 @@ for (const row of rows) {
     const prompt = buildFactExtractionPrompt(input);
     const raw = await callLLM(prompt);
     const parsed = parseFactExtraction(raw);
-    if (!parsed) { failed++; continue; }
+    if (!parsed) return { status: "failed", id: row.id };
+
     const factText = factsToEmbeddableText(parsed.facts);
     let factEmb = null;
+    let emb = null;
     if (factText.length > 0) {
       const embed = await ensureEmbedder();
-      const [emb] = await embed([factText]);
+      const result = await embed([factText]);
+      emb = result[0];
       factEmb = Buffer.from(new Float32Array(emb).buffer);
-      // Phase 5b — mirror into memories_vec_fact so LOTL_MEMORY_EMBED_SOURCE=fact
-      // recall queries can hit fact embeddings via vec0 KNN.
+    }
+
+    // DB writes are synchronous via better-sqlite3 — the JS event loop
+    // serializes them across the concurrent rows. Lazy-init of vecFactStmt
+    // is also safe: the if/init/assign block has no await so it runs
+    // atomically per microtask.
+    if (factText.length > 0 && emb) {
       if (!vecFactStmt) {
         ensureMemoriesVecFactTable(db, emb.length);
         vecFactStmt = db.prepare(`INSERT INTO memories_vec_fact (scope, id, embedding) VALUES (?, ?, ?)`);
@@ -187,9 +204,7 @@ for (const row of rows) {
     }
     updateStmt.run(factText || null, factEmb, row.id);
 
-    // Phase 5a — push extracted SPO triples into the knowledge graph. Scope
-    // copied from source memory. Confidence held at 1.0 (LLM extraction is
-    // the trust floor; future work can score per-triple).
+    // Phase 5a — push extracted SPO triples into the knowledge graph.
     for (const t of parsed.triples || []) {
       try {
         knowledgeStore(db, {
@@ -204,13 +219,23 @@ for (const row of rows) {
       }
     }
 
-    done++;
+    return { status: "done", id: row.id };
   } catch (e) {
     console.error(`[extract] failed id=${row.id}:`, e.stack || e.message || e);
-    failed++;
+    return { status: "failed", id: row.id };
   }
-  if ((done + skipped + failed) % 25 === 0) {
-    process.stdout.write(`\r  ${done + skipped + failed}/${rows.length} processed`);
+}
+
+console.log(`Processing in chunks of ${PARALLEL}...`);
+for (let i = 0; i < rows.length; i += PARALLEL) {
+  const chunk = rows.slice(i, i + PARALLEL);
+  const results = await Promise.all(chunk.map(processRow));
+  for (const r of results) {
+    if (r.status === "done") done++;
+    else failed++;
+  }
+  if (((done + skipped + failed) % 25) < PARALLEL) {
+    process.stdout.write(`\r  ${done + skipped + failed}/${rows.length} processed (${done} ok, ${failed} failed)`);
   }
 }
 
