@@ -25,7 +25,7 @@
 > |---|------|--------|
 > | S1.1 | Refresh this TODO to reflect v1.0.0 shipped + v1.1 sprint | **DONE** 2026-04-23 |
 > | S1.2 | #32 llama+qwen re-fire after cache flush | queued — LM Studio required |
-> | S1.3 | `gte-small` n=500 follow-up (Phase 11.8) — gate MRR ≥ 0.920 → default swap | queued — ~15-20 min local CPU |
+> | S1.3 | `gte-small` n=500 follow-up (Phase 11.8) — **GATE FAIL**: rAny@5 97.8% (need ≥98.4%), MRR 0.912 (need ≥0.917). n=100 lift didn't replicate. mxbai-xs stays default. | **DONE** 2026-04-23 |
 > | S1.4 | LoCoMo golden audit — apply 99 patches | queued — ~3h |
 > | S1.5 | `lmstudio-rerank` smoke tests (qwen3 reasoning_content, timeout, host-down) — also fixed prod `remote.ts:528` bug that was eval-only before | **DONE** 2026-04-23 |
 >
@@ -290,11 +290,11 @@ Full leaderboard in `devnotes/embedders/embedder-candidates.md`. Key findings:
 | 🥈 | **Xenova/gte-small** | **0.9212** | **30M** | **Value pick at baseline size class** |
 | — | mxbai-xs (baseline) | 0.917 | 22M | current production default |
 
-### Phase 11.8 (pending, machine-time only): n=500 follow-up for top-3
+### Phase 11.8: n=500 follow-up for top-3
 Confirm the n=100 lift is real at production scale. Each candidate is a single
 `npx tsx evaluate/longmemeval/eval.mts` invocation — fully local, no API cost.
 
-- [ ] **Xenova/gte-small** (30M, 384d, ~5-8 min wall) — highest-value run: if the +0.4pp MRR holds at n=500, **gte-small replaces mxbai-xs as production default**.
+- [x] **Xenova/gte-small** (30M, 384d, 28m55s wall) — **GATE FAIL** 2026-04-23: rAny@5 97.8% / R@5 93.3% / MRR 0.912. n=100's +0.4pp MRR did not replicate at n=500. mxbai-xs stays default. Lesson: gate Phase 11 candidates at n=500 directly; n=100 cannot discriminate near-tied embedders at this MRR ceiling.
 - [ ] **Xenova/bge-large-en-v1.5** (335M, 1024d, ~60-90 min wall) — confirms the 0.9267 MRR ceiling is real. Ceiling reference only; not a deployment candidate until GPU backend lands.
 - [ ] **Xenova/UAE-Large-V1** (335M, 1024d, ~60-90 min wall) — tie-breaker vs bge-large. Expected to match within ±0.005 MRR.
 

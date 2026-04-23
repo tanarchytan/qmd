@@ -106,7 +106,7 @@ marked CANCELED. Re-open only if a first-class Node NPU runtime appears.
 | Model | Dim | Size | rAny@5 | R@5 | MRR | NDCG@10 | covR5 | covMRR | Verdict |
 |---|---|---|---|---|---|---|---|---|---|
 | **mxbai-xs q8 (baseline, n=500)** | **384** | **~50 MB** | **98.4%** | **93.7%** | **0.917** | **0.913** | **93.6%** | **0.857** | **Production default** |
-| Xenova/gte-small int8 | 384 | 33 MB | 99.0% | 93.9% | **0.921** | **0.925** | 98.0% | 0.919 | **Marginally above baseline** — hold for n=500 follow-up |
+| Xenova/gte-small int8 | 384 | 33 MB | 99.0% | 93.9% | **0.921** | **0.925** | 98.0% | 0.919 | n=100 promised +0.4pp MRR; n=500 follow-up 2026-04-23 (`results-gte-small-500.json`) returned rAny@5=97.8% / R@5=93.3% / MRR=0.912 — **below baseline on both gates**. Parked. mxbai-xs stays default. |
 | Xenova/e5-small-v2 int8 | 384 | 33 MB | 98.0% | 92.9% | 0.909 | 0.912 | 98.0% | 0.920 | Below baseline MRR. Parked. |
 | BAAI/bge-small-en-v1.5 int8 (Xenova port) | 384 | ~33 MB | 99.0% | 93.4% | 0.916 | 0.918 | 98.0% | 0.919 | Tied. Parked. |
 | Alibaba-NLP/gte-base-en-v1.5 int8 | 768 | 140 MB | — | — | — | — | — | — | transformers.js v4.1.0 arch incompat: `model_type="new"` not registered. Silent crash. Parked. |
@@ -126,12 +126,12 @@ marked CANCELED. Re-open only if a first-class Node NPU runtime appears.
 |---|---|---|---|---|
 | 🥇 | bge-large-en-v1.5 | **0.9267** | 335M | Ceiling; CPU-too-slow without GPU |
 | 🥇 | UAE-Large-V1 | **0.9267** | 335M | Tied with bge-large, indistinguishable |
-| 🥈 | **gte-small** | **0.9212** | **30M** | **Value pick.** +0.4pp MRR, +1.2pp NDCG@10 vs baseline at same size class. n=500 follow-up recommended. |
+| ❌ | gte-small | 0.9212 (n=100) → 0.912 (n=500) | 30M | n=100 lift didn't replicate at n=500 — both rAny@5 (97.8% vs 98.4% gate) and MRR (0.912 vs 0.917 gate) regressed. Parked 2026-04-23. |
 | — | mxbai-xs q8 (baseline) | 0.917 | 22M | Current production default |
 | — | bge-small / bge-base / e5-base | ~0.913-0.916 | 33-109M | Tied with baseline. Parked. |
 | — | e5-small / e5-large | ~0.909 | 33-335M | Below baseline (prefix-at-ingest mismatch — needs re-ingest to be fair) |
 
-**If n=500 follow-up confirms gte-small's +0.4pp MRR is real, it replaces mxbai-xs as production default** — same speed class, slightly better quality, fully CPU-native.
+**Update 2026-04-23:** n=500 follow-up did NOT confirm gte-small's +0.4pp MRR. mxbai-xs stays as production default. The n=100 sweep size was too small to discriminate between near-tied embedders at this MRR ceiling — future Phase 11 candidates should gate at n=500 directly, not promote from n=100.
 
 **bge-large / UAE-Large** are ceiling options only viable after we ship dedicated GPU inference (Phase 11.5 WebGPU path). n=500 sweep (Phase 11.8) confirmed they tie mxbai-xs on MRR but regress on preference MRR — not worth the 15× param cost regardless of device.
 
