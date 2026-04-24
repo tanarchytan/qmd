@@ -2,29 +2,56 @@
 /**
  * Phase 5 batch fact/triple extraction runner.
  *
- * Iterates every row in the `memories` table, calls an LLM to extract
- * {facts, triples} per the Phase 5 design prompt, and:
+ * Iterates every row in the `memories` table (where `fact_text IS NULL`),
+ * calls an LLM to extract {facts, triples} per the Phase 5 design prompt,
+ * and:
  *   - stores facts joined with newlines → memories.fact_text
- *   - calls the local embedder (mxbai-xs) → stores BLOB in memories.fact_embedding
- *   - inserts triples via memory/knowledge.ts's knowledge_add
+ *   - calls the local embedder (mxbai-xs by default) → stores BLOB in
+ *     memories.fact_embedding + mirrors into memories_vec_fact for KNN
+ *   - inserts triples via src/memory/knowledge.ts's knowledgeStore
+ *
+ * Must be run via `npx tsx` — imports `src/*.ts` internals.
  *
  * Design: devnotes/architecture/phase5-kg-and-fact-aug-design.md
- * Default model: google/gemma-4-e4b via LM Studio (fast, free). Override
- * with LOTL_LMSTUDIO_GEN_MODEL. Gemini / Poe also work via LOTL_EXTRACT_PROVIDER.
+ * Verdict: see evaluate/SNAPSHOTS.md "v1.0.1 — Phase 5 fact-aug A/B
+ * (gate fail)" for the negative result on LME-s with mxbai-xs +
+ * qwen2.5-1.5b extraction. Script remains as scaffolding for future
+ * experiments with different extraction models / strategies.
  *
- * Cache: responses keyed by sha256(prompt_version + turn_text). Re-runs are
- * free — delete evaluate/<bench>/llm-cache-facts.json to force regen.
+ * CLI:
+ *   npx tsx evaluate/scripts/extract-facts-batch.mjs <sqlite-db> \
+ *     [--provider lmstudio|gemini] [--limit N]
  *
- * Usage:
- *   node evaluate/scripts/extract-facts-batch.mjs <sqlite-db> [--provider lmstudio|gemini|poe] [--limit N]
+ * Env:
+ *   LOTL_LMSTUDIO_HOST=host:port           (default localhost:1234)
+ *   LOTL_LMSTUDIO_GEN_MODEL=<id>           (default google/gemma-4-e4b;
+ *                                           qwen2.5-1.5b-instruct recommended —
+ *                                           non-thinking, ~1s/call vs gemma's 15s)
+ *   LOTL_EXTRACT_PARALLEL=8                (chunk size for Promise.all
+ *                                           concurrency; match LM Studio's
+ *                                           loaded `parallel` slot count)
+ *   LOTL_EXTRACT_MAX_TOKENS=512            (bump to 2048 for thinking models
+ *                                           that burn tokens before emitting JSON)
+ *   LOTL_EXTRACT_MAX_INPUT_CHARS=10000     (truncate source text; per-slot
+ *                                           ctx = total_ctx / parallel so this
+ *                                           must fit)
+ *   GOOGLE_API_KEY=...                     (only for --provider gemini)
  *
- * Example (LME canonical DB, via LM Studio gemma):
- *   node evaluate/scripts/extract-facts-batch.mjs \
- *     evaluate/longmemeval/dbs/lme-s-mxbai-n500-v17.sqlite \
- *     --provider lmstudio --limit 100
+ * Cache: responses keyed by sha256(prompt_version + turn_text). Re-runs
+ * reuse cached responses — delete evaluate/<bench>/llm-cache-facts.json
+ * to force regen. Cache entries are prompt-hash keyed (model-agnostic),
+ * so switching models between runs replays prior responses until cache
+ * is flushed.
  *
- * Expected wall on n=500 with gemma-4-e4b at parallel=8:
- *   ~500 × ~3s / 8 = ~3 min (facts are short, < 200 output tokens each).
+ * Example: LME canonical DB via LM Studio qwen2.5-1.5b at parallel=8:
+ *   LOTL_LMSTUDIO_HOST=10.0.0.250:1234 \
+ *   LOTL_LMSTUDIO_GEN_MODEL=qwen2.5-1.5b-instruct \
+ *   LOTL_EXTRACT_PARALLEL=8 \
+ *     npx tsx evaluate/scripts/extract-facts-batch.mjs \
+ *     evaluate/longmemeval/dbs/lme-s-mxbai-n500-v17.sqlite --provider lmstudio
+ *
+ * Measured on a 3090 (LM Studio parallel=8, qwen2.5-1.5b-instruct, ~1s/call
+ * aggregate): ~9 rows/sec mixed cache+fresh, ~90 fresh LLM calls/min.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
