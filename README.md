@@ -79,7 +79,14 @@ Lotl exposes all functionality via MCP (Model Context Protocol). Works with Clau
 
 ### Setup
 
-**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+**Claude Code (fastest — 2 commands):**
+```sh
+npm install -g @tanarchy/lotl
+claude mcp add lotl lotl mcp --scope user
+```
+Restart Claude Code. The 26 tools (`memory_*`, `knowledge_*`, `doc_*`) appear. Verify with `claude mcp list`.
+
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json` macOS, `%APPDATA%\Claude\claude_desktop_config.json` Windows):
 ```json
 {
   "mcpServers": {
@@ -88,16 +95,14 @@ Lotl exposes all functionality via MCP (Model Context Protocol). Works with Clau
 }
 ```
 
-**Claude Code:**
-```json
-{
-  "mcpServers": {
-    "lotl": { "command": "lotl", "args": ["mcp"] }
-  }
-}
+**Local-dev install (from source clone)** — for testing unreleased work:
+```sh
+cd lotl/
+npm install && npm run build && npm link
+claude mcp add lotl lotl mcp --scope user
 ```
 
-**HTTP transport** (shared daemon, models stay loaded):
+**HTTP transport** (shared daemon, models stay loaded across MCP clients):
 ```sh
 lotl mcp --http --daemon           # start on localhost:8181
 lotl mcp stop                      # stop

@@ -2,7 +2,7 @@
   "id": "tanarchy-lotl",
   "name": "Lotl",
   "description": "Lotl — Living-off-the-Land memory for AI agents. BM25 + vector RRF fusion, LLM reranking, Weibull decay, temporal knowledge graph. On SQLite + local ONNX — no new infra.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "skills": [
     "skills/lotl"
   ],

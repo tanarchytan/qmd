@@ -75,7 +75,17 @@ openclaw gateway restart
 
 ### As MCP Server
 
-**Claude Code** (`~/.claude/settings.json`):
+**Claude Code (fastest — 2 commands):**
+```bash
+npm install -g @tanarchy/lotl
+claude mcp add lotl lotl mcp --scope user
+```
+
+That's it. Restart Claude Code and the 26 tools (`memory_*`, `knowledge_*`, `doc_*`) appear. No JSON editing needed.
+
+Verify with `claude mcp list`. The "Failed to connect" line is a false negative on first probe — actual subprocess spawn works on session start.
+
+**Claude Code (manual JSON path)** — `~/.claude.json`:
 ```json
 {
   "mcpServers": {
@@ -84,7 +94,7 @@ openclaw gateway restart
 }
 ```
 
-**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
 ```json
 {
   "mcpServers": {
@@ -96,8 +106,10 @@ openclaw gateway restart
 ### As CLI
 
 ```bash
-npm install -g @tanarchy/lotl@dev
+npm install -g @tanarchy/lotl
 ```
+
+For local-dev installs from source: `git clone … && cd lotl && npm install && npm run build && npm link`.
 
 ## Configuration
 
