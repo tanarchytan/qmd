@@ -78,12 +78,17 @@ openclaw gateway restart
 **Claude Code (fastest — 2 commands):**
 ```bash
 npm install -g @tanarchy/lotl
+
+# macOS / Linux:
 claude mcp add lotl lotl mcp --scope user
+
+# Windows (Node spawn needs the .cmd extension):
+claude mcp add lotl lotl.cmd mcp --scope user
 ```
 
 That's it. Restart Claude Code and the 26 tools (`memory_*`, `knowledge_*`, `doc_*`) appear. No JSON editing needed.
 
-Verify with `claude mcp list`. The "Failed to connect" line is a false negative on first probe — actual subprocess spawn works on session start.
+Verify with `claude mcp list` — should show `✓ Connected`.
 
 **Claude Code (manual JSON path)** — `~/.claude.json`:
 ```json

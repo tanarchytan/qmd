@@ -82,9 +82,14 @@ Lotl exposes all functionality via MCP (Model Context Protocol). Works with Clau
 **Claude Code (fastest — 2 commands):**
 ```sh
 npm install -g @tanarchy/lotl
+
+# macOS / Linux:
 claude mcp add lotl lotl mcp --scope user
+
+# Windows: (Node spawn won't auto-resolve bare `lotl` to .cmd)
+claude mcp add lotl lotl.cmd mcp --scope user
 ```
-Restart Claude Code. The 26 tools (`memory_*`, `knowledge_*`, `doc_*`) appear. Verify with `claude mcp list`.
+Restart Claude Code. The 26 tools (`memory_*`, `knowledge_*`, `doc_*`) appear. Verify with `claude mcp list` — should show `✓ Connected`.
 
 **Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json` macOS, `%APPDATA%\Claude\claude_desktop_config.json` Windows):
 ```json
