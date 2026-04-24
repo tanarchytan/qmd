@@ -1,59 +1,72 @@
 # Lotl TODO — Optimization Phases
 
-> Last updated: 2026-04-23.
+> Last updated: 2026-04-24.
 >
-> **v1.0.0 shipped 2026-04-21.** All pre-release sprints (Phase 6 sweeps,
-> combined-winners #38, #36 adversarial judge, Qwen3 `reasoning_content`
-> patch, LOTL_EVAL_* bridge) landed. Numbers: LME R@5 86.2% / MRR 0.888 /
-> JudgeCorrect 73.8%; LoCoMo R@5 60.0% / MRR 0.467. SNAPSHOTS + CHANGELOG
-> filled at release.
+> **v1.0.0 shipped 2026-04-21.** Numbers: LME R@5 86.2% / MRR 0.888 /
+> JudgeCorrect 73.8%; LoCoMo R@5 60.0% / MRR 0.467.
 >
-> **v1.1 sprint open** — full plan at
-> `~/.claude/plans/i-also-got-these-calm-hedgehog.md`. Thesis: close the
-> ~20pp multi-session R@5 gap vs MemPalace via fact-augmented retrieval.
+> **v1.0.1 shipped 2026-04-24 — polish + hardening release.** Originally
+> scoped as v1.1 (Phase 5 fact-aug thesis) but the S2.2 A/B gate failed
+> (−2pp multi-session R@5 at 76% fact coverage). Phase 5 closed as
+> negative data point; the release became bug-fixes + doc honesty +
+> production hardening from the ~40h sprint.
 >
-> **Reading order:** v1.1 dashboard below → current best → completed
-> phases → historical / backlog.
+> **Reading order:** v1.0.1 sprint summary → post-release backlog → current
+> best → completed phases → historical.
 >
 > ---
 >
-> ## v1.1 sprint dashboard
+> ## v1.0.1 sprint summary (2026-04-23 → 2026-04-24)
 >
-> ### Sprint 1 — housekeeping (open)
->
-> | # | Task | Status |
-> |---|------|--------|
-> | S1.1 | Refresh this TODO to reflect v1.0.0 shipped + v1.1 sprint | **DONE** 2026-04-23 |
-> | S1.2 | #32 llama+qwen re-fire after cache flush | queued — LM Studio required |
-> | S1.3 | `gte-small` n=500 follow-up (Phase 11.8) — **GATE FAIL**: rAny@5 97.8% (need ≥98.4%), MRR 0.912 (need ≥0.917). n=100 lift didn't replicate. mxbai-xs stays default. | **DONE** 2026-04-23 |
-> | S1.4 | LoCoMo golden audit cross-ref ran 2026-04-23 — `evaluate/logs/locomo-audit-20260423.log`. 11 score-corrupting opportunities (not 99); current 67.9% → ceiling 73.5% (+5.6pp). Re-judging the 11 needs LM Studio (deferred until S2.1 done). | partially done |
-> | S1.5 | `lmstudio-rerank` smoke tests (qwen3 reasoning_content, timeout, host-down) — also fixed prod `remote.ts:528` bug that was eval-only before | **DONE** 2026-04-23 |
->
-> ### Sprint 2 — Phase 5 fact-aug (gated on Sprint 1 clean)
+> ### Sprint 1 — housekeeping (closed)
 >
 > | # | Task | Status |
 > |---|------|--------|
-> | S2.1 | Re-fire `extract-facts-batch.mjs` on LME n=500. **Started 2026-04-23 22:50, paused 22:59 at 47/23867 populated** (23820 remaining). Real bug: `9bee79a` used wrong call shape `{model,dtype}` instead of positional `(model,"q8")` — fixed in `3334380`. DB backed up at `lme-s-mxbai-n500-v17.sqlite.pre-phase5b-20260423.bak`. LLM cache at 345 entries. Resumable by re-running same command — loop skips rows where `fact_text IS NOT NULL`. | **IN PROGRESS** — resume tomorrow |
-> | S2.2 | A/B `EMBED_SOURCE=content` vs `fact` on multi-session bucket | **DECISION GATE** — ≥+2pp R@5 to continue |
-> | S2.3 | Implement `LOTL_MEMORY_EMBED_SOURCE=dual` (3-list RRF) — currently falls back to content silently | deferred until S2.2 passes |
-> | S2.4 | A/B dual vs fact vs content | deferred |
-> | S2.5 | KG re-test with fact-populated triples (`LOTL_MEMORY_KG=on`) | deferred |
+> | S1.1 | Refresh TODO to reflect v1.0.0 shipped | ✅ DONE |
+> | S1.2 | #32 llama+qwen re-fire after cache flush | deferred post-v1.0.1 |
+> | S1.3 | `gte-small` n=500 follow-up (Phase 11.8) — **GATE FAIL**: rAny@5 97.8% (need ≥98.4%), MRR 0.912 (need ≥0.917) | ✅ DONE (parked mxbai-xs stays default) |
+> | S1.4 | LoCoMo golden audit cross-ref — 11 score-corrupting opportunities (ceiling +5.6pp) | partially done — re-judge deferred |
+> | S1.5 | `lmstudio-rerank` smoke tests + found prod `remote.ts:528` bug | ✅ DONE |
 >
-> ### Sprint 3 — v1.1 release prep
+> ### Sprint 2 — Phase 5 fact-aug (CLOSED NEGATIVE)
 >
 > | # | Task | Status |
 > |---|------|--------|
-> | S3.1 | CHANGELOG + SNAPSHOTS update | queued |
-> | S3.2 | `/release 1.1.0` (user fires) | queued |
+> | S2.1 | Fact extraction on LME n=500 via qwen2.5-1.5b | ✅ 76.1% coverage (18,166 / 23,867 rows); remaining 5,701 structurally too long for qwen context window even at parallel=4 |
+> | S2.2 | A/B `EMBED_SOURCE=content` vs `fact` on multi-session bucket | ❌ **GATE FAIL** — multi-session R@5 90% → 88% (−2pp), every bucket regressed |
+> | S2.3 | Implement `LOTL_MEMORY_EMBED_SOURCE=dual` | cancelled (gate failed) |
+> | S2.4 | A/B dual vs fact vs content | cancelled |
+> | S2.5 | KG re-test with fact-populated triples | cancelled |
 >
-> ### Shipped between v1.0.0 and v1.1 sprint
+> **Why fact-aug failed on our data** (hypothesis, not proven): 24% of rows had no facts (fell back to empty embeds, polluting index); qwen-extracted 1-line facts lost discriminating session context; short facts give vec search less signal than full-session prose. Phase 5 infrastructure (schema, extraction script, `LOTL_MEMORY_EMBED_SOURCE` plumbing) remains in the codebase for future experiments with different extraction strategies or embedders. KG triples (57k extracted) stored in the populated DB as a reference data point.
 >
-> | Date | Change | Commit |
-> |---|---|---|
-> | 2026-04-23 | OpenClaw plugin: wire `qmd_memory_push_pack` / `_recall_tiered` / `_reflect` tools (MCP server already had them; plugin surface was missing) | `0a501d9` |
-> | 2026-04-23 | `phase6-watchdog.sh`: `IMAGENAME eq bash.exe` filter to stop PID-recycle false positives | `0a501d9` |
-> | 2026-04-23 | LMStudio default host localhost (was 10.0.0.116, prior 113, prior 105) — override via `LOTL_LMSTUDIO_HOST` in `~/.config/lotl/.env` | `83bc7a1` |
-> | 2026-04-23 | `RemoteLLM.rerank()` LLM chat path: fall back to `message.reasoning_content` for Qwen3 thinking models. Eval harness was patched 2026-04-21; production path missed the same fix until now. `test/lmstudio-rerank.test.ts` smoke tests added. | `006bde3` |
+> ### Sprint 3 — v1.0.1 release prep
+>
+> | # | Task | Status |
+> |---|------|--------|
+> | S3.1 | CHANGELOG + SNAPSHOTS update with gate-fail result | ✅ DONE |
+> | S3.2 | Code refactor / one-over for optimization | ✅ DONE |
+> | S3.3 | `scripts/release.sh 1.0.1` | ✅ DONE |
+> | S3.4 | Push to main + dev + tags | ✅ DONE |
+>
+> ### Shipped in v1.0.1
+>
+> See `CHANGELOG.md` for the full list. Highlights:
+>
+> | Class | Item |
+> |---|---|
+> | Production bug fix | 3 sites in `src/llm/remote.ts` missing `reasoning_content` fallback for Qwen3 thinking models (rerank + expandQuery + chatComplete) |
+> | Production bug fix | `extract-facts-batch.mjs` called `createTransformersEmbedBackend({object})` instead of positional args — crashed in `pathJoin` deep in transformers.js |
+> | Production bug fix | `phase6-watchdog.sh` PID-recycle false positives (missing IMAGENAME filter) |
+> | Feature | Silent-fallback warn-once helper in `src/store/search.ts` (`LOTL_QUIET_FALLBACK=1` suppresses) |
+> | Feature | MCP `knowledge_search` now accepts optional `scope` filter |
+> | Feature | OpenClaw plugin: wire `qmd_memory_push_pack` / `_recall_tiered` / `_reflect` tools (MCP server had these since 2026-04-17; plugin surface was missing) |
+> | Feature | `extract-facts-batch.mjs` parallelized via Promise.all chunks + undici connection pooling |
+> | Security | `vite^7.3.2` override (GHSA path traversal + fs.deny bypass + WebSocket file read) |
+> | DevUX | LMStudio default host `localhost:1234` (was IP-hardcoded, drifted 3× in as many weeks) |
+> | Docs | README, ARCHITECTURE, EVAL, SYNTAX, SKILL, CHANGELOG refresh — Phase-6 hardcodes, qmd→lotl CLI rename, silent-fallback behaviour documented |
+> | Tests | `test/lmstudio-rerank.test.ts` (4 cases) + `test/silent-fallback-warnings.test.ts` (4 cases) |
+> | Eval data | `gte-small` n=500 parked (gate fail); Phase 5b fact-aug parked (gate fail); LoCoMo golden audit cross-ref run (+5.6pp theoretical ceiling identified) |
 
 ---
 

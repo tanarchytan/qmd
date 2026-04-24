@@ -312,6 +312,95 @@ node evaluate/scripts/adversarial-rejudge.mjs evaluate/longmemeval/results-phase
 
 ---
 
+## v1.0.1 — Phase 5 fact-aug A/B (gate fail, 2026-04-24)
+
+Phase 5b's thesis: extracting atomic facts per memory via LLM and embedding
+the facts instead of raw session text should close the ~20pp multi-session
+R@5 gap vs MemPalace. Infrastructure (`fact_text` + `fact_embedding` columns,
+`memories_vec_fact` virtual table, `LOTL_MEMORY_EMBED_SOURCE=fact` routing)
+shipped with v1.0.0. v1.0.1 measured whether the thesis holds.
+
+### Fact extraction — qwen2.5-1.5b-instruct @ parallel=8
+
+Extraction run over `lme-s-mxbai-n500-v17.sqlite` (23,867 memory rows):
+
+- 18,166 rows populated with `fact_text` + `fact_embedding` (**76.1% coverage**)
+- 57,031 knowledge-graph triples extracted as a side product
+- 5,701 rows remain NULL — structurally too long to fit gemma-4-e2b / qwen
+  context window even with `LOTL_EXTRACT_MAX_INPUT_CHARS=5000` and per-slot
+  context of 8192 tokens (per-slot shrinks with LM Studio `parallel`)
+
+Earlier gemma-4-e4b attempts (first few thousand rows) were slower (15s/call
+vs qwen's ~1s) and produced less reliable JSON; qwen2.5-1.5b-instruct was the
+right tool for this batch workload.
+
+### A/B: `LOTL_MEMORY_EMBED_SOURCE=content` vs `=fact` (LME n=500, no-LLM)
+
+Same DB, same query set, same `LOTL_RECALL_RAW=on`, `LOTL_INGEST_*=off`.
+Single env var swap.
+
+| Bucket | content (baseline) | fact (new) | Δ |
+|---|---|---|---|
+| Overall rAny@5 | 97.6% | 97.0% | −0.6pp |
+| Overall R@5 | 93.1% | 92.0% | −1.1pp |
+| Overall MRR | 0.917 | 0.898 | −0.019 |
+| **multi-session R@5 (gate bucket)** | **90%** | **88%** | **−2pp** ❌ |
+| multi-session MRR | 0.943 | 0.928 | −0.015 |
+| single-session-preference R@5 | 90% | 80% | **−10pp** |
+| knowledge-update R@5 | 97% | 96% | −1pp |
+
+Gate required **≥+2pp R@5 on multi-session**. Got **−2pp**. Thesis does not
+hold on LME-s with mxbai-xs + qwen-extracted facts.
+
+### Why it regressed (hypotheses, not proven)
+
+1. **24% of rows had no facts.** Extraction coverage at 76% means the index
+   has a mix of fact-embeddings and content-fallbacks — internally inconsistent,
+   hurts vec-distance comparisons.
+2. **1-line facts lose context.** qwen's compact extractions lose the session
+   prose that mxbai-xs leverages for distinctive cosine neighborhoods.
+3. **Short text → less vec signal.** A 15-word fact embedding is closer to
+   other 15-word fact embeddings than the underlying content would be.
+4. **Preference bucket (−10pp) confirms point 2** — preferences rely on
+   subtle phrasing that fact-compression flattens.
+
+### What stays shipped
+
+Fact-aug infrastructure remains in-tree for future experiments:
+- Schema columns + vec table (zero cost when `EMBED_SOURCE=content`)
+- Fact-extractor prompt + parser (`src/memory/fact-extractor.ts`)
+- Parallel extraction runner (`evaluate/scripts/extract-facts-batch.mjs`)
+- `LOTL_MEMORY_EMBED_SOURCE` routing (silently falls back to content when
+  `memories_vec_fact` table absent)
+
+Revisit only with: (a) better extraction model (SOTA JSON generator), or
+(b) dual-list RRF over content+fact (not implemented — was gated on this gate).
+
+Reproducer:
+```sh
+# 1. Populate facts (LM Studio + qwen2.5-1.5b-instruct or similar)
+LOTL_LMSTUDIO_HOST=<host>:<port> LOTL_LMSTUDIO_GEN_MODEL=qwen2.5-1.5b-instruct \
+  LOTL_EXTRACT_PARALLEL=8 LOTL_EXTRACT_MAX_TOKENS=512 \
+  LOTL_EMBED_BACKEND=transformers LOTL_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
+  LOTL_EXTRACT_MAX_INPUT_CHARS=10000 \
+  npx tsx evaluate/scripts/extract-facts-batch.mjs \
+    evaluate/longmemeval/dbs/lme-s-mxbai-n500-v17.sqlite --provider lmstudio
+
+# 2. A/B the retrieval source
+for src in content fact; do
+  LOTL_MEMORY_EMBED_SOURCE=$src LOTL_RECALL_RAW=on \
+    LOTL_INGEST_EXTRACTION=off LOTL_INGEST_REFLECTIONS=off \
+    LOTL_INGEST_SYNTHESIS=off LOTL_INGEST_PER_TURN=off \
+    LOTL_VEC_MIN_SIM=0.1 \
+    LOTL_EMBED_BACKEND=transformers LOTL_TRANSFORMERS_EMBED=mixedbread-ai/mxbai-embed-xsmall-v1 \
+    LOTL_TRANSFORMERS_DTYPE=q8 \
+    npx tsx evaluate/longmemeval/eval.mts --ds s --limit 500 --no-llm \
+      --workers 2 --db-suffix mxbai-n500-v17 --tag fact-ab-$src
+done
+```
+
+---
+
 ## Honest-eval principles applied
 
 See [`locomo/HYBRID_HARNESS.md`](./locomo/HYBRID_HARNESS.md) for the full audit
