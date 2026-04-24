@@ -84,6 +84,7 @@
     "@types/node": "^22.0.0",
     "@types/picomatch": "^4.0.3",
     "tsx": "4.21.0",
+    "undici": "^8.1.0",
     "vitest": "3.2.4"
   },
   "pnpm": {
