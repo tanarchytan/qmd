@@ -15,61 +15,111 @@
   module-scoped Set so it fires once per process, not per query.
   `LOTL_QUIET_FALLBACK=1` suppresses (eval harness intentionally runs
   in no-backend baseline mode and doesn't need the noise).
+- **MCP `knowledge_search` optional `scope` filter** — `knowledgeQuery`
+  already supported scope narrowing; the MCP tool schema now exposes it.
+  Default behaviour unchanged (cross-scope when omitted).
 - **`test/lmstudio-rerank.test.ts`** — smoke tests for the OpenAI-shim
-  rerank path: normal content response, Qwen3 `reasoning_content`
-  fallback, timeout, host-unreachable.
+  chat paths: rerank (normal content, Qwen3 `reasoning_content`
+  fallback, timeout, host-unreachable), expandQuery reasoning_content,
+  chatComplete reasoning_content. 6 cases.
 - **`test/silent-fallback-warnings.test.ts`** — 4 cases covering rerank
   warn-once, dedupe across repeated calls, `LOTL_QUIET_FALLBACK`
   suppression, and expand-query warn path.
+- **`extract-facts-batch.mjs` parallel mode** — new
+  `LOTL_EXTRACT_PARALLEL` env var (default 8) fires concurrent LLM
+  calls via chunked `Promise.all`. Also wires undici keep-alive Agent
+  (16 pooled connections) to prevent socket churn — sustained parallel
+  fetches otherwise exhaust Windows' ephemeral port range and can wedge
+  the NIC driver. Observed live 2026-04-24 during the v1.0.1 fact
+  extraction batch.
+- **`extract-facts-batch.mjs` `LOTL_EXTRACT_MAX_TOKENS` env var**
+  (default 512) — lets callers bump the output budget for thinking
+  models that burn tokens on chain-of-thought before emitting JSON
+  (gemma-4-e2b needed 2048 to complete).
 
 ### Fixed
 
-- **`src/llm/remote.ts` LLM-chat rerank path** missed the same Qwen3
-  `reasoning_content` fallback that the eval harness got in v1.0.0.
-  Production path read only `message.content`, so qwen3 thinking models
-  produced silent empty reranks with no error. Fix mirrors the eval-
-  harness pattern: `content || reasoning_content`.
-- **`evaluate/scripts/extract-facts-batch.mjs`** — the post-v1.0.0
-  "9bee79a fix" called `createTransformersEmbedBackend({model,dtype})`,
-  but the function signature is positional `(model, dtype, fileName,
-  device)`. The object got smuggled into `pipeline()`'s `modelId` slot
-  and crashed deep in `@huggingface/transformers`' `pathJoin` with
-  `part.replace is not a function`. Only surfaced on rows with
-  non-empty facts (first row to trigger embedder creation), making it
-  look intermittent. Positional fix + widened catch-block stack trace
-  so the next silent transformers.js failure surfaces properly.
+- **`src/llm/remote.ts` missing `reasoning_content` fallback on 3
+  production code paths.** The eval harness was patched across 6 sites
+  for the Qwen3 thinking-model bug at v1.0.0 but three equivalents in
+  production missed the same fix:
+  1. LLM-chat `rerank` (line 528) — qwen3 rerank returned silent empty
+     results.
+  2. `expandQuery` (line 371) — had `enable_thinking:false` but no
+     matching `reasoning_content` fallback. Half-fix.
+  3. `chatComplete` (line 448) — the general-purpose LLM channel used
+     by memory extraction. No handling at all.
+  All three now fall back to `msg.reasoning_content` when `content` is
+  empty. Test coverage added.
+- **`evaluate/scripts/extract-facts-batch.mjs` positional-args bug.**
+  The post-v1.0.0 "9bee79a fix" called
+  `createTransformersEmbedBackend({model,dtype})` but the function
+  signature is positional `(model, dtype, fileName, device)`. The
+  object got smuggled into `pipeline()`'s `modelId` slot and crashed
+  deep in `@huggingface/transformers`' `pathJoin` with
+  `part.replace is not a function`. Only surfaced on rows with non-empty
+  facts (first row to trigger embedder creation), making it look
+  intermittent. Positional fix + widened catch-block stack trace so
+  future silent transformers.js failures surface with a real stack.
 - **`evaluate/scripts/phase6-watchdog.sh` PID-recycle** — `tasklist`
-  filter now includes `IMAGENAME eq bash.exe` so recycled PIDs reassigned
-  to non-bash processes don't fake a live watchdog. Caught live 2026-04-21
-  when 2x watchdog fires left 16 eval.mts processes.
+  filter now includes `IMAGENAME eq bash.exe` so recycled PIDs
+  reassigned to non-bash processes don't fake a live watchdog. Caught
+  live 2026-04-21 when 2× watchdog fires left 16 eval.mts processes.
 
 ### Changed
 
 - **`LOTL_LMSTUDIO_HOST` default → `localhost:1234`** across the eval
   harness (previously `10.0.0.116:1234`, prior `10.0.0.113:1234`, prior
-  `10.0.0.105:1234`). This was the third bulk source-code rename chasing
-  a DHCP-drifting host in as many weeks. Users on a remote LM Studio
-  box set the override in `~/.config/lotl/.env` once and stop eating
-  commits when their DHCP lease rotates.
-- **README RRF defaults** refreshed to match Phase-6 hardcodes: fusion
-  weights 0.8/0.2 (from 0.9/0.1), rerank blend flat 0.5/0.5 (from
-  position-aware 75/25 → 60/40 → 40/60), synonyms hardcoded off. The
-  README was last touched pre-Phase-6 and drifted over the v1.0.0 ship.
+  `10.0.0.105:1234`). This was the third bulk source-code rename
+  chasing a DHCP-drifting host in as many weeks. Users on a remote LM
+  Studio box set the override in `~/.config/lotl/.env` once and stop
+  eating commits when their DHCP lease rotates.
+- **Documentation honesty pass** across README, `docs/ARCHITECTURE.md`,
+  `docs/EVAL.md`, `docs/SYNTAX.md`, `skills/lotl/SKILL.md`,
+  `skills/lotl/references/mcp-setup.md`:
+  - RRF weights `0.9/0.1` → `0.8/0.2` (Phase 6 hardcode).
+  - Rerank blend position-aware `75/25 → 60/40 → 40/60` → flat `0.5/0.5`.
+  - `LOTL_MEMORY_SYNONYMS` documented on → hardcoded off.
+  - Stale `qmd <command>` CLI invocations → `lotl <command>` (CLI alias
+    dropped at v1.0.0). ~37 occurrences in user-facing docs.
+- **`devnotes/architecture/env-flag-polarity-reference.md`** header
+  flagged as pre-v1.0.0 with pointer to `git grep` for canonical
+  post-cleanup env var list.
+
+### Security
+
+- **`vite` bumped to `^7.3.2`** via `overrides` in `package.json` —
+  resolves GHSA-4w7w-66w2-5vf9 (path traversal in optimized deps
+  `.map`), GHSA-v2wj-q39q-566r (`server.fs.deny` query bypass), and
+  GHSA-p9ff-h696-f583 (arbitrary file read via dev server WebSocket).
+  Vite is a transitive devDep of vitest; override holds the fix in
+  source without bumping vitest itself (exact-pinned at 3.2.4).
+- **Upstream 2026-04-23 audit closed** — one pick (`3023ab3` security
+  deps partial), one skip (`e8de7ca` status device probe — LlamaCpp
+  surface we removed in 2026-04-13 cleanup, not applicable).
 
 ### Eval
 
-- **Phase 11.8 gte-small n=500 follow-up** — gate fail: rAny@5 97.8%
-  (floor 98.4%) and MRR 0.912 (floor 0.917). The n=100 +0.4pp MRR
-  didn't replicate at n=500. mxbai-xs q8 stays production default.
-  Lesson: future Phase 11 candidates should gate at n=500 directly;
-  n=100 can't discriminate near-tied embedders at this MRR ceiling.
-- **LoCoMo golden audit cross-ref** executed against v1.0.0 release
-  numbers (`results-phase-b-locomo-v14-gemma-pass2.json`). 11
-  score-corrupting opportunities identified (not 99 as the release
-  plan assumed — the 99 count was from dial481/locomo-audit's total
-  errors before filtering against our matched rows). Theoretical
-  ceiling 73.5% (+5.6pp) if all 11 corrected. Re-judging the 11
-  against corrected gold text deferred until LM Studio is free.
+- **Phase 11.8 gte-small n=500 follow-up — GATE FAIL.** rAny@5 97.8%
+  (floor 98.4%), MRR 0.912 (floor 0.917). The n=100 +0.4pp MRR didn't
+  replicate at n=500. mxbai-xs q8 stays production default. Lesson:
+  future Phase 11 candidates should gate at n=500 directly; n=100
+  can't discriminate near-tied embedders at this MRR ceiling.
+- **Phase 5b fact-augmented retrieval A/B — GATE FAIL (CLOSED NEGATIVE).**
+  Extracted facts into 76.1% of LME memory rows (18,166 / 23,867)
+  using qwen2.5-1.5b-instruct via LM Studio with the new parallel
+  extraction pipeline. Plus 57,031 KG triples as a side product.
+  Ran `LOTL_MEMORY_EMBED_SOURCE=fact` vs `=content` at n=500. Result:
+  multi-session R@5 90% → 88% (−2pp — the thesis gate required ≥+2pp).
+  Every bucket regressed. Phase 5 closed as negative data point.
+  Infrastructure (`fact_text`/`fact_embedding` columns, `memories_vec_fact`
+  virtual table, fact-extractor prompt template, extraction runner,
+  `LOTL_MEMORY_EMBED_SOURCE` routing) remains in-tree for future
+  experiments with different extraction models / strategies.
+- **LoCoMo golden audit cross-ref.** 11 score-corrupting opportunities
+  identified against the v1.0.0 release numbers (not 99 — the 99 count
+  was total audit errors before filtering for matched rows). Theoretical
+  ceiling 73.5% (+5.6pp). Re-judging the 11 deferred post-v1.0.1.
 
 ## [1.0.0] - 2026-04-21 — 🦎 Lotl GA
 
