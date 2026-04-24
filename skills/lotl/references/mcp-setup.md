@@ -1,16 +1,23 @@
-# QMD Setup Reference
+# Lotl MCP Setup Reference
 
-## Install
+## Quick install (Claude Code) — 2 lines
 
 ```bash
-npm install -g @tanarchy/lotl@dev
+npm install -g @tanarchy/lotl
+claude mcp add lotl lotl mcp --scope user
+```
+
+Restart Claude Code. The 26 tools (`memory_*`, `knowledge_*`, `doc_*`) appear. Verify with `claude mcp list`.
+
+Then index something:
+```bash
 lotl collection add ~/path/to/markdown --name myknowledge
 lotl embed
 ```
 
-## Configure MCP Client
+## Configure MCP Client (manual)
 
-**Claude Code** (`~/.claude/settings.json`):
+**Claude Code** — only if `claude mcp add` is unavailable. Edit `~/.claude.json`:
 ```json
 {
   "mcpServers": {
@@ -19,7 +26,7 @@ lotl embed
 }
 ```
 
-**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+**Claude Desktop** (macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, Windows `%APPDATA%\Claude\claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
