@@ -31,6 +31,20 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
+import { Agent, setGlobalDispatcher } from "undici";
+
+// Connection pooling via undici Agent — reuses TCP connections across calls
+// instead of churning a fresh one per fetch. Without this, the script opens
+// thousands of short-lived connections (1 per LLM call) that accumulate in
+// TIME_WAIT and can exhaust Windows' ephemeral port range (~16k) — at worst
+// destabilizing the NIC driver under sustained parallel load. Symptom
+// observed 2026-04-24: LM Studio hang + host network stack wedged mid-run.
+setGlobalDispatcher(new Agent({
+  keepAliveTimeout: 60_000,
+  keepAliveMaxTimeout: 60_000,
+  connections: 16,
+  pipelining: 1,
+}));
 
 // --- CLI ---
 const args = process.argv.slice(2);
