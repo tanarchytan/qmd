@@ -4,10 +4,15 @@
 
 ```bash
 npm install -g @tanarchy/lotl
+
+# macOS / Linux:
 claude mcp add lotl lotl mcp --scope user
+
+# Windows (Node spawn needs the .cmd extension):
+claude mcp add lotl lotl.cmd mcp --scope user
 ```
 
-Restart Claude Code. The 26 tools (`memory_*`, `knowledge_*`, `doc_*`) appear. Verify with `claude mcp list`.
+Restart Claude Code. The 26 tools (`memory_*`, `knowledge_*`, `doc_*`) appear. Verify with `claude mcp list` — should show `✓ Connected`.
 
 Then index something:
 ```bash

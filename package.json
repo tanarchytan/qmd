@@ -12,11 +12,10 @@
     }
   },
   "bin": {
-    "lotl": "bin/lotl"
+    "lotl": "dist/cli/lotl.js"
   },
   "files": [
     "index.ts",
-    "bin/",
     "dist/",
     "src/",
     "hooks/",
