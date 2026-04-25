@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **CI publish workflow audit step** referenced `bin/lotl` as a required
+  tarball file. v1.0.2's bin fix removed that file (the wrapper sat at
+  `dist/cli/lotl.js` with shebang instead). Audit now checks for the
+  shipped `.js` directly. v1.0.1 + v1.0.2 publish runs failed at this
+  gate before npm publish; v1.0.3 unblocks the pipeline.
+
 ## [1.0.2] - 2026-04-25
 
 ### Fixed
