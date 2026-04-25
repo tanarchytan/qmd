@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-04-25
+
 ### Fixed
 
 - **Windows global install was broken.** `bin/lotl` was a POSIX shell
