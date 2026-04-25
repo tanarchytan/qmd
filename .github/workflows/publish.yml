@@ -79,7 +79,10 @@ jobs:
           npm pack --dry-run 2>&1 | tee /tmp/pack.log
           echo "--- assertions ---"
           # Expected shippable files
-          grep -q "bin/lotl" /tmp/pack.log || { echo "MISSING: bin/lotl"; exit 1; }
+          # NOTE: bin/lotl shell wrapper removed in v1.0.2 — `bin` field in
+          # package.json now points directly at dist/cli/lotl.js (which has
+          # the #!/usr/bin/env node shebang). npm generates correct platform
+          # wrappers from there. Fixes the broken Windows install.
           grep -q "dist/cli/lotl.js" /tmp/pack.log || { echo "MISSING: dist/cli/lotl.js"; exit 1; }
           grep -q "skills/lotl/SKILL.md" /tmp/pack.log || { echo "MISSING: skills/lotl/SKILL.md"; exit 1; }
           grep -q "openclaw.plugin.json" /tmp/pack.log || { echo "MISSING: openclaw.plugin.json"; exit 1; }
