@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-04-25
+
 ### Fixed
 
 - **CI publish workflow audit step** referenced `bin/lotl` as a required
