@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows global install was broken.** `bin/lotl` was a POSIX shell
+  script; npm's auto-generated `lotl.cmd` wrapper called `/bin/sh.exe`
+  to invoke it — that path doesn't exist outside Git Bash / MSYS2.
+  Symptom: `claude mcp add lotl lotl mcp` succeeded but the MCP server
+  silently failed to spawn (`claude mcp list` reported `✗ Failed to
+  connect`). Affected every Windows user installing `@tanarchy/lotl`
+  globally without Git Bash on PATH. `package.json` `bin` now points
+  at `dist/cli/lotl.js` (which already has `#!/usr/bin/env node`
+  shebang from `scripts/build.mjs`); npm generates a proper Windows
+  wrapper that uses `node.exe` directly. `bin/lotl` removed.
+
+### Added
+
+- **`claude mcp add` install path documented** across README, SKILL,
+  and `mcp-setup.md` reference. Replaces the manual `~/.claude.json`
+  edit instructions for Claude Code users — the CLI command does the
+  same thing in one line, including the right scope handling. Manual
+  JSON path retained as fallback for older Claude Code versions.
+  Per-platform note included for the Windows `.cmd` extension quirk
+  in Node `child_process.spawn` (use `lotl.cmd` not `lotl` on Windows).
+
 ## [1.0.1] - 2026-04-24
 
 ### Added
