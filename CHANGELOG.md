@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-04-25
+
+### Fixed
+
+- **CI publish workflow trusted-publishing 404.** Node 22 ships npm v10;
+  npm trusted publishing requires CLI ≥ 11.5.1 for the OIDC handshake.
+  Without it the registry rejects the OIDC token and returns a misleading
+  `404 Not Found - PUT` (npm/cli#9088), even though provenance signing
+  succeeds. Added `npm install -g npm@latest` in the publish job before
+  `npm publish`. No runtime changes — `1.0.4` is identical to `1.0.3`
+  in package contents; this release exists solely to validate the fixed
+  pipeline against npm.
+
 ## [1.0.3] - 2026-04-25
 
 ### Fixed
