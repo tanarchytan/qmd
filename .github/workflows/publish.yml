@@ -139,16 +139,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Node 24 (LTS since Oct 2025) ships npm v11 natively, which is
+      # required for the trusted-publishing OIDC handshake. Avoids the
+      # in-place `npm install -g npm@latest` upgrade that was wedging
+      # publishes whenever the runner's bundled npm or the published
+      # `npm@latest` had transient packaging bugs (e.g. v1.0.5 hit
+      # MODULE_NOT_FOUND on `promise-retry` in Node 22.22.2's bundled npm).
+      # The test/pack-audit/smoke jobs stay on Node 22/23 to keep
+      # validating the install path real consumers use.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
-
-      # Node 22 ships npm v10; trusted publishing OIDC requires npm >= 11.5.1.
-      # Without this, the registry rejects the OIDC handshake and returns a
-      # misleading 404 on PUT (see npm/cli#9088).
-      - name: Upgrade npm to latest (required for trusted publishing)
-        run: npm install -g npm@latest
 
       - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
       - run: npm install
