@@ -12,11 +12,26 @@ const require = createRequire(import.meta.url);
 // Load better-sqlite3 synchronously (CJS package)
 const BetterSqlite3 = require("better-sqlite3");
 
-// Load sqlite-vec synchronously (CJS package, optional)
+// Load sqlite-vec synchronously (CJS package, optional).
+//
+// When loaded as an OpenClaw plugin, createRequire(import.meta.url) resolves
+// from the plugin's dist dir, where sqlite-vec sits as a transitive
+// dependency that Node's resolution can't always reach. Fall back to the
+// host's node_modules (e.g. OpenClaw's own install) before giving up.
 let _sqliteVecLoad: ((db: any) => void) | null = null;
 try {
-  const sqliteVec = require("sqlite-vec");
-  _sqliteVecLoad = (db: any) => sqliteVec.load(db);
+  let sqliteVec: any;
+  try { sqliteVec = require("sqlite-vec"); } catch {}
+  if (!sqliteVec) {
+    try {
+      const path = require("node:path") as typeof import("node:path");
+      const openclawDir = path.dirname(require.resolve("openclaw"));
+      sqliteVec = require(path.join(openclawDir, "node_modules", "sqlite-vec"));
+    } catch {}
+  }
+  if (sqliteVec) {
+    _sqliteVecLoad = (db: any) => sqliteVec.load(db);
+  }
 } catch {
   // sqlite-vec is optional — vector search won't work but FTS is fine
   _sqliteVecLoad = null;

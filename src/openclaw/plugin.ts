@@ -111,8 +111,8 @@ function applyConfigToEnv(cfg: QmdPluginConfig): void {
 function getDb(config: QmdPluginConfig) {
   const dbPath = config.dbPath || (
     process.env.XDG_CACHE_HOME
-      ? `${process.env.XDG_CACHE_HOME}/qmd/index.sqlite`
-      : `${process.env.HOME || process.env.USERPROFILE}/.cache/qmd/index.sqlite`
+      ? `${process.env.XDG_CACHE_HOME}/lotl/index.sqlite`
+      : `${process.env.HOME || process.env.USERPROFILE}/.cache/lotl/index.sqlite`
   );
   const db = openDatabase(dbPath);
   try { loadSqliteVec(db); } catch {}
@@ -128,7 +128,7 @@ const qmdPlugin = definePluginEntry({
   name: "Tanarchy QMD",
   description: "Document search + conversation memory + knowledge graph powered by QMD",
 
-  async register(api: OpenClawPluginApi) {
+  register(api: OpenClawPluginApi) {
     const rawConfig = api.pluginConfig as Partial<QmdPluginConfig> | undefined;
     const cfg: QmdPluginConfig = { ...DEFAULT_CONFIG, ...rawConfig };
 
@@ -260,7 +260,7 @@ const qmdPlugin = definePluginEntry({
 
           // 1. Ingest session corpus files with cursor checkpointing
           const corpusDir = `${process.env.HOME || process.env.USERPROFILE}/.openclaw/memory/.dreams/session-corpus`;
-          const cursorPath = `${process.env.HOME || process.env.USERPROFILE}/.config/qmd/dream-ingestion.json`;
+          const cursorPath = `${process.env.HOME || process.env.USERPROFILE}/.config/lotl/dream-ingestion.json`;
           try {
             const { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync } = await import("node:fs");
             const { dirname } = await import("node:path");
@@ -347,7 +347,7 @@ const qmdPlugin = definePluginEntry({
 
     const tools = [
       {
-        name: "qmd_memory_add",
+        name: "lotl_memory_add",
         description: "Store a memory with auto-dedup and auto-classification",
         parameters: { type: "object", properties: { text: { type: "string" }, category: { type: "string" }, importance: { type: "number" } }, required: ["text"] },
         execute: async (_id: string, params: any) => {
@@ -357,7 +357,7 @@ const qmdPlugin = definePluginEntry({
         },
       },
       {
-        name: "qmd_memory_search",
+        name: "lotl_memory_search",
         description: "Search memories by natural language",
         parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "number" } }, required: ["query"] },
         execute: async (_id: string, params: any) => {
@@ -369,7 +369,7 @@ const qmdPlugin = definePluginEntry({
         },
       },
       {
-        name: "qmd_memory_delete",
+        name: "lotl_memory_delete",
         description: "Delete a memory by ID",
         parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
         execute: async (_id: string, params: any) => {
@@ -378,7 +378,7 @@ const qmdPlugin = definePluginEntry({
         },
       },
       {
-        name: "qmd_memory_extract",
+        name: "lotl_memory_extract",
         description: "Extract memories from conversation text",
         parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
         execute: async (_id: string, params: any) => {
@@ -387,7 +387,7 @@ const qmdPlugin = definePluginEntry({
         },
       },
       {
-        name: "qmd_knowledge_add",
+        name: "lotl_knowledge_add",
         description: "Store a temporal fact (auto-invalidates conflicts)",
         parameters: { type: "object", properties: { subject: { type: "string" }, predicate: { type: "string" }, object: { type: "string" } }, required: ["subject", "predicate", "object"] },
         execute: async (_id: string, params: any) => {
@@ -399,7 +399,7 @@ const qmdPlugin = definePluginEntry({
         },
       },
       {
-        name: "qmd_knowledge_search",
+        name: "lotl_knowledge_search",
         description: "Query the knowledge graph",
         parameters: { type: "object", properties: { subject: { type: "string" }, predicate: { type: "string" } } },
         execute: async (_id: string, params: any) => {
@@ -411,7 +411,7 @@ const qmdPlugin = definePluginEntry({
         },
       },
       {
-        name: "qmd_memory_stats",
+        name: "lotl_memory_stats",
         description: "Memory statistics by tier, category, scope",
         parameters: { type: "object", properties: {} },
         execute: async () => {
@@ -420,7 +420,7 @@ const qmdPlugin = definePluginEntry({
         },
       },
       {
-        name: "qmd_memory_push_pack",
+        name: "lotl_memory_push_pack",
         description: "Session-start memory primer — returns core + important-recent + hot-tail memories for scope",
         parameters: { type: "object", properties: { windowDays: { type: "number" }, maxEntries: { type: "number" }, minImportance: { type: "number" } } },
         execute: async (_id: string, params: any) => {
@@ -431,7 +431,7 @@ const qmdPlugin = definePluginEntry({
         },
       },
       {
-        name: "qmd_memory_recall_tiered",
+        name: "lotl_memory_recall_tiered",
         description: "Recall memories from a specific tier (core, working, peripheral)",
         parameters: { type: "object", properties: { query: { type: "string" }, tier: { type: "string" }, limit: { type: "number" }, perTierLimit: { type: "number" } }, required: ["query"] },
         execute: async (_id: string, params: any) => {
@@ -443,7 +443,7 @@ const qmdPlugin = definePluginEntry({
         },
       },
       {
-        name: "qmd_memory_reflect",
+        name: "lotl_memory_reflect",
         description: "Ask a question and get a facts-only answer synthesized from recent memories",
         parameters: { type: "object", properties: { question: { type: "string" }, maxFacts: { type: "number" } }, required: ["question"] },
         execute: async (_id: string, params: any) => {

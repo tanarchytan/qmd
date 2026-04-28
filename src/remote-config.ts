@@ -2,10 +2,10 @@
  * remote-config.ts - Build RemoteLLMConfig from environment variables.
  *
  * Each operation reads 4 vars:
- *   QMD_{OP}_PROVIDER=  local | api | url | gemini
- *   QMD_{OP}_API_KEY=   Bearer token
- *   QMD_{OP}_URL=       base URL (api/gemini) or full endpoint (url)
- *   QMD_{OP}_MODEL=     model name
+ *   LOTL_{OP}_PROVIDER=  local | api | url | gemini
+ *   LOTL_{OP}_API_KEY=   Bearer token
+ *   LOTL_{OP}_URL=       base URL (api/gemini) or full endpoint (url)
+ *   LOTL_{OP}_MODEL=     model name
  *
  * Shorthand aliases (set provider + default URL automatically):
  *   siliconflow → api  + https://api.siliconflow.cn/v1
@@ -26,14 +26,14 @@ const ZE_DEFAULT_URLS: Record<OpName, string> = {
 };
 
 function resolveOp(op: OpName): OperationConfig | null {
-  const providerRaw = process.env[`QMD_${op}_PROVIDER`];
+  const providerRaw = process.env[`LOTL_${op}_PROVIDER`];
   if (!providerRaw || providerRaw === 'local') return null;
 
-  const apiKey = process.env[`QMD_${op}_API_KEY`];
+  const apiKey = process.env[`LOTL_${op}_API_KEY`];
   if (!apiKey) return null;
 
-  let url = process.env[`QMD_${op}_URL`];
-  const model = process.env[`QMD_${op}_MODEL`];
+  let url = process.env[`LOTL_${op}_URL`];
+  const model = process.env[`LOTL_${op}_MODEL`];
   let resolvedProvider: OperationProvider;
 
   switch (providerRaw) {
@@ -64,7 +64,7 @@ function resolveOp(op: OpName): OperationConfig | null {
       resolvedProvider = 'url';
       break;
     default:
-      process.stderr.write(`Warning: unknown provider "${providerRaw}" for QMD_${op}_PROVIDER, treating as "api".\n`);
+      process.stderr.write(`Warning: unknown provider "${providerRaw}" for LOTL_${op}_PROVIDER, treating as "api".\n`);
       resolvedProvider = 'api';
   }
 
