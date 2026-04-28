@@ -1,6 +1,6 @@
 {
   "name": "@tanarchy/lotl",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Lotl — Living-off-the-Land memory for AI agents. BM25 + vector RRF fusion + LLM rerank + temporal knowledge graph, on top of SQLite-vec and local ONNX. No infra, no LLM required.",
   "type": "module",
   "main": "dist/index.js",

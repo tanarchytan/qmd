@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-04-28
+
+### Fixed
+
+- **CI publish workflow could not run on the GitHub-hosted runner.** The
+  `npm install -g npm@latest` step added in v1.0.4 worked while the
+  runner's bundled npm was healthy, but the runner's Node 22.22.2
+  toolcache started shipping a bundled npm that was itself missing
+  `promise-retry` (`MODULE_NOT_FOUND` from `@npmcli/arborist/rebuild.js`),
+  so the in-place upgrade couldn't even start. v1.0.5 was tagged but
+  never reached the registry because the publish job died at this step.
+
+  Switched the publish job to **Node 24** (LTS since Oct 2025), which
+  ships npm v11 natively — no in-place upgrade needed, no moving target
+  on `npm@latest`. The test, pack-audit, and smoke jobs stay on Node
+  22/23 to keep validating the install path real consumers run on.
+
+  Package contents are identical to v1.0.5; this release exists solely
+  to actually deliver the v1.0.5 plugin fixes to npm.
+
 ## [1.0.5] - 2026-04-28
 
 ### Fixed
