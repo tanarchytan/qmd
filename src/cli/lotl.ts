@@ -1,5 +1,5 @@
-import { loadQmdEnv } from "../env.js";
-loadQmdEnv();
+import { loadLotlEnv } from "../env.js";
+loadLotlEnv();
 
 import { openDatabase } from "../db.js";
 import type { Database } from "../db.js";
@@ -108,7 +108,7 @@ import {
   setConfigIndexName,
   loadConfig,
 } from "../collections.js";
-import { getEmbeddedQmdSkillContent, getEmbeddedQmdSkillFiles } from "../embedded-skills.js";
+import { getEmbeddedLotlSkillContent, getEmbeddedLotlSkillFiles } from "../embedded-skills.js";
 import { getRemoteConfig } from "../remote-config.js";
 import { memoryStore, memoryRecall, memoryForget, memoryStats, extractAndStore, runDecayPass, importConversation, exportMemories, importMemories, runCleanupPass, runReflectionPass } from "../memory/index.js";
 
@@ -176,7 +176,7 @@ async function showStatus(): Promise<void> {
     version = JSON.parse(readFileSync(pkgPath, "utf-8")).version ?? "unknown";
   } catch {}
 
-  console.log(`${c.bold}QMD Status${c.reset}  v${version}\n`);
+  console.log(`${c.bold}Lotl Status${c.reset}  v${version}\n`);
   console.log(`Index: ${dbPath}`);
   console.log(`Size:  ${formatBytes(indexSize)}`);
 
@@ -1421,7 +1421,7 @@ function outputResults(results: OutputRow[], query: string, opts: OutputOptions)
   }
 
   // Helper to create lotl:// URI from displayPath
-  const toQmdPath = (displayPath: string) => `lotl://${displayPath}`;
+  const toLotlPath = (displayPath: string) => `lotl://${displayPath}`;
 
   if (opts.format === "json") {
     // JSON output for LLM consumption (upstream tobi/qmd 17074ea: include line field)
@@ -1437,7 +1437,7 @@ function outputResults(results: OutputRow[], query: string, opts: OutputOptions)
       return {
         ...(docid && { docid: `#${docid}` }),
         score: Math.round(row.score * 100) / 100,
-        file: toQmdPath(row.displayPath),
+        file: toLotlPath(row.displayPath),
         ...(snippetInfo && { line: snippetInfo.line }),
         title: row.title,
         ...(row.context && { context: row.context }),
@@ -1452,7 +1452,7 @@ function outputResults(results: OutputRow[], query: string, opts: OutputOptions)
     for (const row of filtered) {
       const docid = row.docid || (row.hash ? row.hash.slice(0, 6) : "");
       const ctx = row.context ? `,"${row.context.replace(/"/g, '""')}"` : "";
-      console.log(`#${docid},${row.score.toFixed(2)},${toQmdPath(row.displayPath)}${ctx}`);
+      console.log(`#${docid},${row.score.toFixed(2)},${toLotlPath(row.displayPath)}${ctx}`);
     }
   } else if (opts.format === "cli") {
     const editorUriTemplate = getEditorUriTemplate();
@@ -1465,11 +1465,11 @@ function outputResults(results: OutputRow[], query: string, opts: OutputOptions)
       const docid = row.docid || (row.hash ? row.hash.slice(0, 6) : undefined);
 
       // Line 1: filepath with docid
-      const virtualPath = row.file.startsWith("lotl://") ? row.file : toQmdPath(row.displayPath);
+      const virtualPath = row.file.startsWith("lotl://") ? row.file : toLotlPath(row.displayPath);
       const parsed = parseVirtualPath(virtualPath);
       const absolutePath = resolveVirtualPath(linkDb, virtualPath);
 
-      const legacyPath = toQmdPath(row.displayPath);
+      const legacyPath = toLotlPath(row.displayPath);
       const displayPath = parsed?.path || row.displayPath;
 
       // Only show :line if we actually found a term match in the snippet body (exclude header line).
@@ -1555,7 +1555,7 @@ function outputResults(results: OutputRow[], query: string, opts: OutputOptions)
       if (opts.lineNumbers) {
         content = addLineNumbers(content);
       }
-      console.log(`<file docid="#${docid}" name="${toQmdPath(row.displayPath)}"${titleAttr}${contextAttr}>\n${content}\n</file>\n`);
+      console.log(`<file docid="#${docid}" name="${toLotlPath(row.displayPath)}"${titleAttr}${contextAttr}>\n${content}\n</file>\n`);
     }
   } else {
     // CSV format
@@ -1568,7 +1568,7 @@ function outputResults(results: OutputRow[], query: string, opts: OutputOptions)
       }
       const docid = row.docid || (row.hash ? row.hash.slice(0, 6) : "");
       const snippetText = content || "";
-      console.log(`#${docid},${row.score.toFixed(4)},${escapeCSV(toQmdPath(row.displayPath))},${escapeCSV(row.title || "")},${escapeCSV(row.context || "")},${line},${escapeCSV(snippetText)}`);
+      console.log(`#${docid},${row.score.toFixed(4)},${escapeCSV(toLotlPath(row.displayPath))},${escapeCSV(row.title || "")},${escapeCSV(row.context || "")},${line},${escapeCSV(snippetText)}`);
     }
   }
 }
@@ -2434,7 +2434,7 @@ if (isMain) {
           process.kill(pid, 0); // alive?
           process.kill(pid, "SIGTERM");
           unlinkSync(pidPath);
-          console.log(`Stopped QMD MCP server (PID ${pid}).`);
+          console.log(`Stopped Lotl MCP server (PID ${pid}).`);
         } catch {
           unlinkSync(pidPath);
           console.log("Cleaned up stale PID file (server was not running).");

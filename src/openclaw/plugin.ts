@@ -1,7 +1,7 @@
 /**
- * openclaw/plugin.ts — QMD memory + knowledge plugin for OpenClaw.
+ * openclaw/plugin.ts — Lotl memory + knowledge plugin for OpenClaw.
  *
- * IMPORTANT: OpenClaw already has built-in QMD support as a memory backend
+ * IMPORTANT: OpenClaw already has built-in Lotl support as a memory backend
  * (memory.backend = "qmd"). That handles document search, indexing, and
  * session transcript export automatically.
  *
@@ -13,7 +13,7 @@
  * - Dream consolidation: decay pass + session corpus ingestion
  *
  * Use both together:
- *   memory.backend = "qmd"          ← built-in document search
+ *   memory.backend = "qmd"           ← built-in document search
  *   plugins.tanarchy-lotl.enabled    ← this plugin for memory + knowledge
  *
  * Install: openclaw plugins install @tanarchy/lotl
@@ -31,7 +31,7 @@
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { loadQmdEnv } from "../env.js";
+import { loadLotlEnv } from "../env.js";
 import { openDatabase, loadSqliteVec } from "../db.js";
 import {
   memoryStore, memoryRecall, memoryForget, memoryUpdate, memoryStats,
@@ -53,7 +53,7 @@ interface ProviderConfig {
   mode?: string;
 }
 
-interface QmdPluginConfig {
+interface LotlPluginConfig {
   autoRecall: boolean;
   autoCapture: boolean;
   topK: number;
@@ -64,7 +64,7 @@ interface QmdPluginConfig {
   queryExpansion?: ProviderConfig;
 }
 
-const DEFAULT_CONFIG: QmdPluginConfig = {
+const DEFAULT_CONFIG: LotlPluginConfig = {
   autoRecall: true,
   autoCapture: true,
   topK: 5,
@@ -76,10 +76,10 @@ const DEFAULT_CONFIG: QmdPluginConfig = {
 // =============================================================================
 
 /**
- * Map openclaw.json plugin config to QMD_* environment variables.
- * Called AFTER loadQmdEnv() so plugin config wins over .env file.
+ * Map openclaw.json plugin config to LOTL_* environment variables.
+ * Called AFTER loadLotlEnv() so plugin config wins over .env file.
  */
-function applyConfigToEnv(cfg: QmdPluginConfig): void {
+function applyConfigToEnv(cfg: LotlPluginConfig): void {
   if (cfg.embed) {
     if (cfg.embed.provider) process.env.LOTL_EMBED_PROVIDER = cfg.embed.provider;
     if (cfg.embed.apiKey) process.env.LOTL_EMBED_API_KEY = cfg.embed.apiKey;
@@ -108,7 +108,7 @@ function applyConfigToEnv(cfg: QmdPluginConfig): void {
 // Database
 // =============================================================================
 
-function getDb(config: QmdPluginConfig) {
+function getDb(config: LotlPluginConfig) {
   const dbPath = config.dbPath || (
     process.env.XDG_CACHE_HOME
       ? `${process.env.XDG_CACHE_HOME}/lotl/index.sqlite`
@@ -123,17 +123,17 @@ function getDb(config: QmdPluginConfig) {
 // Plugin
 // =============================================================================
 
-const qmdPlugin = definePluginEntry({
+const lotlPlugin = definePluginEntry({
   id: "tanarchy-lotl",
-  name: "Tanarchy QMD",
-  description: "Document search + conversation memory + knowledge graph powered by QMD",
+  name: "Lotl",
+  description: "Document search + conversation memory + knowledge graph powered by Lotl",
 
   register(api: OpenClawPluginApi) {
-    const rawConfig = api.pluginConfig as Partial<QmdPluginConfig> | undefined;
-    const cfg: QmdPluginConfig = { ...DEFAULT_CONFIG, ...rawConfig };
+    const rawConfig = api.pluginConfig as Partial<LotlPluginConfig> | undefined;
+    const cfg: LotlPluginConfig = { ...DEFAULT_CONFIG, ...rawConfig };
 
     // 1. Load .env defaults, then override with plugin config
-    loadQmdEnv();
+    loadLotlEnv();
     applyConfigToEnv(cfg);
 
     const _db = getDb(cfg);
@@ -521,4 +521,4 @@ const qmdPlugin = definePluginEntry({
   },
 });
 
-export default qmdPlugin;
+export default lotlPlugin;

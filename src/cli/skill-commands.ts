@@ -1,5 +1,5 @@
 /**
- * cli/skill-commands.ts — `qmd skill show/install` handlers + path helpers.
+ * cli/skill-commands.ts — `lotl skill show/install` handlers + path helpers.
  *
  * Extracted from cli/lotl.ts. Installs the embedded agent skill to either
  * the project or user scope, optionally symlinking it under `.claude/skills`
@@ -15,7 +15,7 @@ import { lstatSync, rmSync, unlinkSync, mkdirSync, writeFileSync, realpathSync, 
 import { dirname, relative as relativePath } from "path";
 import { createInterface } from "readline/promises";
 import { getPwd, homedir, resolve } from "../store.js";
-import { getEmbeddedQmdSkillContent, getEmbeddedQmdSkillFiles } from "../embedded-skills.js";
+import { getEmbeddedLotlSkillContent, getEmbeddedLotlSkillFiles } from "../embedded-skills.js";
 
 export function getSkillInstallDir(globalInstall: boolean): string {
   return globalInstall
@@ -50,7 +50,7 @@ function removePath(path: string): void {
 export function showSkill(): void {
   console.log("Lotl Skill (embedded)");
   console.log("");
-  const content = getEmbeddedQmdSkillContent();
+  const content = getEmbeddedLotlSkillContent();
   process.stdout.write(content.endsWith("\n") ? content : content + "\n");
 }
 
@@ -63,7 +63,7 @@ function writeEmbeddedSkill(targetDir: string, force: boolean): void {
   }
 
   mkdirSync(targetDir, { recursive: true });
-  for (const file of getEmbeddedQmdSkillFiles()) {
+  for (const file of getEmbeddedLotlSkillFiles()) {
     const destination = resolve(targetDir, file.relativePath);
     mkdirSync(dirname(destination), { recursive: true });
     writeFileSync(destination, file.content, "utf-8");
@@ -123,7 +123,7 @@ async function shouldCreateClaudeSymlink(linkPath: string, autoYes: boolean): Pr
 export async function installSkill(globalInstall: boolean, force: boolean, autoYes: boolean): Promise<void> {
   const installDir = getSkillInstallDir(globalInstall);
   writeEmbeddedSkill(installDir, force);
-  console.log(`✓ Installed QMD skill to ${installDir}`);
+  console.log(`✓ Installed Lotl skill to ${installDir}`);
 
   const claudeLinkPath = getClaudeSkillLinkPath(globalInstall);
   if (!(await shouldCreateClaudeSymlink(claudeLinkPath, autoYes))) {

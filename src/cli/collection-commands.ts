@@ -1,10 +1,10 @@
 /**
- * cli/collection-commands.ts — qmd collection list/remove/rename handlers.
+ * cli/collection-commands.ts — lotl collection list/remove/rename handlers.
  *
  * Extracted from cli/lotl.ts. Each function is a CLI command entry point:
  * parses its own DB, prints to stdout/stderr, closes the DB when done.
  *
- * Note: `qmd collection add` stays in qmd.ts for now because it's tightly
+ * Note: `lotl collection add` stays in lotl.ts for now because it's tightly
  * coupled to `indexFiles` (~140 LOC of indexing logic). Splitting the
  * indexing cluster is a later refactor slice.
  */

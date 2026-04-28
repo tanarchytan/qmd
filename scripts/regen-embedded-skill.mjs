@@ -34,18 +34,24 @@ const EMBEDDED_LOTL_SKILL_BASE64: Record<string, string> = {
 ${entries}
 };
 
-export function getEmbeddedQmdSkillFiles(): EmbeddedSkillFile[] {
+export function getEmbeddedLotlSkillFiles(): EmbeddedSkillFile[] {
   return Object.entries(EMBEDDED_LOTL_SKILL_BASE64).map(([relativePath, encoded]) => ({
     relativePath,
     content: Buffer.from(encoded, "base64").toString("utf-8"),
   }));
 }
 
-export function getEmbeddedQmdSkillContent(relativePath: string = "SKILL.md"): string {
+/** @deprecated use getEmbeddedLotlSkillFiles */
+export const getEmbeddedQmdSkillFiles = getEmbeddedLotlSkillFiles;
+
+export function getEmbeddedLotlSkillContent(relativePath: string = "SKILL.md"): string {
   const encoded = EMBEDDED_LOTL_SKILL_BASE64[relativePath];
   if (encoded == null) return "";
   return Buffer.from(encoded, "base64").toString("utf-8");
 }
+
+/** @deprecated use getEmbeddedLotlSkillContent */
+export const getEmbeddedQmdSkillContent = getEmbeddedLotlSkillContent;
 `;
 
 writeFileSync(OUT, src);

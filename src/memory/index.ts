@@ -1,5 +1,5 @@
 /**
- * memory/index.ts — Conversation memory layer for QMD.
+ * memory/index.ts — Conversation memory layer for Lotl.
  *
  * Stores and retrieves agent memories alongside document search.
  * Same SQLite DB, same embed/rerank providers, same search pipeline.
@@ -1358,7 +1358,7 @@ export async function memoryRecall(
       // cosine magnitude drift doesn't wash out the right answer. Noop
       // when the candidate pool contains a single scope (which is the
       // case on LongMemEval where scope = question_id). Targets multi-
-      // project qmd workloads where one recall query spans several
+      // project lotl workloads where one recall query spans several
       // partitioned scopes via the "global" union path.
       let withSim: Array<{ id: string; similarity: number }>;
       const SCOPE_NORM = process.env.LOTL_MEMORY_SCOPE_NORM === "rank";
@@ -1670,7 +1670,7 @@ export async function memoryRecall(
   if (PROFILE) {
     profile.total = Math.round(performance.now() - profileStart);
     profile.results = sorted.length;
-    process.stderr.write(`qmd-recall-profile ${JSON.stringify(profile)}\n`);
+    process.stderr.write(`lotl-recall-profile ${JSON.stringify(profile)}\n`);
   }
   return sorted;
 }

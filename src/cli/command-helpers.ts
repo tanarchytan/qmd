@@ -54,7 +54,7 @@ export function requireValidVirtualPath(pathArg: string): ParsedVirtualPath {
 }
 
 /** Look up a collection by name in YAML config. Exits with a yellow-tagged
- *  error + "run qmd collection list" hint if it doesn't exist. */
+ *  error + "run lotl collection list" hint if it doesn't exist. */
 export function requireCollectionOrExit(name: string): ReturnType<typeof getCollectionFromYaml> & {} {
   const coll = getCollectionFromYaml(name);
   if (!coll) {

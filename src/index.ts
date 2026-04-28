@@ -1,5 +1,5 @@
 /**
- * QMD SDK - Library mode for programmatic access to QMD search and indexing.
+ * Lotl SDK - Library mode for programmatic access to Lotl search and indexing.
  *
  * Usage:
  *   import { createStore } from '@tanarchy/lotl'
@@ -190,7 +190,7 @@ export interface ExpandQueryOptions {
 }
 
 /**
- * Options for creating a QMD store.
+ * Options for creating a Lotl store.
  *
  * Provide `dbPath` and optionally `configPath` (YAML file) or `config` (inline).
  * If neither configPath nor config is provided, the store reads from existing
@@ -206,13 +206,13 @@ export interface StoreOptions {
 }
 
 /**
- * The QMD SDK store — provides search, retrieval, collection management,
+ * The Lotl SDK store — provides search, retrieval, collection management,
  * context management, and indexing operations.
  *
  * All methods are async. Embed is lazy — local via transformers.js (when
  * LOTL_EMBED_BACKEND=transformers) or remote via RemoteLLM.
  */
-export interface QMDStore {
+export interface LotlStore {
   /** The underlying internal store (for advanced use) */
   readonly internal: InternalStore;
   /** Path to the SQLite database */
@@ -310,7 +310,7 @@ export interface QMDStore {
 }
 
 /**
- * Create a QMD store for programmatic access to search and indexing.
+ * Create a Lotl store for programmatic access to search and indexing.
  *
  * @example
  * ```typescript
@@ -334,7 +334,10 @@ export interface QMDStore {
  * await store.close()
  * ```
  */
-export async function createStore(options: StoreOptions): Promise<QMDStore> {
+/** @deprecated use LotlStore */
+export type QMDStore = LotlStore;
+
+export async function createStore(options: StoreOptions): Promise<LotlStore> {
   if (!options.dbPath) {
     throw new Error("dbPath is required");
   }
@@ -368,7 +371,7 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
   // use inside store/embeddings.ts via createTransformersEmbedBackend(); rerank
   // and generate route through RemoteLLM (configured via LOTL_*_PROVIDER env).
 
-  const store: QMDStore = {
+  const store: LotlStore = {
     internal,
     dbPath: internal.dbPath,
 

@@ -11,7 +11,7 @@
  *
  * Grammar packages (tree-sitter-typescript, etc.) are listed as
  * optionalDependencies with pinned versions. They ship native prebuilds
- * and source files (~72 MB total) but QMD only uses the .wasm files
+ * and source files (~72 MB total) but Lotl only uses the .wasm files
  * (~5 MB). If install size becomes a concern, the .wasm files can be
  * bundled directly in the repo (e.g. assets/grammars/) and resolved
  * via import.meta.url instead of require.resolve(), eliminating the

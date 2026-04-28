@@ -13,7 +13,7 @@ export function formatETA(seconds: number): string {
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
 }
 
-/** "Xs ago" / "Xm ago" / "Xh ago" / "Xd ago" — coarse-grained, good enough for `qmd status`. */
+/** "Xs ago" / "Xm ago" / "Xh ago" / "Xd ago" — coarse-grained, good enough for `lotl status`. */
 export function formatTimeAgo(date: Date): string {
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
   if (seconds < 60) return `${seconds}s ago`;

@@ -193,7 +193,7 @@ export function resolve(...paths: string[]): string {
   return finalPath;
 }
 
-// Flag to indicate production mode (set by qmd.ts at startup)
+// Flag to indicate production mode (set by lotl.ts at startup)
 let _productionMode = false;
 
 export function enableProductionMode(): void {

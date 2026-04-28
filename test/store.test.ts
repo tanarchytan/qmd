@@ -1,7 +1,7 @@
 /**
- * store.test.ts - Comprehensive unit tests for the QMD store module
+ * store.test.ts - Comprehensive unit tests for the Lotl store module
  *
- * Run with: bun test store.test.ts
+ * Run with: npx vitest run test/store.test.ts
  *
  * LLM operations use LlamaCpp with local GGUF models (node-llama-cpp).
  */

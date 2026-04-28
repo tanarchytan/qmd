@@ -45,7 +45,7 @@ export function openDatabase(path: string): Database {
 }
 
 /**
- * Common subset of the Database interface used throughout QMD.
+ * Common subset of the Database interface used throughout Lotl.
  */
 export interface Database {
   exec(sql: string): void;

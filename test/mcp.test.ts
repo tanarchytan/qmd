@@ -795,7 +795,7 @@ describe("MCP Server", () => {
   // ===========================================================================
 
   describe("MCP spec compliance", () => {
-    test("encodeQmdPath preserves slashes but encodes special chars", () => {
+    test("encodeLotlPath preserves slashes but encodes special chars", () => {
       // Helper function behavior (tested indirectly through resource URIs)
       const path = "External Podcast/2023 April - Interview.md";
       const segments = path.split('/').map(s => encodeURIComponent(s)).join('/');

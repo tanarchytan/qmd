@@ -31,7 +31,7 @@ import { pipeline as streamPipeline } from "stream/promises";
 import { createRequire } from "module";
 
 // onnxruntime-node ships under @huggingface/transformers/node_modules — it is a
-// transitive dep of transformers, not a direct qmd dep. We resolve it via a
+// transitive dep of transformers, not a direct lotl dep. We resolve it via a
 // createRequire rooted at the transformers package's main entry so we don't need
 // to add it to package.json or rely on hoisting. The package's exports field
 // does not expose ./package.json, so we walk up from the resolved main entry.

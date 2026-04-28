@@ -1,5 +1,5 @@
 /**
- * QMD Store - Facade module (re-exports from submodules)
+ * Lotl Store - Facade module (re-exports from submodules)
  *
  * This module re-exports all public APIs from src/store/ submodules.
  * External consumers keep importing from "./store.js" — backward compatible.

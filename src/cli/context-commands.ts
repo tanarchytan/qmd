@@ -1,5 +1,5 @@
 /**
- * cli/context-commands.ts — qmd context add/list/remove + path→collection helper.
+ * cli/context-commands.ts — lotl context add/list/remove + path→collection helper.
  *
  * Extracted from cli/lotl.ts. Contexts are per-collection-path annotations
  * surfaced to the retrieval pipeline. The CLI lets users manage them by
@@ -7,7 +7,7 @@
  * `lotl://collection/path` virtual path.
  *
  * `detectCollectionFromPath` is exported because other CLI command handlers
- * (currently `getDocument` in qmd.ts) also need the same path→collection
+ * (currently `getDocument` in lotl.ts) also need the same path→collection
  * lookup. It doesn't actually read the Database it accepts as an argument
  * — the `db` param is kept for API stability and in case future
  * implementations need row-level data.

@@ -16,7 +16,7 @@ let _loaded = false;
  * Returns the Lotl config directory:
  *   $LOTL_CONFIG_DIR  →  $XDG_CONFIG_HOME/lotl  →  ~/.config/lotl
  */
-export function getQmdConfigDir(): string {
+export function getLotlConfigDir(): string {
   return (
     process.env.LOTL_CONFIG_DIR ||
     (process.env.XDG_CONFIG_HOME ? join(process.env.XDG_CONFIG_HOME, "lotl") : null) ||
@@ -24,15 +24,18 @@ export function getQmdConfigDir(): string {
   );
 }
 
+/** @deprecated use getLotlConfigDir */
+export const getQmdConfigDir = getLotlConfigDir;
+
 /**
  * Load ~/.config/lotl/.env (or $/.env) into process.env.
  * Idempotent — safe to call multiple times; only reads the file once.
  */
-export function loadQmdEnv(): void {
+export function loadLotlEnv(): void {
   if (_loaded) return;
   _loaded = true;
 
-  const envPath = join(getQmdConfigDir(), ".env");
+  const envPath = join(getLotlConfigDir(), ".env");
   if (!existsSync(envPath)) return;
 
   let content: string;
@@ -59,3 +62,6 @@ export function loadQmdEnv(): void {
     }
   }
 }
+
+/** @deprecated use loadLotlEnv */
+export const loadQmdEnv = loadLotlEnv;

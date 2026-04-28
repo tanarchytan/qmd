@@ -1,5 +1,5 @@
 /**
- * Evaluation Tests for QMD Search Quality
+ * Evaluation Tests for Lotl Search Quality
  *
  * Tests search quality against synthetic documents with known-answer queries.
  * Validates that search improvements don't regress quality.

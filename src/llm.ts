@@ -1,7 +1,7 @@
 /**
  * llm.ts — Facade for the LLM abstraction layer.
  *
- * After the 2026-04-13 cleanup, QMD has exactly two LLM providers:
+ * After the 2026-04-13 cleanup, Lotl has exactly two LLM providers:
  *
  *   - RemoteLLM (src/llm/remote.ts)        — cloud APIs (ZE, Gemini, OpenAI, etc.)
  *   - TransformersEmbedBackend             — local ONNX embed via @huggingface/transformers

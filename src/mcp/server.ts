@@ -1,14 +1,14 @@
 /**
- * QMD MCP Server - Model Context Protocol server for QMD
+ * Lotl MCP Server - Model Context Protocol server for Lotl
  *
- * Exposes QMD search and document retrieval as MCP tools and resources.
+ * Exposes Lotl search and document retrieval as MCP tools and resources.
  * Documents are accessible via lotl:// URIs.
  *
  * Follows MCP spec 2025-06-18 for proper response types.
  */
 
-import { loadQmdEnv } from "../env.js";
-loadQmdEnv();
+import { loadLotlEnv } from "../env.js";
+loadLotlEnv();
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
@@ -28,14 +28,14 @@ import {
   addLineNumbers,
   getDefaultDbPath,
   DEFAULT_MULTI_GET_MAX_BYTES,
-  type QMDStore,
+  type LotlStore,
   type ExpandedQuery,
   type IndexStatus,
 } from "../index.js";
 import { getConfigPath } from "../collections.js";
 import { deleteLLMCache, cleanupOrphanedVectors, vacuumDatabase, listCollections as storeListCollections, generateEmbeddings, reindexCollection, enableProductionMode } from "../store.js";
 
-// SDK consumers importing this module directly (without going through qmd.ts)
+// SDK consumers importing this module directly (without going through lotl.ts)
 // would otherwise hit the production-mode guard on getDefaultDbPath. CLI users
 // already get this via src/cli/lotl.ts:110 — calling here is a noop for them
 // and a critical safety net for everyone else. Upstream tobi/qmd 9dd8a73.
@@ -76,7 +76,7 @@ type StatusResult = {
  * Encode a path for use in lotl:// URIs.
  * Encodes special characters but preserves forward slashes for readability.
  */
-function encodeQmdPath(path: string): string {
+function encodeLotlPath(path: string): string {
   // Encode each path segment separately to preserve slashes
   return path.split('/').map(segment => encodeURIComponent(segment)).join('/');
 }
@@ -118,7 +118,7 @@ function getPackageVersion(): string {
 let _instructionsCache: { text: string; builtAt: number } | null = null;
 const INSTRUCTIONS_TTL_MS = 60_000;
 
-async function buildInstructions(store: QMDStore): Promise<string> {
+async function buildInstructions(store: LotlStore): Promise<string> {
   if (_instructionsCache && Date.now() - _instructionsCache.builtAt < INSTRUCTIONS_TTL_MS) {
     return _instructionsCache.text;
   }
@@ -128,7 +128,7 @@ async function buildInstructions(store: QMDStore): Promise<string> {
   const lines: string[] = [];
 
   // --- What is this? ---
-  lines.push(`QMD is your local search engine over ${status.totalDocuments} markdown documents.`);
+  lines.push(`Lotl is your local search engine over ${status.totalDocuments} markdown documents.`);
   if (globalCtx) lines.push(`Context: ${globalCtx}`);
 
   // --- What's searchable? ---
@@ -154,10 +154,10 @@ async function buildInstructions(store: QMDStore): Promise<string> {
   // --- Capability gaps ---
   if (!status.hasVectorIndex) {
     lines.push("");
-    lines.push("Note: No vector embeddings yet. Run `qmd embed` to enable semantic search (vec/hyde).");
+    lines.push("Note: No vector embeddings yet. Run `lotl embed` to enable semantic search (vec/hyde).");
   } else if (status.needsEmbedding > 0) {
     lines.push("");
-    lines.push(`Note: ${status.needsEmbedding} documents need embedding. Run \`qmd embed\` to update.`);
+    lines.push(`Note: ${status.needsEmbedding} documents need embedding. Run \`lotl embed\` to update.`);
   }
 
   // --- Search tool ---
@@ -194,10 +194,10 @@ async function buildInstructions(store: QMDStore): Promise<string> {
 }
 
 /**
- * Create an MCP server with all QMD tools, resources, and prompts registered.
+ * Create an MCP server with all Lotl tools, resources, and prompts registered.
  * Shared by both stdio and HTTP transports.
  */
-async function createMcpServer(store: QMDStore): Promise<McpServer> {
+async function createMcpServer(store: LotlStore): Promise<McpServer> {
   const server = new McpServer(
     { name: "lotl", version: getPackageVersion() },
     { instructions: await buildInstructions(store) },
@@ -216,8 +216,8 @@ async function createMcpServer(store: QMDStore): Promise<McpServer> {
     "document",
     new ResourceTemplate("lotl://{+path}", { list: undefined }),
     {
-      title: "QMD Document",
-      description: "A markdown document from your QMD knowledge base. Use search tools to discover documents.",
+      title: "Lotl Document",
+      description: "A markdown document from your Lotl knowledge base. Use search tools to discover documents.",
       mimeType: "text/markdown",
     },
     async (uri, { path }) => {
@@ -388,7 +388,7 @@ Intent-aware lex (C++ performance, not sports):
   );
 
   // ---------------------------------------------------------------------------
-  // Tool: qmd_get (Retrieve document)
+  // Tool: doc_get (Retrieve document)
   // ---------------------------------------------------------------------------
 
   server.registerTool(
@@ -441,7 +441,7 @@ Intent-aware lex (C++ performance, not sports):
         content: [{
           type: "resource",
           resource: {
-            uri: `lotl://${encodeQmdPath(result.displayPath)}`,
+            uri: `lotl://${encodeLotlPath(result.displayPath)}`,
             name: result.displayPath,
             title: result.title,
             mimeType: "text/markdown",
@@ -453,7 +453,7 @@ Intent-aware lex (C++ performance, not sports):
   );
 
   // ---------------------------------------------------------------------------
-  // Tool: qmd_multi_get (Retrieve multiple documents)
+  // Tool: doc_multi_get (Retrieve multiple documents)
   // ---------------------------------------------------------------------------
 
   server.registerTool(
@@ -489,7 +489,7 @@ Intent-aware lex (C++ performance, not sports):
         if (result.skipped) {
           content.push({
             type: "text",
-            text: `[SKIPPED: ${result.doc.displayPath} - ${result.skipReason}. Use 'qmd_get' with file="${result.doc.displayPath}" to retrieve.]`,
+            text: `[SKIPPED: ${result.doc.displayPath} - ${result.skipReason}. Use 'doc_get' with file="${result.doc.displayPath}" to retrieve.]`,
           });
           continue;
         }
@@ -512,7 +512,7 @@ Intent-aware lex (C++ performance, not sports):
         content.push({
           type: "resource",
           resource: {
-            uri: `lotl://${encodeQmdPath(result.doc.displayPath)}`,
+            uri: `lotl://${encodeLotlPath(result.doc.displayPath)}`,
             name: result.doc.displayPath,
             title: result.doc.title,
             mimeType: "text/markdown",
@@ -526,14 +526,14 @@ Intent-aware lex (C++ performance, not sports):
   );
 
   // ---------------------------------------------------------------------------
-  // Tool: qmd_status (Index status)
+  // Tool: doc_status (Index status)
   // ---------------------------------------------------------------------------
 
   server.registerTool(
     "doc_status",
     {
       title: "Index Status",
-      description: "Show the status of the QMD index: collections, document counts, and health information.",
+      description: "Show the status of the Lotl index: collections, document counts, and health information.",
       annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema: {},
     },
@@ -541,7 +541,7 @@ Intent-aware lex (C++ performance, not sports):
       const status: StatusResult = await store.getStatus();
 
       const summary = [
-        `QMD Index Status:`,
+        `Lotl Index Status:`,
         `  Total documents: ${status.totalDocuments}`,
         `  Needs embedding: ${status.needsEmbedding}`,
         `  Vector index: ${status.hasVectorIndex ? 'yes' : 'no'}`,
@@ -580,7 +580,7 @@ Intent-aware lex (C++ performance, not sports):
       const globalCtx = await store.getGlobalContext();
       const lines: string[] = [];
 
-      lines.push(`# QMD Briefing — ${status.totalDocuments} documents indexed`);
+      lines.push(`# Lotl Briefing — ${status.totalDocuments} documents indexed`);
       if (globalCtx) lines.push(`\nGlobal context: ${globalCtx}`);
       lines.push(`\nVector index: ${status.hasVectorIndex ? 'active' : 'not built'}${status.needsEmbedding > 0 ? ` (${status.needsEmbedding} pending — run manage({ operation: "embed" }))` : ''}`);
 
@@ -621,14 +621,14 @@ Intent-aware lex (C++ performance, not sports):
     "memory_add",
     {
       title: "Store Memory",
-      description: "Store a fact, preference, decision, or other memory. Deduplicates automatically (exact match + semantic similarity). Returns the memory ID. Optional `metadata` round-trips arbitrary JSON fields (e.g. source_session_id, doc_id) that show up in `memory_search` results — use this to map qmd memories back to your own object IDs.",
+      description: "Store a fact, preference, decision, or other memory. Deduplicates automatically (exact match + semantic similarity). Returns the memory ID. Optional `metadata` round-trips arbitrary JSON fields (e.g. source_session_id, doc_id) that show up in `memory_search` results — use this to map lotl memories back to your own object IDs.",
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
         text: z.string().describe("The memory content to store (verbatim text)"),
         category: z.enum(["preference", "fact", "decision", "entity", "reflection", "other"]).optional().describe("Memory category (default: other)"),
         scope: z.string().optional().describe("Scope for isolation: agent name, project, or 'global' (default: global)"),
         importance: z.number().min(0).max(1).optional().describe("Importance 0-1 (default: 0.5). Higher = persists longer."),
-        metadata: z.record(z.string(), z.unknown()).optional().describe("Arbitrary JSON metadata stored verbatim and surfaced on recall (e.g. `{source_session_id: \"abc\", doc_id: 42}`). Use to round-trip your own object IDs through qmd."),
+        metadata: z.record(z.string(), z.unknown()).optional().describe("Arbitrary JSON metadata stored verbatim and surfaced on recall (e.g. `{source_session_id: \"abc\", doc_id: 42}`). Use to round-trip your own object IDs through lotl."),
       },
     },
     async ({ text, category, scope, importance, metadata }) => {
@@ -1090,7 +1090,7 @@ Intent-aware lex (C++ performance, not sports):
       ].join("\n"),
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
-        subject: z.string().describe("Entity name (e.g. 'David', 'QMD project')"),
+        subject: z.string().describe("Entity name (e.g. 'David', 'Lotl project')"),
         predicate: z.string().describe("Relationship (e.g. 'prefers', 'works_at', 'uses')"),
         object: z.string().describe("Value (e.g. 'ZeroEntropy', 'Tanarchy', 'TypeScript')"),
         valid_from: z.number().optional().describe("Timestamp (ms) when this became true (default: now)"),
@@ -1227,9 +1227,9 @@ Intent-aware lex (C++ performance, not sports):
   server.registerTool(
     "doc_manage",
     {
-      title: "Manage QMD Index",
+      title: "Manage Lotl Index",
       description: [
-        "Administrative operations for QMD index maintenance.",
+        "Administrative operations for Lotl index maintenance.",
         "",
         "Operations:",
         "- **embed**: Generate vector embeddings for pending documents (uses remote provider if configured)",
@@ -1602,7 +1602,7 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
     process.exit(0);
   });
 
-  log(`QMD MCP server listening on http://localhost:${actualPort}/mcp`);
+  log(`Lotl MCP server listening on http://localhost:${actualPort}/mcp`);
   return { httpServer, port: actualPort, stop };
 }
 

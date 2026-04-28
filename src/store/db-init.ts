@@ -310,7 +310,7 @@ export function ensureVecTableInternal(db: Database, dimensions: number): void {
       // mismatch broke too many dev workflows to justify the guard rail.
       process.stderr.write(
         `lotl: embedding dimension changed (${existingDims}d → ${dimensions}d). ` +
-        `Dropping stale vectors; run 'qmd embed -f' to repopulate.\n`
+        `Dropping stale vectors; run 'lotl embed -f' to repopulate.\n`
       );
       db.exec("DROP TABLE IF EXISTS vectors_vec");
       try { db.exec("DELETE FROM content_vectors"); } catch { /* table may not exist yet */ }
