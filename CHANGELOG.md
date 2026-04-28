@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-04-28
+
+### Fixed
+
+- **OpenClaw plugin was effectively non-functional in v1.0.4.** Live testing
+  surfaced five distinct bugs that together prevented the plugin from
+  loading, finding its data, and connecting to its LLM provider. All five
+  are fixed; v1.0.5 is the first release where `openclaw plugins install
+  @tanarchy/lotl` produces a working plugin out of the box.
+
+  - **`register()` was declared `async`.** OpenClaw's plugin loader invokes
+    `register()` synchronously and does not await the returned promise, so
+    `registerTool()` and `registerService()` calls inside the async body
+    fired *after* the loader had moved on. Result: the plugin appeared to
+    load but registered nothing. Made `register()` synchronous.
+  - **DB path defaulted to `~/.cache/qmd/`** instead of `~/.cache/lotl/` — a
+    leftover from before the v1.0.0 rename. Auto-capture and auto-recall
+    silently hit `no such table: memories` against an empty legacy DB.
+    Same path bug also affected the dream-cycle cursor at
+    `~/.config/qmd/dream-ingestion.json`. Both now point at `lotl/`.
+  - **`remote-config.ts` read `QMD_*` env vars** for `EMBED_PROVIDER` /
+    `_API_KEY` / `_URL` / `_MODEL`, but the rest of the codebase exports
+    `LOTL_*`. `getRemoteLLM()` always returned `null` → LLM extraction
+    fell back to the heuristic path even when a provider was configured.
+    All four lookups now use `LOTL_*`.
+  - **`db.ts` could not resolve `sqlite-vec`** when loaded as an OpenClaw
+    plugin — `createRequire(import.meta.url)` resolves from the plugin's
+    `dist/` dir, where sqlite-vec is a transitive dep that Node's
+    resolution often can't reach. Vector search silently no-op'd
+    (FTS still worked). Added a fallback that tries the host's
+    (e.g. OpenClaw's) `node_modules` before giving up.
+  - **Tool names were still `qmd_*`** despite the package rename. All ten
+    plugin tools renamed to `lotl_*`: `lotl_memory_add`,
+    `lotl_memory_search`, `lotl_memory_delete`, `lotl_memory_extract`,
+    `lotl_memory_stats`, `lotl_memory_push_pack`, `lotl_memory_recall_tiered`,
+    `lotl_memory_reflect`, `lotl_knowledge_add`, `lotl_knowledge_search`.
+
+  Thanks to Vincent Law for diagnosing all five against a live deployment.
+
 ## [1.0.4] - 2026-04-25
 
 ### Fixed
