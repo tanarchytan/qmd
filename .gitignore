@@ -57,3 +57,19 @@ evaluate/longmemeval/**/*.log
 evaluate/logs/
 evaluate/sweeps/*/
 !evaluate/sweeps/configs/
+
+# Platform / editor metadata (cross-platform additions, 2026-04-28)
+# vim / emacs swap files
+*.swp
+*.swo
+*~
+# macOS metadata beyond .DS_Store
+.AppleDouble
+.LSOverride
+._*
+# Windows shell metadata
+Thumbs.db
+ehthumbs.db
+desktop.ini
+# TypeScript incremental build info (never wanted in git)
+*.tsbuildinfo

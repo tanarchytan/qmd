@@ -1043,7 +1043,7 @@ session-to-session deltas.
 - **KG-in-recall RAW-compatible gate** — `LOTL_RECALL_KG_RAW=on`. Mirror of the existing `LOTL_RECALL_KG=on` for RAW eval mode. Untested at scale due to quota/crash constraints; ships alongside.
 - **Gemini embed provider** — `LOTL_EMBED_PROVIDER=gemini` with matryoshka `LOTL_EMBED_DIMENSIONS`, Google `RetryInfo`-aware backoff, cross-worker throttle via Promise chain. Produces healthy embeddings (confirmed at 1024d n=100: 97% R@5 / 93% multi in 2m46s). See "What didn't work" for the rate-limit story.
 - **Fixed: MMR metadata parse bug** — the initial `LOTL_MEMORY_MMR=session` implementation dereferenced `mem.metadata.source_session_id` but stored `metadata` is a JSON string. Replaced with reuse of the pre-existing `memoryDialogKey()` helper.
-- **Upstream cherry-picks** (commit `87424b0`): 4 tobi/qmd fixes — USERPROFILE fallback for Windows MCP, `enableProductionMode()` at MCP init, sqlite-vec error UX, JSON `--json` line field. 3 more already applied via the 2026-04-07 v2.1.0 merge. Provenance log in `docs/UPSTREAM.md`.
+- **Upstream cherry-picks** (commit `87424b0`): 4 tobi/qmd fixes — USERPROFILE fallback for Windows MCP, `enableProductionMode()` at MCP init, sqlite-vec error UX, JSON `--json` line field. 3 more already applied via the 2026-04-07 v2.1.0 merge. Provenance log in `devnotes/upstream-sync.md`.
 
 ### What didn't work
 
