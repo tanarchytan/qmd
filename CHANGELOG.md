@@ -2,6 +2,63 @@
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-04-28
+
+### Changed
+
+- **Codebase cleanup pass — no behaviour changes.** Identical runtime to
+  v1.0.6; only source comments, string messages, and identifier names
+  were updated to consistently say `lotl` / `Lotl` after the v1.0.0
+  rename from `@tanarchy/qmd`. SDK consumers do not need to update — see
+  back-compat note below.
+  - **Comments and log/error strings** across `src/` updated from `qmd` /
+    `QMD` to `lotl` / `Lotl` where the reference is to the project
+    itself. Upstream attributions (`tobi/qmd <sha>`) and OpenClaw
+    config-key values (`memory.backend = "qmd"` is the literal value
+    OpenClaw recognises) are preserved as-is.
+  - **MCP tool comment headers** in `src/mcp/server.ts` for `doc_get` /
+    `doc_multi_get` / `doc_status` previously called those tools by
+    their pre-rename names; updated to match the actual registered
+    names. The error message that pointed users at `'qmd_get'` is now
+    `'doc_get'` so the hint is accurate.
+  - **Plugin display name** in `src/openclaw/plugin.ts` is now `"Lotl"`
+    (previously `"Tanarchy QMD"`); `description` no longer says
+    "powered by QMD". The plugin id stays `tanarchy-lotl`.
+
+### API (back-compat preserved)
+
+- **Public SDK exports renamed with deprecated aliases.** Existing
+  `import { ... } from "@tanarchy/lotl"` calls keep working unchanged.
+  Switch to the new names at your own pace.
+
+  | Deprecated (still works) | Use this instead |
+  |---|---|
+  | `QMDStore` | `LotlStore` |
+  | `loadQmdEnv()` | `loadLotlEnv()` |
+  | `getQmdConfigDir()` | `getLotlConfigDir()` |
+  | `getEmbeddedQmdSkillFiles()` | `getEmbeddedLotlSkillFiles()` |
+  | `getEmbeddedQmdSkillContent()` | `getEmbeddedLotlSkillContent()` |
+
+  Old names are tagged `@deprecated` in JSDoc so editors flag them.
+  They will be removed in a future major release (v2.0.0); no concrete
+  date set yet.
+
+- **Internal-only renames** (no consumer surface, no alias):
+  `QmdPluginConfig` → `LotlPluginConfig`, `qmdPlugin` const →
+  `lotlPlugin` (the default export name doesn't reach consumers),
+  `encodeQmdPath` / `toQmdPath` → `encodeLotlPath` / `toLotlPath`.
+
+### Project hygiene
+
+- **`.gitignore`**: added cross-platform editor / OS metadata patterns
+  (`*.swp`, `*.swo`, `*~`, `.AppleDouble`, `.LSOverride`, `._*`,
+  `Thumbs.db`, `ehthumbs.db`, `desktop.ini`, `*.tsbuildinfo`). The
+  working tree was already clean; this is preventative.
+- **Docs reorganisation**: `docs/UPSTREAM.md` (cherry-pick log from
+  `tobi/qmd` upstream syncs) moved to `devnotes/upstream-sync.md` —
+  it's a maintainer artefact, not user-facing. References in
+  `docs/ROADMAP.md` updated.
+
 ## [1.0.6] - 2026-04-28
 
 ### Fixed
